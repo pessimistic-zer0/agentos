@@ -106,9 +106,12 @@ At the end of each milestone, write `docs/milestones/M<n>-<name>.md` from `docs/
 
 Run everything inside the dev shell (`flake.nix`): `nix develop -c <command>`, or `nix develop` once for an interactive shell.
 
+- Build and test: `nix develop -c cargo test` (unit tests plus `tests/*.rs`, which run the real binary). `AGENTOS_TEST_PRESET=fhs` switches the policy preset.
+- Lint: `nix develop -c cargo clippy --all-targets`.
+- Demo: `nix develop -c cargo run -- run --repo examples/demo-repo --policy policies/nix.toml --agent scripted --script examples/scripts/fix-demo.toml`, then `cargo run -- trace`.
 - M0 practice program: `cd experiments/m0-ramp && cargo test`.
 - Sandbox and cgroup tests must run under a delegated cgroup: `systemd-run --user --scope -p Delegate=yes cargo test`.
 
 ## Current status
 
-M0 (Rust ramp) done, tag `m0`. Next: M1 vertical slice. Update this line at the end of each milestone.
+M1 (vertical slice) done, tag `m1`. Next: M2 sandbox. Update this line at the end of each milestone.
