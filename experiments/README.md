@@ -11,3 +11,5 @@ showed. None of this code is used by the runtime.
 | `m2-pids/` | M2 | A fork bomb under `pids.max` in a delegated cgroup |
 | `m2-openat2/` | M2 | `openat2(RESOLVE_BENEATH)` against `..`, absolute paths and symlinks |
 | `m2-landlock/` | M2 | The `landlock` crate: allow a few folders, refuse the rest |
+| `m3-rename-kill/` | M3 | Direct write vs temp-file + rename under `kill -9` |
+| `m3-sqlite-kill/` | M3 | SQLite inserts killed mid-transaction |

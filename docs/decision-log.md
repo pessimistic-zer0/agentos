@@ -1259,6 +1259,8 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-11 | Inside the sandbox even `os.listdir("/")` and `os.listdir("/dev")` are refused: Landlock allows only the listed folders, not their parents | Allow-lists apply to exactly what is listed; the probe script had to be changed twice |
 | 2026-11-11 | A security test expected `chmod src` to be reverted. It was not, correctly: `src/**` matches `src` itself, so that is an allowed change. The test now changes a folder outside the globs | The test was wrong, not the code; write the expectation from the rule (D-032), not from intuition |
 | 2026-11-11 | M1 test `denied_command_and_unknown_path_are_reported` asserted the old message `invalid request` for `../../etc/passwd`; with `openat2` the rule is `path leaves the workspace` | The assertion was updated to the new mechanism; it still requires a denial |
+| 2026-11-11 | `experiments/m3-rename-kill`: writing a file in place left it half-written in 149 of 200 kills; temp file + rename in 0 of 200, but left the temp file behind 164 times | Atomic rename works; recovery must delete the leftover temp file, so the intent records its name |
+| 2026-11-11 | `experiments/m3-sqlite-kill`: 200 kills during 3-row transactions, 0 corrupt databases, 0 gaps, 0 half transactions, 0 lost acknowledged commits. This is the evidence D-005 said was still to come | One event per transaction gives a gap-free, untorn log under process kill |
 
 ---
 
