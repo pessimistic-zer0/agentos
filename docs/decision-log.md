@@ -765,28 +765,51 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 **Concepts to learn.** Semantic versioning; `Cargo.lock`.
 
-### D-032 — A small glob matcher written in the code, not a crate
+### D-033 — Event log layout: one SQLite file per execution, one row per event
 - **Date:** 2026-11-11
 - **Status:** Taken
-- **Area:** policy
+- **Area:** durability
 - **ADR:** none
 
-**In plain words.** The policy says which paths are allowed with patterns such as `src/**` or `**/.env`. Matching a path against such a pattern is about 30 lines of code, so it is written in `policy.rs` instead of adding a library. Writing it also fixes the exact rules, which matter for security.
+**In plain words.** Each execution has its own folder with its own `log.db`. Inside, a table `events` holds one row per event: a sequence number (1, 2, 3, … with no gaps), the time, the event type, the tool call it belongs to, and the full event as JSON. Every write is fsynced before the runtime goes on.
 
-**The problem.** The v1 stack table lists no glob library, and adding a dependency needs a reason. The matching rules must be exact: whether `secrets/**` also covers the folder `secrets` itself decides whether that folder is copied into the workspace.
+**The problem.** D-005 chose SQLite but not the table layout, and said `synchronous=FULL` "for intent records". The layout decides how recovery and `trace` read the log.
 
 **Options looked at.**
 | Option | Result | Why |
 |---|---|---|
-| Own matcher: `**` = zero or more whole folders, `*` and `?` inside one name, nothing else | Taken | No dependency; the rules fit in five lines and have unit tests |
-| `glob` crate (`Pattern`) | Discarded | Small and dependency-free, but its `**` rules and options are easy to get subtly wrong for this use |
-| `globset` crate | Discarded | Pulls in regex and aho-corasick; far more than needed |
+| One `events` table; a typed Rust enum stored as JSON in `body`; `seq` set by the runtime | Taken | One append path; the enum makes illegal events hard to write; JSON keeps the schema open while it settles |
+| Separate tables per event type | Discarded | More SQL, and "everything in order" needs a join across tables |
+| One database for all executions | Discarded | Two runs would share one file and one lock; deleting a run would mean deleting rows, breaking "append only" |
+| `synchronous=FULL` only while writing intents, `NORMAL` otherwise | Discarded for now | Switching the setting per write is easy to get wrong, and with WAL a later fsync covers earlier commits anyway. One rule ("every event is on disk when `append` returns") is easier to reason about. M5 measures the cost |
 
-**What this means for the code.** Patterns are relative to the workspace root, with no leading `/` and no `.` or `..` parts; the policy loader refuses anything else. `secrets/**` matches `secrets`, `secrets/a` and `secrets/a/b`. `**/.env` matches `.env` at any depth. `*` never crosses a `/`. There are no `[abc]` classes.
+**What this means for the code.** `log.rs`: `EventLog::append` assigns `seq = last + 1` and commits one row. A `meta` table stores `schema_version = 1`. Call states are worked out by reading events in order (`log::calls`), which also refuses illegal orders such as COMPLETED without an intent.
 
-**Evidence.** `policy::tests::glob_basics` (15 cases) and `deny_wins_over_allow` pass.
+**Evidence.** `log::tests::append_and_read_back_in_order` (the sequence continues after reopening) and `illegal_transitions_are_reported` pass.
 
-**Concepts to learn.** Glob patterns; recursion; why "small and exact" can beat "general" for security rules.
+**Concepts to learn.** Event sourcing; schema versioning; serde's internally tagged enums (`#[serde(tag = "type")]`).
+
+### D-034 — No separate STARTED record; the intent marks the start
+- **Date:** 2026-11-11
+- **Status:** Taken (replaces the state list in D-006)
+- **Area:** durability
+- **ADR:** none
+
+**In plain words.** D-006 listed the states of a tool call as REQUESTED → INTENT_LOGGED → STARTED → COMPLETED or FAILED. Nothing happens between writing the intent and starting the effect, so a separate STARTED record would be a second fsync that tells recovery nothing new. The intent record itself means "about to start".
+
+**The problem.** Every record costs an fsync. A record is worth writing only if recovery would decide differently with it.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| REQUESTED → DENIED, or REQUESTED → INTENT → COMPLETED / FAILED; a crash after INTENT means UNCERTAIN | Taken | Each record changes what recovery can conclude |
+| Keep STARTED between INTENT and the effect | Discarded | Intent-without-STARTED would prove "not started", but the two writes are back to back, so that case is only a crash between two fsyncs. It saves no real work |
+
+**What this means for the code.** `log::CallState` has `Requested`, `Denied`, `IntentLogged`, `Completed`, `Failed`. Recovery (M3) adds UNCERTAIN and RECONCILED as records written after a crash. D-006's main decision (intent before effect) still holds, so its status is unchanged; this entry replaces only its list of states.
+
+**Evidence.** None; reasoning only.
+
+**Concepts to learn.** State machines; the cost of fsync.
 
 ---
 
