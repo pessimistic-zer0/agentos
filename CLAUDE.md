@@ -1,0 +1,113 @@
+# AgentOS
+
+A Rust runtime that runs a coding agent's tool calls inside a rootless Linux sandbox and survives `kill -9` without losing track of what happened. It is a learning and resume project, not a product.
+
+## Documents
+
+- `AgentOS v1 — Scoped Design.md` is **the plan**. Read it before any design or code work.
+- `AgentOS_Project_Spec.md` is a "maybe someday" list. It never adds work to v1. If the two disagree, the v1 document wins.
+- `docs/decision-log.md` records every decision taken or discarded, with reasons. Prince will study from it later, so it must stay complete.
+- `docs/decisions/` holds ADRs (once it exists).
+
+## Keep the decision log up to date
+
+This is required, not optional. In the same turn as the work, append to `docs/decision-log.md` whenever:
+
+- a design or tooling choice is made, even a small one (a crate, a file format, an error-handling approach);
+- an option is considered and rejected, including ideas Prince or Claude raised and dropped;
+- an earlier decision changes (add a new entry and mark the old one `Replaced by D-0xx`; never rewrite history);
+- an experiment, test or bug teaches something (add a row to "Findings");
+- a new technical term appears (add it to the glossary).
+
+Follow the entry template in that file. Write "In plain words" for a beginner. Under "Evidence", state only what was actually run or read, with the result; otherwise write "none; reasoning only". Do not invent reasons for past decisions: if the reason is unknown, say so.
+
+## Scope is fixed
+
+The five parts (gateway, policy, sandbox, event log, checkpoints + recovery), the build order, and the cut list in the v1 document do not change during normal work.
+
+- Do not add features, tools, dependencies or abstractions that the v1 document does not list.
+- If an idea comes up that is outside v1, add one line to the parking lot (§22 of the spec) and continue with the current milestone.
+- If a v1 decision turns out not to work in practice, make the smallest change that fixes it, record it as a new decision-log entry that replaces the old one, update the v1 document to match, and continue. Do not use this to add scope.
+- The "Bonus" section of the v1 document must not start before v0.1 is tagged.
+
+## How to work: build without stopping, document everything
+
+Prince wants the project built end to end without being asked questions along the way. He will learn afterwards from the written record, with the help of an AI. So the record is as important as the code.
+
+- Work through the milestones in order. Do not pause to ask for approval or to check in.
+- When a choice comes up, make it, log it, and move on.
+- Stop only when something is needed that only Prince can give (a password, an API key, `sudo`, an account setting), or when continuing would mean faking a result. Say exactly what is needed.
+- Never weaken, skip or delete a test to make a milestone pass. If an exit criterion cannot be met, say so in the milestone document and stop.
+- Prince is new to Rust and Linux internals (namespaces, cgroups, Landlock, `openat2`, fsync). Write every document for that reader: plain words first, the real term next to it.
+- Run the small experiments listed in the v1 milestone table before building each mechanism. Keep them in `experiments/` with a short note on what each showed.
+
+## The storyline: commits (never push)
+
+The git history is part of the documentation. Someone should be able to read it top to bottom and follow how the project was built.
+
+- Commit in small steps: one idea per commit, and the code builds at each one.
+- The commit subject says what changed. The body says why, in plain words, and names the decision-log entry if there is one (for example "See D-031").
+- Commit code together with its tests and its log entries, not in separate later commits.
+- **Never run `git push`, in any form, to any remote.** This includes pushing tags, and any other command that uploads the repository (for example `gh repo sync` or `gh pr create`). Prince pushes himself. All work stays in the local repository.
+- Always commit when a milestone is achieved: the code, the tests, the log entries and the milestone document together, so the tag points at a complete milestone. Committing in between is allowed and expected.
+- Never rewrite existing history (no amend of earlier commits, no rebase), and never commit secrets (API keys, tokens, `.env` files).
+- In commit messages and pull request descriptions, do not add Co-Authored-By lines or any signature or attribution to Claude.
+- Tag the end of each milestone locally: `m0`, `m1`, … and `v0.1` at the end.
+
+## One document per milestone
+
+At the end of each milestone, write `docs/milestones/M<n>-<name>.md` from `docs/milestones/TEMPLATE.md`. It must cover the aim, the requirements and whether each was met, what was built, the code explained piece by piece, the decisions made, the problems hit, and how to run it. Fill it in while working, not from memory at the end. A milestone is not finished until its document is.
+
+| Doc | Weeks | Milestone |
+|---|---|---|
+| `M0-rust-ramp.md` | 0 | Rust ramp |
+| `M1-vertical-slice.md` | 1–2 | Gateway, tools, policy, scripted agent, event log, `trace` |
+| `M2-sandbox.md` | 3–5 | Namespaces, cgroups, Landlock, `openat2`, presets |
+| `M3-durability.md` | 6–8 | State machine, checkpoints, recovery, fault injection |
+| `M4-llm-agent.md` | 9 | LLM agent loop |
+| `M5-benchmarks.md` | 10 | Benchmarks, full security suite |
+| `M6-release.md` | 11–12 | README, threat model, recovery semantics, v0.1 |
+
+## Design rules that must hold
+
+1. The agent never touches the system directly. Every effect goes through the gateway.
+2. No policy match means deny.
+3. An intent is written and fsynced before its effect starts.
+4. Order for a mutating call: effect → checkpoint → COMPLETED record that names the checkpoint.
+5. An UNCERTAIN call is never re-executed before it is reconciled.
+6. Files matching deny globs are never copied into the workspace.
+7. Paths are confined by the kernel (`openat2`, mount namespace, Landlock), never by string checks.
+8. Commands are argv arrays run with `execve`. Never build a shell string.
+9. The event log and checkpoints are never visible inside the sandbox.
+10. The original repo is never modified. The output is a patch.
+
+## Portability
+
+- Linux only. Development is on NixOS, but nothing in `src/` may assume NixOS.
+- Distro differences live in policy presets (`fhs`, `nix`), not in code.
+- Both test suites must pass on both presets. The `nix` preset is tested on the development machine. The `fhs` preset is tested in CI on an Ubuntu runner, which only runs after Prince pushes; until then, record it in the milestone document as "not yet verified", never as passing.
+- The runtime checks for user namespaces, Landlock, `openat2` and cgroup delegation at startup and fails with a clear message.
+
+## Claims and tests
+
+- A feature is done only when it has tests.
+- No number goes in the README or a resume bullet without a script that produces it.
+- Do not claim power-loss safety, exactly-once execution, or perfect isolation. The tests kill the process; they do not prove more than that.
+- Bugs found by the fault-injection harness or the security suite get a short note in `docs/` when they are found. They are the best interview material.
+
+## Code style
+
+- One crate, synchronous Rust, threads where needed. No async runtime.
+- `anyhow` at the top level, `thiserror` for errors that callers match on.
+- Few dependencies. Adding one that the v1 stack table does not list needs a decision-log entry saying why.
+- Comments say why, not what. Every `unsafe` block and raw syscall gets a comment on what it relies on.
+
+## Commands
+
+No code exists yet. Update this section when the first milestone lands.
+
+- Sandbox and cgroup tests must run under a delegated cgroup: `systemd-run --user --scope -p Delegate=yes cargo test`.
+
+## Current status
+
+Week 0 (Rust ramp). Update this line at the end of each milestone.
