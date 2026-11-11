@@ -1,0 +1,53 @@
+# Scripted agent for the demo repo: look around, find the bug, fix it, run
+# the tests. It also tries to read the denied .env file once, so the trace
+# shows a refusal.
+task = "Make the failing test in tests/test_stats.py pass"
+
+[[step]]
+tool = "fs.list"
+path = "."
+
+[[step]]
+tool = "exec"
+argv = ["pytest", "-q"]
+
+[[step]]
+tool = "fs.read"
+path = "tests/test_stats.py"
+
+[[step]]
+tool = "fs.read"
+path = "src/stats.py"
+
+[[step]]
+tool = "fs.read"
+path = ".env"
+
+[[step]]
+tool = "fs.write"
+path = "src/stats.py"
+content = '''
+"""Small statistics helpers."""
+
+
+def mean(values):
+    """Return the arithmetic mean of a non-empty list of numbers."""
+    if not values:
+        raise ValueError("mean() of an empty list")
+    return sum(values) / len(values)
+
+
+def median(values):
+    """Return the median of a non-empty list of numbers."""
+    if not values:
+        raise ValueError("median() of an empty list")
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2 == 1:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2
+'''
+
+[[step]]
+tool = "exec"
+argv = ["pytest", "-q"]

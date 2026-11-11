@@ -4,10 +4,13 @@
 //! The library holds all the logic; `main.rs` is only the command line. That
 //! split lets the integration tests in `tests/` use the same code.
 
+pub mod agent;
 pub mod blob;
 pub mod checkpoint;
 pub mod gateway;
 pub mod log;
 pub mod policy;
+pub mod runtime;
 pub mod tools;
+pub mod trace;
 pub mod workspace;

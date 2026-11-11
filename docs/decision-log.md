@@ -765,6 +765,29 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 **Concepts to learn.** Semantic versioning; `Cargo.lock`.
 
+### D-032 — A small glob matcher written in the code, not a crate
+- **Date:** 2026-11-11
+- **Status:** Taken
+- **Area:** policy
+- **ADR:** none
+
+**In plain words.** The policy says which paths are allowed with patterns such as `src/**` or `**/.env`. Matching a path against such a pattern is about 30 lines of code, so it is written in `policy.rs` instead of adding a library. Writing it also fixes the exact rules, which matter for security.
+
+**The problem.** The v1 stack table lists no glob library, and adding a dependency needs a reason. The matching rules must be exact: whether `secrets/**` also covers the folder `secrets` itself decides whether that folder is copied into the workspace.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Own matcher: `**` = zero or more whole folders, `*` and `?` inside one name, nothing else | Taken | No dependency; the rules fit in five lines and have unit tests |
+| `glob` crate (`Pattern`) | Discarded | Small and dependency-free, but its `**` rules and options are easy to get subtly wrong for this use |
+| `globset` crate | Discarded | Pulls in regex and aho-corasick; far more than needed |
+
+**What this means for the code.** Patterns are relative to the workspace root, with no leading `/` and no `.` or `..` parts; the policy loader refuses anything else. `secrets/**` matches `secrets`, `secrets/a` and `secrets/a/b`. `**/.env` matches `.env` at any depth. `*` never crosses a `/`. There are no `[abc]` classes.
+
+**Evidence.** `policy::tests::glob_basics` (15 cases) and `deny_wins_over_allow` pass.
+
+**Concepts to learn.** Glob patterns; recursion; why "small and exact" can beat "general" for security rules.
+
 ### D-033 — Event log layout: one SQLite file per execution, one row per event
 - **Date:** 2026-11-11
 - **Status:** Taken
@@ -856,6 +879,29 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 **Concepts to learn.** XDG base directories.
 
+### D-037 — The scripted agent reads TOML and repeats a step that was not applied
+- **Date:** 2026-11-11
+- **Status:** Taken
+- **Area:** tooling
+- **ADR:** none
+
+**In plain words.** The test agent plays a list of `[[step]]` entries from a TOML file, one per tool call. TOML's triple-quoted literal strings hold a whole Python file without escaping. If a call comes back NOT APPLIED (after a crash, recovery undid it), the agent asks for the same step again; any other result moves it to the next step.
+
+**The problem.** The fault-injection harness needs an agent that is deterministic and that behaves sensibly after recovery.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| TOML script, same fields as `ToolCall` | Taken | Same parser as the policy; file content stays readable |
+| JSON script | Discarded | Python code would need `\n` escapes on every line |
+| Steps written in Rust test code | Discarded | The security suite wants many small scripts; files are easier to read and to run from the CLI |
+
+**What this means for the code.** `agent/scripted.rs`. A denied or failed step is *not* repeated, so an attack script does not loop.
+
+**Evidence.** `agent::scripted::tests` (2 tests) pass; `examples/scripts/fix-demo.toml` fixes the demo repo.
+
+**Concepts to learn.** Determinism; replay.
+
 ### D-038 — M1 file tools use a text-based path check, replaced in M2
 - **Date:** 2026-11-11
 - **Status:** Taken (temporary; to be replaced in M2)
@@ -878,6 +924,29 @@ Which nixpkgs commit to pin was a second, smaller choice:
 **Evidence.** `tools::fs::tests::resolve_cleans_paths_and_refuses_escapes` passes. It does not, and cannot, catch symlinks.
 
 **Concepts to learn.** Path canonicalization; why `Path::join` with an absolute path discards the base.
+
+### D-039 — One runtime per execution, enforced with a file lock
+- **Date:** 2026-11-11
+- **Status:** Taken
+- **Area:** durability
+- **ADR:** none
+
+**In plain words.** While a runtime works on an execution it holds a lock on `executions/<id>/lock`. A second `agentos` process on the same execution stops with a clear message. The kernel drops the lock when the process dies, even on `kill -9`, so a crash never leaves a stale lock. `status` uses the same lock to tell "running" from "interrupted".
+
+**The problem.** If recovery ran while the original runtime was still alive, both would change the workspace at once.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| `flock` through Rust's `File::try_lock` | Taken | Released by the kernel on death; no stale-lock cleanup |
+| A PID file | Discarded | Stays behind after `kill -9`; PIDs are reused |
+| No lock | Discarded | Two writers on one log and one workspace |
+
+**What this means for the code.** `runtime::lock_execution` and `is_locked`. `File::try_lock` became stable in Rust 1.89, so `Cargo.toml` sets `rust-version = "1.89"`.
+
+**Evidence.** None yet; the M3 harness relies on it.
+
+**Concepts to learn.** Advisory locks (`flock`); what the kernel cleans up when a process dies.
 
 ### D-040 — How malformed and failing calls are recorded
 - **Date:** 2026-11-11
@@ -948,6 +1017,8 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-10 | The planned `/usr` and `/lib` mounts do not exist on the development machine (see D-012) | Distro layout is configuration, not code |
 | 2026-11-11 | `nix develop` on the latest `nixos-unstable` stalled for 22 minutes downloading a new compiler set over a slow link (see D-029) | Pin to what is already on disk when the network is slow; a lock file makes either choice reproducible |
 | 2026-11-11 | With `RUST_BACKTRACE=1` set in the dev shell, every `anyhow` error from the M0 program printed a 12-frame backtrace under a one-line message | `anyhow` captures a backtrace whenever that variable is set; leave it unset by default and set it only when debugging |
+| 2026-11-11 | The demo patch contains "Binary files … differ" lines for pytest's `__pycache__/*.pyc` files. `patch -p1 --dry-run` and `git apply --check` both still accept it | Running tests changes more than the source; harmless here, but it shows why D-009 (revert changes outside the write globs) is needed |
+| 2026-11-11 | M1 was committed as a series made by a script. Two mistakes: commits `13da7df`, `0a2c113` and `c52f417` dropped entry D-032 from this log again, and `c52f417` does not build because `src/tools/mod.rs` was not staged. The build check had run on the working folder, not on the commit. Both were fixed in the next commit, not by rewriting history | Check each commit from a clean checkout (`git worktree add`), not from the working folder; prefer committing as the work happens over rebuilding a series afterwards |
 
 ---
 
@@ -965,8 +1036,12 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | cgroup v2 | Kernel feature that limits memory, CPU and process count for a group of processes |
 | Checkpoint | A saved copy of the workspace at a known moment |
 | Content-addressed storage | Storing a file under the name of its own hash |
+| Advisory lock (`flock`) | A lock on a file that cooperating programs check; the kernel releases it when the holder dies |
+| Blob | A stored chunk of bytes (file content, tool output), named by its hash |
+| Execution | One run of one agent on one copy of a repo, with its own log and workspace |
 | Event log | The ordered, add-only record of everything that happened |
 | `fsync` | Asking the kernel to really write a file to disk before continuing |
+| Glob | A path pattern: `*` matches part of a name, `**` any number of folders |
 | Hash | A short fingerprint of some data; the same data always gives the same hash |
 | Idempotency key | A label sent with a request so that sending it twice has the effect of sending it once |
 | Intent | A log record written before an action, saying what is about to happen |
@@ -975,6 +1050,7 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | `no_new_privs` | A flag that stops a process from ever gaining more rights, for example through setuid programs |
 | `openat2` | A way to open a file that lets the kernel refuse any path leaving a given folder |
 | Page cache | Memory where the kernel holds file data before writing it to disk |
+| Patch (unified diff) | A text file listing changed lines, which `patch` or `git apply` can apply to another copy |
 | `pivot_root` | Swapping what a process sees as the root folder `/` |
 | Policy | The rules file: what the agent may read, write and run |
 | Prompt injection | Text in a file or web page that tricks the AI into following it as an instruction |

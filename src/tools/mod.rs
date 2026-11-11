@@ -3,6 +3,9 @@
 //! The agent never runs a tool itself (design rule 1). It hands a `ToolCall`
 //! to the gateway, and the gateway decides, logs and dispatches it.
 
+pub mod exec;
+pub mod fs;
+
 use serde::{Deserialize, Serialize};
 
 use crate::blob::content_hash;
