@@ -1,0 +1,5 @@
+/target
+**/target/
+/result
+# Personal files that live in this folder but are not part of the project.
+/*.tex

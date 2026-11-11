@@ -667,6 +667,59 @@ A limit to keep in mind: one project does not make someone a "Rust developer". R
 
 **Concepts to learn.** Local versus remote repository; what `git push` does; continuous integration (CI).
 
+### D-028 — The resume file in the project folder is not committed
+- **Date:** 2026-11-11
+- **Status:** Taken
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** The project folder also holds Prince's resume (a `.tex` file). It is personal, not part of AgentOS, so it stays out of git. A line in `.gitignore` makes sure it is never committed by accident.
+
+**The problem.** The first commit was "commit the existing docs". The folder had one file that is not a project document.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Leave it out and ignore `/*.tex` | Taken | Personal data stays out of a repository that will be public; no project file is a `.tex` |
+| Commit it with the docs | Discarded | It is a resume with contact details, not a project document |
+| Move or delete it | Discarded | It is Prince's file; the agent does not move his files |
+
+**What this means for the code.** `.gitignore` has `/*.tex`. If the project ever needs a LaTeX file, that line must change.
+
+**Evidence.** Read the first lines of the file: it is a LaTeX resume template.
+
+**Concepts to learn.** `.gitignore`.
+
+### D-029 — Development tools come from a pinned Nix dev shell
+- **Date:** 2026-11-11
+- **Status:** Taken
+- **Area:** tooling
+- **ADR:** none
+
+**In plain words.** The compiler, Python with pytest, and hyperfine are provided by `flake.nix`. Running `nix develop` opens a shell with exactly those versions. The versions are fixed by `flake.lock`, so the same commands give the same tools next month. On Ubuntu, the README will list the normal packages instead.
+
+**The problem.** The machine had a broken Rust setup: `rustup` knew a 1.87 toolchain, but that toolchain had no `rustc` in it, and no toolchain was active. `pytest` and `hyperfine` were not installed at all.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| `flake.nix` dev shell, pinned by `flake.lock` | Taken | Listed in the v1 stack table; fixes the versions; changes nothing outside the project |
+| `rustup toolchain install stable` + `pip install pytest` | Discarded | Changes Prince's global setup; versions drift; pip on NixOS fights the system |
+| `rust-toolchain.toml` with rustup | Discarded for development | Pins Rust only, not pytest or hyperfine. Still the simplest path for an Ubuntu user, so the README will mention rustup |
+
+Which nixpkgs commit to pin was a second, smaller choice:
+
+| Option | Result | Why |
+|---|---|---|
+| The commit the development machine already runs (`c69ae8fb…`, from `nixos-version --json`) | Taken | Rust, Python, gcc and make were already on disk, so only pytest, hyperfine and clippy (a few MB) had to be downloaded |
+| Latest `nixos-unstable` | Discarded | Tried first. It needed a new gcc, LLVM, Python and Rust (hundreds of MB); at the measured download speed that would have taken hours |
+
+**What this means for the code.** All commands are run as `nix develop -c <command>` on the development machine. Nothing in `src/` may depend on Nix; the flake is only a convenience. `rusqlite` uses its bundled SQLite, so no system SQLite library is needed. The shell does not set `RUST_BACKTRACE` (see Findings, 2026-11-11).
+
+**Evidence.** `rustup show` printed "no active toolchain"; `RUSTUP_TOOLCHAIN=1.87.0 rustc --version` failed with "Missing manifest"; `~/.rustup/toolchains/1.87.0-.../bin` held only `cargo` and clippy. With the pinned commit, `nix develop -c ...` printed rustc 1.95.0, cargo 1.95.0, pytest 9.0.3, hyperfine 1.20.0. The `nixos-unstable` attempt ran for 22 minutes and was stopped; `curl` measured about 30 KB/s from cache.nixos.org at that time.
+
+**Concepts to learn.** Nix flakes; lock files; toolchains.
+
 ---
 
 ## Still open
@@ -688,6 +741,8 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 |---|---|---|
 | 2026-11-10 | Git snapshot with a separate `GIT_DIR` did not restore the folder exactly (see D-007) | Test a mechanism before building on it; "git has everything" is false for ignored files, empty directories, modes and nested repos |
 | 2026-11-10 | The planned `/usr` and `/lib` mounts do not exist on the development machine (see D-012) | Distro layout is configuration, not code |
+| 2026-11-11 | `nix develop` on the latest `nixos-unstable` stalled for 22 minutes downloading a new compiler set over a slow link (see D-029) | Pin to what is already on disk when the network is slow; a lock file makes either choice reproducible |
+| 2026-11-11 | With `RUST_BACKTRACE=1` set in the dev shell, every `anyhow` error from the M0 program printed a 12-frame backtrace under a one-line message | `anyhow` captures a backtrace whenever that variable is set; leave it unset by default and set it only when debugging |
 
 ---
 
