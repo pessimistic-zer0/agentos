@@ -6,6 +6,7 @@
 
 pub mod blob;
 pub mod checkpoint;
+pub mod gateway;
 pub mod log;
 pub mod policy;
 pub mod tools;

@@ -856,6 +856,75 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 **Concepts to learn.** XDG base directories.
 
+### D-038 — M1 file tools use a text-based path check, replaced in M2
+- **Date:** 2026-11-11
+- **Status:** Taken (temporary; to be replaced in M2)
+- **Area:** sandbox
+- **ADR:** none
+
+**In plain words.** In M1 the file tools clean up the agent's path as text (drop `.`, apply `..`, refuse a leading `/` or a climb above the root) and then open it with normal file calls. Design rule 7 says confinement must never rely on string checks, because a symlink inside the folder can still lead outside. M1 has no sandbox on purpose (the plan builds it in M2), so this is a known, stated gap until then.
+
+**The problem.** The vertical slice needs working file tools before the `openat2` experiment that the plan schedules for M2.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Text check now; `openat2` in M2, with a test that shows the text check failing | Taken | Keeps the plan's order; the M2 test makes the reason for `openat2` concrete |
+| Build `openat2` in M1 | Discarded | Skips the M2 experiment the plan asks for first |
+| No check at all in M1 | Discarded | `Path::join` with an absolute path replaces the base entirely (`/ws` joined with `/etc/passwd` is `/etc/passwd`) |
+
+**What this means for the code.** The comment on `tools/fs.rs::resolve` says it is not a security boundary. M2 must replace it.
+
+**Evidence.** `tools::fs::tests::resolve_cleans_paths_and_refuses_escapes` passes. It does not, and cannot, catch symlinks.
+
+**Concepts to learn.** Path canonicalization; why `Path::join` with an absolute path discards the base.
+
+### D-040 — How malformed and failing calls are recorded
+- **Date:** 2026-11-11
+- **Status:** Taken
+- **Area:** policy
+- **ADR:** none
+
+**In plain words.** A request that is malformed (an empty argv, a path climbing out with `..`) is refused before any intent, like a policy denial, with the rule `invalid request`. A request that is allowed but cannot be done (the file does not exist) gets an intent and then a FAILED record. `fs.write` does not create folders: the folder must already exist.
+
+**The problem.** Every call must end in exactly one terminal record, and recovery must never meet a half-done write it cannot explain.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Malformed = DENIED (no intent); allowed-but-impossible = INTENT then FAILED | Taken | "Denied" always means "nothing was attempted"; every allowed call has an intent |
+| A separate INVALID state | Discarded | One more state that recovery would treat exactly like DENIED |
+| `fs.write` creates missing folders | Discarded | A crash after making the folder but before writing the file would leave a change that matches neither the old nor the new hash, so recovery would have to roll back more often |
+
+**What this means for the code.** `gateway.rs`: `decide` returns an error for malformed requests; `fail_before_intent` writes intent + failed. `fs.write` fails with "the folder for `x` does not exist".
+
+**Evidence.** `tests/vertical_slice.rs::denied_command_and_unknown_path_are_reported` passes.
+
+**Concepts to learn.** Terminal states.
+
+### D-041 — `fs.read` returns UTF-8 text only, capped by `max_output_kb`
+- **Date:** 2026-11-11
+- **Status:** Taken
+- **Area:** policy
+- **ADR:** none
+
+**In plain words.** `fs.read` returns a file's text. A file that is not valid UTF-8 text, or larger than `limits.max_output_kb`, is refused with a message. The same limit caps how much of a command's output is kept.
+
+**The problem.** The agent is a language model reading text. A huge or binary file would flood its context and the log.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Text only; refuse above the limit | Taken | A clear failure the agent can act on |
+| Return the first N bytes | Discarded | A cut-off source file looks complete and misleads the agent |
+| Base64 for binary files | Discarded | No v1 task needs binary files |
+
+**What this means for the code.** `tools/fs.rs::read`. `fs.write` content is a `String`, so it is also text only.
+
+**Evidence.** None; reasoning only.
+
+**Concepts to learn.** UTF-8.
+
 ---
 
 ## Still open
