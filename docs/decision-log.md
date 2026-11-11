@@ -811,6 +811,51 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 **Concepts to learn.** State machines; the cost of fsync.
 
+### D-035 — The output patch never follows symlinks
+- **Date:** 2026-11-11
+- **Status:** Taken
+- **Area:** sandbox
+- **ADR:** none
+
+**In plain words.** The patch is made with `diff -ruN`. By default `diff` follows symlinks. If the agent made a symlink in the workspace pointing at a host file such as `~/.ssh/id_ed25519`, the runtime (which runs outside the sandbox) would read that file and put its content into the patch. `--no-dereference` makes `diff` compare the links themselves.
+
+**The problem.** Anything the trusted runtime reads on the agent's behalf can leak host files. The patch step is easy to forget because it runs after the agent is done.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| `diff -ruN --no-dereference` | Taken | One flag; a symlink shows up as a changed link target |
+| Plain `diff -ruN` | Discarded | Follows links out of the workspace |
+
+**What this means for the code.** `checkpoint::write_patch` passes the flag and rewrites header paths to `a/` and `b/`, so the patch applies with `patch -p1` or `git apply`. The security suite (M2) gets a test for it.
+
+**Evidence.** The demo patch applied with `patch -p1 --dry-run` and `git apply --check` (both exit 0). The symlink case is reasoning until the M2 test exists.
+
+**Concepts to learn.** Symlinks; the confused-deputy problem (a trusted program misused by an untrusted one).
+
+### D-036 — Where things live: one folder per execution
+- **Date:** 2026-11-11
+- **Status:** Taken
+- **Area:** durability
+- **ADR:** none
+
+**In plain words.** All state goes under a state folder (`--state-dir`, else `$AGENTOS_STATE_DIR`, else `~/.local/share/agentos`). Each execution has `executions/<id>/` holding `log.db`, a copy of the policy, a lock file, `work/` (the workspace), `checkpoints/`, `blobs/` and `result.patch`. Only `work/` is ever shown to the sandbox.
+
+**The problem.** The log and the checkpoints must be out of the sandbox's reach (design rule 9), and recovery must find everything from the execution id alone.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| One folder per execution with fixed names inside | Taken | Recovery needs only the id; deleting a run is deleting a folder |
+| Workspaces in `/tmp` | Discarded | Often a tmpfs, emptied on reboot; the same problem as D-010 |
+| Separate top-level folders for logs, blobs and workspaces (as in the big spec §10.3) | Discarded | Spreads one execution over several places for no gain |
+
+**What this means for the code.** `workspace::ExecDir` has one method per path. The id is `YYYYMMDD-HHMMSS-xxxxxx` in UTC, so ids sort by start time; the suffix comes from hashing the clock's nanoseconds and the process id. The policy text is copied into the folder, so recovery uses exactly the policy the run started with.
+
+**Evidence.** `workspace::tests::execution_ids_sort_by_time` passes; the demo run created the layout above.
+
+**Concepts to learn.** XDG base directories.
+
 ---
 
 ## Still open

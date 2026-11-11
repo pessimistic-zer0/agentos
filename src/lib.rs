@@ -5,6 +5,8 @@
 //! split lets the integration tests in `tests/` use the same code.
 
 pub mod blob;
+pub mod checkpoint;
 pub mod log;
 pub mod policy;
 pub mod tools;
+pub mod workspace;
