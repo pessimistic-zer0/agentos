@@ -172,7 +172,7 @@ The runtime resolves each allowed command to its real path on the host before th
 
 **Atomic writes.** `fs.write` writes a temp file beneath the workspace, fsyncs it, then `renameat` over the target, so a crash never leaves a half-written file.
 
-**Rootless cgroups.** Run the runtime under a delegated cgroup subtree (`systemd-run --user --scope -p Delegate=yes`) so no root is needed. A cgroup cannot hold both processes and child groups with limits, so the runtime first moves itself into a leaf group, then creates one child group per `exec`. Checked working on NixOS (kernel 7.1); Ubuntu 24.04 restricts unprivileged user namespaces by default and needs a documented one-line setting.
+**Rootless cgroups.** Run the runtime under a delegated cgroup subtree (`systemd-run --user --scope -p Delegate=yes`) so no root is needed. A cgroup cannot hold both processes and child groups with limits, so the runtime first moves every process of the delegated group (itself and, for example, the shell that started it) into a leaf group, then creates one child group per `exec` (D-049). Checked working on NixOS (kernel 7.1); Ubuntu 24.04 restricts unprivileged user namespaces by default and needs a documented one-line setting.
 
 **Startup checks.** On start, the runtime checks for user namespaces, Landlock, `openat2` and cgroup delegation, and stops with a clear message naming what is missing.
 

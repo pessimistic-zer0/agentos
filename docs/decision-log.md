@@ -904,7 +904,7 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 ### D-038 — M1 file tools use a text-based path check, replaced in M2
 - **Date:** 2026-11-11
-- **Status:** Taken (temporary; to be replaced in M2)
+- **Status:** Replaced by D-047
 - **Area:** sandbox
 - **ADR:** none
 
@@ -994,6 +994,237 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 **Concepts to learn.** UTF-8.
 
+### D-042 — The sandbox is set up by a fresh copy of the agentos binary
+- **Date:** 2026-11-11
+- **Status:** Taken
+- **Area:** sandbox
+- **ADR:** none
+
+**In plain words.** To run a command in the cage, the runtime starts its own program a second time with a hidden first argument (`__sandbox-init`). That fresh process builds the cage around itself and then turns into the command. Three processes are involved: the helper H (joins the cgroup, creates the namespaces), its child C (process number 1 inside the cage; builds the file view, drops rights, then stays as a tiny "init"), and C's child G (becomes the command with `execve`).
+
+**The problem.** The runtime has several threads (watchdog, output readers). The kernel refuses `unshare(CLONE_NEWUSER)` in a process with more than one thread, and running complex code between `fork` and `exec` in a multi-threaded process can deadlock. D-024 already noted that Go tools hit the same wall.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Re-run the same binary as a single-threaded helper | Taken | A fresh process has one thread; one binary to ship; same trick as runc and Codex's Linux sandbox |
+| `fork` inside the runtime and do the setup in the child | Discarded | Unsafe with threads; `unshare` of a user namespace fails outright |
+| A second, separate helper binary | Discarded | Two binaries to build, find and keep in sync |
+| Command runs as PID 1 itself (no init process C) | Discarded | PID 1 ignores most signals and must reap orphans; ordinary programs do neither |
+
+**What this means for the code.** `main.rs` checks for `__sandbox-init` before clap, so it never appears in `--help` and is not a fifth CLI command. The spec travels as one JSON argument. Results come back on a pipe placed on file descriptor 3: `error: …` for setup failures, `exec-failed: …`, then `exit N` or `signal N`. H and C set `PR_SET_PDEATHSIG(SIGKILL)`, so if the runtime is killed, H dies, then C dies, and the kernel kills everything else in the PID namespace.
+
+**Evidence.** Probe run inside the sandbox printed `pid: 2`, processes visible `[1, 2]`. Test `background_processes_die_with_the_command` passes.
+
+**Concepts to learn.** `fork` and `execve`; why threads and `fork` do not mix; PID 1 and zombie reaping; `PR_SET_PDEATHSIG`; close-on-exec.
+
+### D-043 — Inside the sandbox the user keeps its own uid, with no capabilities
+- **Date:** 2026-11-11
+- **Status:** Taken
+- **Area:** sandbox
+- **ADR:** none
+
+**In plain words.** `unshare -r` maps the user to "root" (uid 0) inside the namespace. AgentOS instead maps uid 1000 to uid 1000. The helper still gets full powers inside the new namespace for the setup (the kernel grants them to whoever creates a user namespace, whatever the mapping), and then throws all of them away before the command starts.
+
+**The problem.** Programs behave differently when they think they are root (pip warns, some tools refuse to run, files look root-owned).
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Identity map (`uid uid 1`), then drop every capability explicitly | Taken | The command sees a normal user; nothing depends on "execve drops caps for non-root" alone |
+| Map to root inside | Discarded | Confusing for tools; one mistake in dropping capabilities would leave "root in the namespace" |
+
+**What this means for the code.** `ns.rs::drop_privileges`: drop every capability from the bounding set, clear ambient capabilities, set `no_new_privs`, then `capset` everything to zero. `capset` and the bounding-set calls are raw syscalls through `libc` (the `nix` crate has no wrapper).
+
+**Evidence.** Probe inside the sandbox: `uid 1000`, `CapPrm/CapEff/CapBnd: 0000000000000000`, `NoNewPrivs: 1`, `os.setuid(0)` fails. Test `exec_has_no_capabilities_and_cannot_gain_root` passes.
+
+**Concepts to learn.** uid maps; capability sets (effective, permitted, bounding, ambient); `no_new_privs`.
+
+### D-044 — The sandbox's file view: built on a tmpfs, entered with two `pivot_root` calls
+- **Date:** 2026-11-11
+- **Status:** Taken
+- **Area:** sandbox
+- **ADR:** none
+
+**In plain words.** The cage's root folder is built from nothing: an empty in-memory folder that gets `/work` (the workspace, writable), the policy's system folders (read-only), a `/dev` with five device files, a fresh `/proc`, and an empty `/tmp`. Then the process swaps its root to that folder and detaches the host's root. There is no `/home`, no `/etc`, no `/sys`. The steps and their order are copied from bubblewrap.
+
+**The problem.** `experiments/m2-unshare` showed a new mount namespace hides nothing by itself. Most namespace bugs are ordering bugs (v1 design), so the order should come from a tool that has had years of review.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| bubblewrap's order: tmpfs on `/tmp` → `pivot_root` (host root becomes `/oldroot`) → bind mounts from `/oldroot/...` → detach `/oldroot` → `pivot_root(".", ".")` | Taken | Works even when the workspace itself is under `/tmp` (the test suites' is not, but a user's may be) |
+| `chroot` | Discarded | Can be escaped by a process with the right capability; `pivot_root` plus detaching the old root leaves nothing to escape to |
+| Bind-mount `/` read-only and hide parts | Discarded | "Allow a few folders" is safer than "hide the dangerous ones" |
+
+**What this means for the code.** `ns.rs::build_root`. Details that matter: every read-only mount is remounted with `MS_RDONLY|MS_NOSUID|MS_NODEV` while keeping the flags the host set (the kernel refuses to clear those inside a user namespace); a policy mount that is a symlink on the host (`/bin -> usr/bin`) is recreated as a symlink; a missing one (`/lib64` on some systems) is skipped; `/work` is `nosuid,nodev`; the root itself ends read-only. The loopback interface is brought up (the v1 table says "loopback only"); there is still no route anywhere else. Sandbox `/tmp` is a tmpfs, so it is counted against the cgroup's memory limit.
+
+**Evidence.** Probe inside the sandbox listed exactly these mounts: `/` (ro), `/work` (rw), `/nix/store` (ro), `/dev` + 5 device files, `/proc`, `/tmp`. `/home` and `/etc/passwd` gave "No such file", writing `/x` and `/nix/store/x` gave "Read-only file system", connecting to 1.1.1.1 gave "Network is unreachable", connecting to its own loopback listener worked.
+
+**Concepts to learn.** `pivot_root` versus `chroot`; mount propagation (`MS_PRIVATE`); locked mount flags; tmpfs.
+
+### D-045 — Landlock rules: built for ABI 5, best effort on older kernels
+- **Date:** 2026-11-11
+- **Status:** Taken
+- **Area:** sandbox
+- **ADR:** none
+
+**In plain words.** After the new root is in place, the helper applies Landlock: read and execute under the system folders; everything under `/work` and `/tmp`; read and write on five device files; read under `/proc`. Anything else is refused, even listing `/`. This is a second lock behind the mount setup.
+
+**The problem.** Landlock has grown in versions ("ABIs"). Code must say which rights it handles, and what to do on a kernel that knows fewer.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Handle all filesystem rights of ABI 5, `CompatLevel::BestEffort`, refuse to run if nothing is enforced | Taken | Newer kernels enforce everything; older ones enforce what they know; never silently unconfined |
+| Require the newest ABI | Discarded | Would not start on Ubuntu 22.04-era kernels for no real gain |
+| Also use Landlock's network and signal scoping (ABI 4, 6) | Discarded | The network and PID namespaces already cover those; not in the v1 table |
+
+**What this means for the code.** `sandbox/landlock.rs`. One useful side effect, checked by a test: Landlock forbids `mount` for restricted processes, so a command that creates its own nested user namespace (which the kernel allows) still cannot rearrange its file view.
+
+**Evidence.** `experiments/m2-landlock`. Tests `exec_cannot_mount_even_in_a_nested_user_namespace` and the probe (`os.listdir("/")` → Permission denied) pass.
+
+**Concepts to learn.** Landlock ABIs; best-effort compatibility; defence in depth.
+
+### D-046 — `libc` as a direct dependency
+- **Date:** 2026-11-11
+- **Status:** Taken
+- **Area:** tooling
+- **ADR:** none
+
+**In plain words.** The `libc` crate (raw bindings to system calls) is used directly in five places where the `nix` crate has no safe wrapper: `capset`, dropping bounding capabilities, bringing up the loopback interface (`ioctl`), `close_range`, and asking the kernel for its Landlock version. It was already in the build because `nix` and `landlock` depend on it.
+
+**The problem.** The v1 stack table lists `nix` "(raw syscall if `nix` lacks it)" but not `libc` by name. A dependency outside the table needs an entry.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Use `libc` directly for those five calls | Taken | No new code enters the build; each `unsafe` block is commented |
+| The `caps` crate, a netlink crate, etc. | Discarded | Three more dependencies to save about 40 lines |
+
+**What this means for the code.** Every `unsafe` block has a `SAFETY:` comment saying what it relies on (CLAUDE.md code style). `openat2` did **not** need a raw syscall: `nix` 0.31 has it.
+
+**Evidence.** `cargo tree` shows `libc` once. `cargo clippy --all-targets` is clean.
+
+**Concepts to learn.** `unsafe` in Rust; FFI.
+
+### D-047 — File tools resolve every path with `openat2`; policy is checked on the resolved path
+- **Date:** 2026-11-11
+- **Status:** Taken (replaces D-038)
+- **Area:** sandbox
+- **ADR:** 0001
+
+**In plain words.** The file tools now open every path through the kernel's "stay beneath this folder" mode. The policy step keeps the opened handle and the effect uses that same handle, so what was checked is what is used. The policy is asked twice: once on the name the agent typed (deny rules only), and once on the path the kernel actually arrived at (all rules).
+
+**The problem.** D-038's text check cannot see symlinks. And a check followed by a separate open leaves a gap in which a symlink can be swapped (TOCTOU).
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| `openat2(RESOLVE_BENEATH \| RESOLVE_NO_MAGICLINKS)`, keep the fd, check policy on the fd's real path | Taken | Check and open are one kernel call; the fd cannot be redirected afterwards |
+| `RESOLVE_NO_SYMLINKS` for everything | Discarded | Refuses harmless symlinks that stay inside the repo |
+| Canonicalize the path, check the prefix, then open | Discarded | The classic TOCTOU bug |
+
+**What this means for the code.** `sandbox/beneath.rs`, `tools/fs.rs`, `gateway.rs::decide`. An escape is logged as `tool.denied` with rule `path leaves the workspace (openat2: …)`. `fs.write` opens the *parent folder* beneath the workspace, creates the temp file with `O_EXCL|O_NOFOLLOW`, and renames it over the target by name; `renameat` never follows a symlink at the target. If the target is currently a symlink or not a regular file, the write fails rather than replacing it. `beneath::lexical_rel` still cleans paths as text, but only to match deny rules on the requested name; it confines nothing.
+
+**Evidence.** `experiments/m2-openat2`; unit test `escapes_are_refused_by_the_kernel`; seven security tests in section 1 of `tests/security/main.rs`.
+
+**Concepts to learn.** File descriptors as capabilities; `O_PATH`; `O_NOFOLLOW`; `/proc/self/fd`.
+
+### D-048 — How changes outside the write globs are found and undone after `exec`
+- **Date:** 2026-11-11
+- **Status:** Taken
+- **Area:** policy
+- **ADR:** 0009
+
+**In plain words.** After each command, the runtime walks the workspace and the last checkpoint side by side. For every path the write globs do not allow, the workspace is made equal to the checkpoint again: new things are deleted, missing or changed things are restored. The list of touched paths is logged as a `policy.violation` event and shown to the agent. Files are compared by content, never by timestamp.
+
+**The problem.** D-009 decided *that* this happens; the details decide whether it is safe. The undo runs in the trusted runtime on a folder the attacker shaped. If the attacker replaced `tests` with a symlink to `~`, a naive "restore `tests/data.txt`" would write into the home folder.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Every delete/restore goes through a handle on the parent folder, opened with `RESOLVE_BENEATH \| RESOLVE_NO_SYMLINKS` | Taken | A symlink anywhere on the way makes the open fail instead of being followed |
+| Plain path operations (`fs::copy(base/x, work/x)`) | Discarded | Follows planted symlinks out of the workspace |
+| Compare size and mtime | Discarded | The attacker controls mtime |
+| Throw the whole workspace away and restore the checkpoint if anything is outside | Discarded | Would also discard the allowed changes |
+
+**What this means for the code.** `checkpoint::revert_outside`. A new folder outside the globs is removed only if it ends up empty (it may hold allowed files). Because `src/**` also matches `src` itself (D-032), changing the mode of `src` is an allowed change. No sandboxed process is alive during the revert (the exec's cgroup has been destroyed), so nothing can swap paths under it. In M2 the comparison base is `cp-0000` plus allowed changes since; M3 moves it to the per-call checkpoint.
+
+**Evidence.** Tests `exec_changes_outside_write_globs_are_reverted` and `exec_cannot_replace_a_folder_with_a_symlink_to_escape_the_revert` pass.
+
+**Concepts to learn.** Confused deputy; `RESOLVE_NO_SYMLINKS`.
+
+### D-049 — cgroup details: leaf group, retries, a systemd check, a probe, `cgroup.kill`
+- **Date:** 2026-11-11
+- **Status:** Taken
+- **Area:** sandbox
+- **ADR:** 0006
+
+**In plain words.** At startup the runtime (1) asks systemd whether its cgroup was delegated and stops if the answer is no, (2) moves every process of the delegated group into a child group called `agentos-runtime`, (3) turns on the memory, pids and cpu controllers for children, and (4) creates and removes a throwaway group with all three limits as a probe. Each command then gets its own group named `x-<execution id>-c<call id>`. The watchdog kills a command by writing `1` to the group's `cgroup.kill`.
+
+**The problem.** D-013 chose delegated cgroups; three practical problems showed up while building (see Findings): other processes share the scope, several runtimes can start at once, and a non-delegated scope half-works.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Move *all* processes of the scope into the leaf, retrying while new ones appear | Taken | The runtime is rarely alone (`cargo`, a shell); the kernel refuses to enable controllers while any process sits in the parent |
+| Move only the runtime itself (as the v1 text says) | Discarded | Fails with EBUSY whenever a parent process shares the scope |
+| Trust "mkdir worked" as proof of delegation | Discarded | A user can create child groups in a non-delegated scope too; the run then failed at the first limit, after disturbing the terminal's cgroup |
+| Kill by process id | Discarded | Misses children; ids can be reused. `cgroup.kill` has neither problem |
+
+**What this means for the code.** `sandbox/cgroup.rs`. `memory.swap.max` is set to 0 so the memory limit cannot be dodged through swap. The group name is fixed by execution and call id, so M3's recovery can find and kill a group left by a crashed runtime. The systemd question is asked with `systemctl show <unit> -p Delegate`; if `systemctl` is missing, the probe alone decides. The v1 document's sentence "the runtime first moves itself into a leaf group" is updated to say it moves the scope's processes.
+
+**Evidence.** `experiments/m2-pids`. Without `systemd-run`, `agentos run` now stops before creating anything, with a message naming the fix. Tests `fork_bomb_is_stopped_by_pids_max`, `memory_exhaustion_is_stopped_by_memory_max`, `infinite_loop_is_killed_at_the_time_limit` pass; the full suite passed five runs in a row with 25 runtimes starting concurrently in one scope.
+
+**Concepts to learn.** cgroup v2 "no internal processes" rule; `cgroup.subtree_control`; `cgroup.kill`; OOM killer; systemd scopes and `Delegate=`.
+
+### D-050 — Symlinks in the output patch are listed as comments
+- **Date:** 2026-11-11
+- **Status:** Taken
+- **Area:** policy
+- **ADR:** none
+
+**In plain words.** A normal patch file can describe changed text, not symlinks. When the agent adds or removes a symlink, the patch starts with comment lines such as `# agentos: symlink added: src/leak.py -> /some/target`. `patch` ignores them; the human sees them and decides.
+
+**The problem.** With `--no-dereference` (D-035), GNU diff exits with an error when a symlink exists on one side only, and the whole run failed at the last step.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Find one-sided symlinks ourselves, accept diff's error only for exactly those paths, add comment lines | Taken | Smallest change; nothing is silently dropped |
+| Drop `--no-dereference` | Discarded | Reopens the leak D-035 closed |
+| `git diff --no-index` (can express symlinks) | Discarded | Adds git as a runtime dependency; the plan says `diff -ruN` |
+
+**What this means for the code.** `checkpoint::write_patch`. Any other diff error still stops the run.
+
+**Evidence.** Reproduced by hand with diffutils 3.12 (`diff: a/new: No such file or directory`, exit 2). Test `patch_does_not_follow_symlinks_to_host_files` passes: the link is named in the patch and the linked file's content is not.
+
+**Concepts to learn.** Unified diff format and its limits.
+
+### D-051 — How the security suite plays the attacker
+- **Date:** 2026-11-11
+- **Status:** Taken
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** Each security test is a small script for the scripted agent. Attacks through the file tools are plain `fs.*` steps. Attacks "from code run by an allowed command" use a test policy that allows `python3`, and run Python that tries the forbidden thing and prints `ESCAPED: …` if it works or `BLOCKED: …` if it is stopped. A test fails on any `ESCAPED`, and also if an expected `BLOCKED` line is missing.
+
+**The problem.** The threat model says any allowed test command is arbitrary code execution. The tests need a direct way to run arbitrary code, and must not pass just because an attack script crashed early.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Allow `python3` in the test policy; ESCAPED/BLOCKED lines; require the BLOCKED lines | Taken | Same power as `pytest` + `conftest.py`, far less boilerplate; a crashed attack fails the test |
+| Only `pytest` with a `conftest.py` per attack | Discarded as the default | Slower and noisier; kept for one realistic test (`conftest_cannot_read_a_denied_file`) |
+| Call sandbox functions directly from Rust tests | Discarded | Would skip the gateway, the log and the CLI, which are part of what is being tested |
+
+**What this means for the code.** `tests/security/main.rs`, 25 cases in 7 groups. Canary strings (fake secrets) are searched for in the whole execution folder afterwards. The shipped policies do **not** allow bare `python3`.
+
+**Evidence.** `systemd-run --user --scope -p Delegate=yes cargo test --test security` → 25 passed, 0 failed.
+
+**Concepts to learn.** Canary values; negative testing (why "the attack printed nothing" is not a pass).
+
 ---
 
 ## Still open
@@ -1021,6 +1252,13 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-11 | M1 was committed as a series made by a script. Two mistakes: commits `13da7df`, `0a2c113` and `c52f417` dropped entry D-032 from this log again, and `c52f417` does not build because `src/tools/mod.rs` was not staged. The build check had run on the working folder, not on the commit. Both were fixed in the next commit, not by rewriting history | Check each commit from a clean checkout (`git worktree add`), not from the working folder; prefer committing as the work happens over rebuilding a series afterwards |
 | 2026-11-11 | Inside `unshare -Urmpn`, `~/.ssh` was still readable and `/sys/class/net` still listed the host's network cards (see `experiments/m2-unshare`) | A new mount namespace is a copy of the host's mounts and hides nothing by itself; files disappear only after `pivot_root` into a root built from the allowed folders. Mount no `/sys` |
 | 2026-11-11 | The first Landlock experiment failed before running anything: spawning a child returned `EACCES` because `Command::output()` opens `/dev/null` and Landlock refused it (found with `strace`) | Landlock is allow-only; the sandbox must list the few device files ordinary programs expect |
+| 2026-11-11 | `fs.write` failed with "Invalid argument" on its first sandboxed run: `openat2` rejects `O_PATH` together with `O_NOCTTY` (bug B-004 in `docs/bugs.md`) | `openat2` checks flag combinations strictly; an experiment must use the same flags as the real code |
+| 2026-11-11 | First full run of the security suite: 20 of 25 failed because concurrent runtimes raced in cgroup setup (B-001) | Start-up code must tolerate another copy of itself running at the same time |
+| 2026-11-11 | A run without `systemd-run` passed the startup check, rearranged the terminal's cgroup, then failed at `cpu.max` (B-003). The `user.delegate` xattr was checked as a possible test and is not set on this machine even for a delegated scope | Probe with the real operation; ask systemd for `Delegate=` before changing anything |
+| 2026-11-11 | `diff -ruN --no-dereference` exits 2 when a symlink exists on one side only (B-002) | Tools combined with unusual flags need the unusual inputs tested too |
+| 2026-11-11 | Inside the sandbox even `os.listdir("/")` and `os.listdir("/dev")` are refused: Landlock allows only the listed folders, not their parents | Allow-lists apply to exactly what is listed; the probe script had to be changed twice |
+| 2026-11-11 | A security test expected `chmod src` to be reverted. It was not, correctly: `src/**` matches `src` itself, so that is an allowed change. The test now changes a folder outside the globs | The test was wrong, not the code; write the expectation from the rule (D-032), not from intuition |
+| 2026-11-11 | M1 test `denied_command_and_unknown_path_are_reported` asserted the old message `invalid request` for `../../etc/passwd`; with `openat2` the rule is `path leaves the workspace` | The assertion was updated to the new mechanism; it still requires a denial |
 
 ---
 
@@ -1035,6 +1273,7 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | Atomic rename | Replacing a file in one step, so readers see the old file or the new one, never half of each |
 | Bind mount | Making a folder appear at a second place in the file tree |
 | Capabilities | Root's power split into pieces that can be dropped one by one |
+| `cgroup.kill` | A file in a cgroup; writing `1` kills every process in the group at once |
 | cgroup v2 | Kernel feature that limits memory, CPU and process count for a group of processes |
 | Checkpoint | A saved copy of the workspace at a known moment |
 | Content-addressed storage | Storing a file under the name of its own hash |
@@ -1045,9 +1284,13 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | `fsync` | Asking the kernel to really write a file to disk before continuing |
 | Glob | A path pattern: `*` matches part of a name, `**` any number of folders |
 | Hash | A short fingerprint of some data; the same data always gives the same hash |
+| Init (PID 1) | The first process in a PID namespace; it must collect dead children, and when it exits the kernel kills the rest |
 | Idempotency key | A label sent with a request so that sending it twice has the effect of sending it once |
 | Intent | A log record written before an action, saying what is about to happen |
+| Helper (re-exec) | Starting your own program a second time to do a job that needs a fresh, single-threaded process |
 | Landlock | Kernel feature that lets a process give up its own access to files, permanently |
+| Magic link | A special `/proc` symlink (such as `/proc/self/root`) that jumps straight to another place, ignoring normal path rules |
+| Mount propagation | Whether mounts made in one namespace also appear in another; `private` turns that off |
 | Namespace | A private view of some part of the system (mounts, process IDs, network, users) for one group of processes |
 | `no_new_privs` | A flag that stops a process from ever gaining more rights, for example through setuid programs |
 | `openat2` | A way to open a file that lets the kernel refuse any path leaving a given folder |
@@ -1056,9 +1299,11 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | `pivot_root` | Swapping what a process sees as the root folder `/` |
 | Policy | The rules file: what the agent may read, write and run |
 | Prompt injection | Text in a file or web page that tricks the AI into following it as an instruction |
+| `PR_SET_PDEATHSIG` | Ask the kernel to send this process a signal when its parent dies |
 | Reconciliation | Finding out whether an uncertain action really happened |
 | Reflink | A copy that shares disk blocks with the original until one of them changes |
 | seccomp | Kernel feature that blocks chosen system calls for a process |
 | tmpfs | A filesystem that lives in memory |
+| uid map | The table that says which user id inside a user namespace is which user id outside |
 | TOCTOU | "Time of check to time of use": a bug where something changes between checking it and using it |
 | WAL | Write-ahead log: changes go to a side file first, which makes crashes safe |

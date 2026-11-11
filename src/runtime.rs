@@ -10,7 +10,7 @@ use anyhow::{bail, Context, Result};
 use crate::agent::{Action, Agent};
 use crate::blob::content_hash;
 use crate::checkpoint;
-use crate::gateway::Gateway;
+use crate::gateway::{Gateway, SandboxCtx};
 use crate::log::{EventBody, EventLog};
 use crate::policy::Policy;
 use crate::tools::exec::Programs;
@@ -52,10 +52,23 @@ pub fn is_locked(dir: &ExecDir) -> bool {
     }
 }
 
+/// Check the machine can run the sandbox, and set up the cgroup subtree.
+/// Stops with one message listing everything that is missing.
+pub fn prepare_sandbox() -> Result<SandboxCtx> {
+    let problems = crate::sandbox::check_host();
+    if !problems.is_empty() {
+        bail!("this machine cannot run the AgentOS sandbox:\n  - {}", problems.join("\n  - "));
+    }
+    let cgroups = crate::sandbox::cgroup::CgroupRoot::init()?;
+    let helper = std::env::current_exe().context("finding the agentos binary")?;
+    Ok(SandboxCtx { cgroups, helper })
+}
+
 pub fn start(opts: &RunOptions, agent: &mut dyn Agent) -> Result<RunSummary> {
     let (policy, policy_text) = Policy::load(&opts.policy)?;
     let host_path = std::env::var("PATH").unwrap_or_default();
     let programs = Programs::resolve(&policy, &host_path)?;
+    let sandbox = prepare_sandbox()?;
     let repo = std::fs::canonicalize(&opts.repo).with_context(|| format!("repo {}", opts.repo.display()))?;
 
     let id = workspace::new_execution_id();
@@ -82,13 +95,13 @@ pub fn start(opts: &RunOptions, agent: &mut dyn Agent) -> Result<RunSummary> {
     log.append(EventBody::WorkspaceCreated {
         files_copied: report.files_copied,
         denied: report.denied.clone(),
-        checkpoint: base,
+        checkpoint: base.clone(),
     })?;
     if opts.verbose && !report.denied.is_empty() {
         println!("  workspace: {} files copied, left out by deny rules: {}", report.files_copied, report.denied.join(", "));
     }
 
-    let mut gw = Gateway::new(dir.clone(), log, policy, programs, 1);
+    let mut gw = Gateway::new(dir.clone(), log, policy, programs, sandbox, 1, base);
     drive(&mut gw, agent, None, opts.verbose)
 }
 

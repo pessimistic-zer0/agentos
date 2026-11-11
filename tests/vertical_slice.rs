@@ -101,7 +101,8 @@ path = "does-not-exist.txt"
     };
     assert_eq!(rule_of(1).as_deref(), Some("no matching rule"), "sh is not in exec.allow");
     assert_eq!(rule_of(2).as_deref(), Some("no matching rule"), "pytest.ini is not in the write globs");
-    assert!(rule_of(3).unwrap().starts_with("invalid request"), "../ is refused");
+    // Since M2 the kernel (openat2 RESOLVE_BENEATH) refuses this, not a text check.
+    assert!(rule_of(3).unwrap().contains("leaves the workspace"), "../ is refused");
     // A missing file is not a policy question: it is allowed, then fails.
     assert!(rule_of(4).is_none());
     assert!(events.iter().any(|e| e["type"] == "tool.failed" && e["call_id"] == 4));

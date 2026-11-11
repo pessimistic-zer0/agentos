@@ -3,25 +3,37 @@
 //! For each call, in this order:
 //!
 //! 1. `tool.requested` is logged, with the call's arguments.
-//! 2. The policy decides. A refusal is logged as `tool.denied` and returned.
+//! 2. The policy decides. File paths are opened with `openat2` first, so the
+//!    decision is made on the path the kernel resolved. A refusal is logged as
+//!    `tool.denied` and returned.
 //! 3. `tool.intent` is logged and fsynced: what is about to happen, plus what
 //!    recovery will need to check it later (design rule 3).
-//! 4. The tool runs (the effect).
+//! 4. The tool runs (the effect). `exec` runs in the sandbox; afterwards,
+//!    changes outside the write globs are put back (D-009).
 //! 5. `tool.completed` (or `tool.failed`) is logged.
-//!
-//! The steps are numbered P1..P7 in the fault-injection plan; M3 adds the
-//! crash points and the checkpoint between 4 and 5.
+
+use std::os::fd::OwnedFd;
+use std::path::PathBuf;
 
 use anyhow::Result;
 use serde_json::json;
 
 use crate::blob::BlobStore;
+use crate::checkpoint;
 use crate::log::{EventBody, EventLog};
 use crate::policy::{Access, Decision, Policy};
-use crate::tools::exec::{self, ExecRequest, Programs};
-use crate::tools::fs::{self as fstool, Resolved};
+use crate::sandbox::{self, cgroup::CgroupRoot, beneath, SandboxSpec};
+use crate::tools::exec::Programs;
+use crate::tools::fs::{self as fstool, Opened, OpenedParent, WriteTarget};
 use crate::tools::{ToolCall, ToolError, ToolOutcome, ToolOutput, ToolResult};
 use crate::workspace::ExecDir;
+
+/// What the sandbox needs from the runtime.
+pub struct SandboxCtx {
+    pub cgroups: CgroupRoot,
+    /// The agentos binary, started again as the sandbox helper.
+    pub helper: PathBuf,
+}
 
 pub struct Gateway {
     pub dir: ExecDir,
@@ -29,28 +41,47 @@ pub struct Gateway {
     pub policy: Policy,
     pub blobs: BlobStore,
     programs: Programs,
+    sandbox: SandboxCtx,
     lang: String,
     next_call_id: u64,
+    /// The checkpoint the workspace was last equal to (outside the write
+    /// globs); `exec` changes are compared against it.
+    pub last_checkpoint: String,
 }
 
-/// What the policy step produced for a call that is allowed to go ahead.
+/// What the policy step produced for a call that may go ahead. It holds the
+/// already-opened file handles, so the effect uses exactly what was checked.
 enum Approved {
-    Read(Resolved),
-    List(Resolved),
-    Write { target: Resolved, content: String },
+    Read { fd: OwnedFd, rel: String },
+    List { fd: OwnedFd, rel: String },
+    Write { target: WriteTarget, content: String },
     Exec { argv: Vec<String> },
 }
 
+/// The outcome of the policy step.
+enum Decided {
+    Allow(Decision, Approved),
+    Deny(Decision),
+    /// Malformed request (empty argv, a name like `..`): refused like a denial.
+    Invalid(String),
+    /// Allowed, but cannot be done (no such file): intent + failed.
+    Fail(Decision, ToolError),
+}
+
 impl Gateway {
-    pub fn new(dir: ExecDir, log: EventLog, policy: Policy, programs: Programs, next_call_id: u64) -> Gateway {
+    pub fn new(
+        dir: ExecDir,
+        log: EventLog,
+        policy: Policy,
+        programs: Programs,
+        sandbox: SandboxCtx,
+        next_call_id: u64,
+        last_checkpoint: String,
+    ) -> Gateway {
         let blobs = BlobStore::new(&dir.blobs());
         // LANG is one of the three variables passed through (with PATH and HOME).
         let lang = std::env::var("LANG").unwrap_or_else(|_| "C.UTF-8".into());
-        Gateway { dir, log, policy, blobs, programs, lang, next_call_id }
-    }
-
-    pub fn programs(&self) -> &Programs {
-        &self.programs
+        Gateway { dir, log, policy, blobs, programs, sandbox, lang, next_call_id, last_checkpoint }
     }
 
     /// Handle one tool call from start to end. An `Err` here means the runtime
@@ -67,36 +98,30 @@ impl Gateway {
         }
         self.log.append(EventBody::ToolRequested { call_id, call: serde_json::to_value(call.logged())? })?;
 
-        let approved = match self.decide(&call) {
-            Ok(Ok((decision, approved))) => (decision, approved),
-            Ok(Err(decision)) => {
-                self.log.append(EventBody::ToolDenied {
-                    call_id,
-                    rule: decision.rule.clone(),
-                    reason: "policy".into(),
-                })?;
-                return Ok(ToolResult { call_id, outcome: ToolOutcome::Denied { rule: decision.rule }, output: None });
+        let (decision, approved) = match self.decide(&call) {
+            Decided::Allow(d, a) => (d, a),
+            Decided::Deny(d) => {
+                self.log.append(EventBody::ToolDenied { call_id, rule: d.rule.clone(), reason: "policy".into() })?;
+                return Ok(ToolResult { call_id, outcome: ToolOutcome::Denied { rule: d.rule }, output: None });
             }
-            Err(bad) => {
-                // The request itself is malformed (for example `..` climbing out).
-                // It is refused before any intent, like a policy denial.
-                self.log.append(EventBody::ToolDenied { call_id, rule: "invalid request".into(), reason: bad.0.clone() })?;
+            Decided::Invalid(msg) => {
+                self.log.append(EventBody::ToolDenied { call_id, rule: "invalid request".into(), reason: msg.clone() })?;
                 return Ok(ToolResult {
                     call_id,
-                    outcome: ToolOutcome::Denied { rule: format!("invalid request: {}", bad.0) },
+                    outcome: ToolOutcome::Denied { rule: format!("invalid request: {msg}") },
                     output: None,
                 });
             }
+            Decided::Fail(d, e) => return self.fail_before_effect(call_id, &d, e),
         };
-        let (decision, approved) = approved;
 
         let plan = match self.plan(call_id, &approved) {
             Ok(plan) => plan,
-            Err(e) => return self.fail_before_intent(call_id, &decision, e),
+            Err(e) => return self.fail_before_effect(call_id, &decision, e),
         };
         self.log.append(EventBody::ToolIntent { call_id, rule: decision.rule.clone(), plan })?;
 
-        match self.effect(call_id, approved) {
+        match self.effect(call_id, approved)? {
             Ok(output) => {
                 let blob = self.blobs.put(&serde_json::to_vec(&output)?)?;
                 self.log.append(EventBody::ToolCompleted {
@@ -114,53 +139,93 @@ impl Gateway {
         }
     }
 
-    /// A call that was allowed but failed while preparing (for example the
-    /// file to read does not exist). No effect can have started, so it gets
-    /// an intent and a failure record straight after, keeping the state
-    /// machine simple: every allowed call has an intent.
-    fn fail_before_intent(&mut self, call_id: u64, decision: &Decision, e: ToolError) -> Result<ToolResult> {
+    /// A call that was allowed but could not even start (for example the file
+    /// to read does not exist). No effect can have happened. It still gets an
+    /// intent and then a failure record, so every allowed call has an intent
+    /// (D-040).
+    fn fail_before_effect(&mut self, call_id: u64, decision: &Decision, e: ToolError) -> Result<ToolResult> {
         self.log.append(EventBody::ToolIntent { call_id, rule: decision.rule.clone(), plan: json!({"prepare_failed": true}) })?;
         self.log.append(EventBody::ToolFailed { call_id, error: e.0.clone() })?;
         Ok(ToolResult { call_id, outcome: ToolOutcome::Failed { error: e.0 }, output: None })
     }
 
-    /// Policy step. Outer `Err`: the request is malformed. Inner `Err`: the
-    /// policy denies it.
-    #[allow(clippy::type_complexity)]
-    fn decide(&self, call: &ToolCall) -> Result<Result<(Decision, Approved), Decision>, ToolError> {
+    /// Check the name the agent asked for (deny rules only), then let the
+    /// kernel resolve it and check the resolved path against the full policy.
+    fn decide(&self, call: &ToolCall) -> Decided {
         let work = self.dir.work();
-        let check = |access: Access, r: &Resolved| self.policy.check_path(access, &r.rel);
-        Ok(match call {
-            ToolCall::FsRead { path } => {
-                let r = fstool::resolve(&work, path)?;
-                let d = check(Access::Read, &r);
-                if d.allowed { Ok((d, Approved::Read(r))) } else { Err(d) }
-            }
-            ToolCall::FsList { path } => {
-                let r = fstool::resolve(&work, path)?;
-                let d = check(Access::Read, &r);
-                if d.allowed { Ok((d, Approved::List(r))) } else { Err(d) }
+        let policy = &self.policy;
+        let escape = |e: nix::errno::Errno| {
+            Decided::Deny(Decision {
+                allowed: false,
+                rule: format!("path leaves the workspace (openat2: {})", e.desc()),
+            })
+        };
+        // Deny rules on the requested name, before anything is opened: `.env`
+        // is refused by its rule even though the file is not in the workspace.
+        let requested_denied = |path: &str| {
+            beneath::lexical_rel(path).and_then(|rel| policy.denied(&rel)).map(|rule| Decided::Deny(Decision { allowed: false, rule }))
+        };
+        match call {
+            ToolCall::FsRead { path } | ToolCall::FsList { path } => {
+                if let Some(d) = requested_denied(path) {
+                    return d;
+                }
+                let is_list = matches!(call, ToolCall::FsList { .. });
+                match fstool::open_for_read(&work, path, is_list) {
+                    Ok(Opened::Outside(e)) => escape(e),
+                    Ok(Opened::Inside { fd, rel }) => {
+                        let d = policy.check_path(Access::Read, &rel);
+                        if !d.allowed {
+                            return Decided::Deny(d);
+                        }
+                        if is_list { Decided::Allow(d, Approved::List { fd, rel }) } else { Decided::Allow(d, Approved::Read { fd, rel }) }
+                    }
+                    Err(e) => {
+                        // Not found, not a folder, ...: allowed by policy, but impossible.
+                        let d = beneath::lexical_rel(path).map(|r| policy.check_path(Access::Read, &r));
+                        match d {
+                            Some(d) if d.allowed => Decided::Fail(d, e),
+                            Some(d) => Decided::Deny(d),
+                            None => Decided::Invalid(e.0),
+                        }
+                    }
+                }
             }
             ToolCall::FsWrite { path, content } => {
-                let r = fstool::resolve(&work, path)?;
-                let d = check(Access::Write, &r);
-                if d.allowed { Ok((d, Approved::Write { target: r, content: content.clone() })) } else { Err(d) }
+                if let Some(d) = requested_denied(path) {
+                    return d;
+                }
+                match fstool::open_for_write(&work, path) {
+                    Ok(OpenedParent::Outside(e)) => escape(e),
+                    Ok(OpenedParent::Inside(target)) => {
+                        let d = policy.check_path(Access::Write, &target.rel);
+                        if !d.allowed {
+                            return Decided::Deny(d);
+                        }
+                        Decided::Allow(d, Approved::Write { target, content: content.clone() })
+                    }
+                    Err(e) => match beneath::lexical_rel(path).map(|r| policy.check_path(Access::Write, &r)) {
+                        Some(d) if d.allowed => Decided::Fail(d, e),
+                        Some(d) => Decided::Deny(d),
+                        None => Decided::Invalid(e.0),
+                    },
+                }
             }
             ToolCall::Exec { argv } => {
                 if argv.is_empty() {
-                    return Err(ToolError::new("argv is empty"));
+                    return Decided::Invalid("argv is empty".into());
                 }
-                let d = self.policy.check_exec(argv);
-                if d.allowed { Ok((d, Approved::Exec { argv: argv.clone() })) } else { Err(d) }
+                let d = policy.check_exec(argv);
+                if d.allowed { Decided::Allow(d, Approved::Exec { argv: argv.clone() }) } else { Decided::Deny(d) }
             }
-        })
+        }
     }
 
     /// What goes into the intent record. For `fs.write` this is the data that
     /// recovery needs to decide whether the write happened (D-016).
     fn plan(&self, call_id: u64, a: &Approved) -> Result<serde_json::Value, ToolError> {
         Ok(match a {
-            Approved::Read(r) | Approved::List(r) => json!({ "path": r.rel }),
+            Approved::Read { rel, .. } | Approved::List { rel, .. } => json!({ "path": rel }),
             Approved::Write { target, content } => json!({
                 "path": target.rel,
                 "pre_hash": fstool::current_hash(target)?,
@@ -172,35 +237,69 @@ impl Gateway {
                     .programs
                     .lookup(&argv[0])
                     .ok_or_else(|| ToolError::new(format!("program `{}` was not resolved at startup", argv[0])))?;
-                json!({ "argv": argv, "program": program })
+                json!({
+                    "argv": argv,
+                    "program": program,
+                    "cgroup": sandbox::cgroup_name(&self.dir.id, call_id),
+                })
             }
         })
     }
 
-    fn effect(&mut self, call_id: u64, a: Approved) -> Result<ToolOutput, ToolError> {
+    /// Run the tool. Outer `Err`: the runtime failed. Inner `Err`: the tool failed.
+    fn effect(&mut self, call_id: u64, a: Approved) -> Result<Result<ToolOutput, ToolError>> {
         let max = self.policy.limits.max_output_kb * 1024;
-        match a {
-            Approved::Read(r) => Ok(ToolOutput::Read { content: fstool::read(&r, max)? }),
-            Approved::List(r) => Ok(ToolOutput::List { entries: fstool::list(&r)? }),
-            Approved::Write { target, content } => Ok(ToolOutput::Write { bytes: fstool::write(&target, &content, call_id)? }),
-            Approved::Exec { argv } => {
-                let program = self.programs.lookup(&argv[0]).expect("checked in plan").to_path_buf();
-                let work = self.dir.work();
-                let env = vec![
-                    ("PATH".to_string(), self.programs.search_path()),
-                    ("HOME".to_string(), work.display().to_string()),
-                    ("LANG".to_string(), self.lang.clone()),
-                ];
-                let req = ExecRequest {
-                    program: &program,
-                    argv: &argv,
-                    cwd: &work,
-                    env,
-                    timeout: std::time::Duration::from_secs(self.policy.limits.call_timeout_s),
-                    max_output: max as usize,
-                };
-                Ok(ToolOutput::Exec(exec::run_direct(&req)?))
+        Ok(match a {
+            Approved::Read { fd, rel } => fstool::read(fd, &rel, max).map(|content| ToolOutput::Read { content }),
+            Approved::List { fd, rel } => fstool::list(fd, &rel).map(|entries| ToolOutput::List { entries }),
+            Approved::Write { target, content } => {
+                fstool::write(&target, &content, call_id).map(|bytes| ToolOutput::Write { bytes })
             }
+            Approved::Exec { argv } => {
+                let out = match self.run_exec(call_id, &argv)? {
+                    Ok(out) => out,
+                    Err(e) => return Ok(Err(e)),
+                };
+                Ok(out)
+            }
+        })
+    }
+
+    fn run_exec(&mut self, call_id: u64, argv: &[String]) -> Result<Result<ToolOutput, ToolError>> {
+        let program = self.programs.lookup(&argv[0]).expect("checked in plan").to_path_buf();
+        let work = std::fs::canonicalize(self.dir.work())?;
+        let spec = SandboxSpec {
+            workspace: work.clone(),
+            ro_mounts: self.policy.sandbox.ro_mounts.iter().map(PathBuf::from).collect(),
+            program,
+            argv: argv.to_vec(),
+            env: vec![
+                ("PATH".to_string(), self.programs.search_path()),
+                ("HOME".to_string(), "/work".to_string()),
+                ("LANG".to_string(), self.lang.clone()),
+            ],
+            cgroup: self.sandbox.cgroups.path_of(&sandbox::cgroup_name(&self.dir.id, call_id)),
+            parent_pid: std::process::id() as i32,
+            uid: nix::unistd::getuid().as_raw(),
+            gid: nix::unistd::getgid().as_raw(),
+        };
+        let cg = self.sandbox.cgroups.create(&sandbox::cgroup_name(&self.dir.id, call_id), &self.policy.limits)?;
+        let timeout = std::time::Duration::from_secs(self.policy.limits.call_timeout_s);
+        let max = (self.policy.limits.max_output_kb * 1024) as usize;
+        let result = sandbox::run(&self.sandbox.helper, &spec, &cg, timeout, max);
+        let _ = cg.destroy();
+        let mut out = match result {
+            Ok(out) => out,
+            Err(e) => return Ok(Err(e)),
+        };
+        // D-009: whatever the command changed outside the write globs is put back.
+        let base = self.dir.checkpoints().join(&self.last_checkpoint);
+        let policy = &self.policy;
+        let reverted = checkpoint::revert_outside(&work, &base, |rel| policy.writable(rel))?;
+        if !reverted.is_empty() {
+            self.log.append(EventBody::PolicyViolation { call_id, reverted: reverted.clone() })?;
         }
+        out.reverted = reverted;
+        Ok(Ok(ToolOutput::Exec(out)))
     }
 }
