@@ -106,12 +106,13 @@ At the end of each milestone, write `docs/milestones/M<n>-<name>.md` from `docs/
 
 Run everything inside the dev shell (`flake.nix`): `nix develop -c <command>`, or `nix develop` once for an interactive shell.
 
-- Build and test: `nix develop -c cargo test` (unit tests plus `tests/*.rs`, which run the real binary). `AGENTOS_TEST_PRESET=fhs` switches the policy preset.
+- Build and test: `nix develop -c systemd-run --user --scope -p Delegate=yes cargo test` (unit tests, `tests/vertical_slice.rs` and `tests/security/`, which run the real binary in the sandbox). Without the delegated cgroup the sandbox tests fail at startup with a message saying so. `AGENTOS_TEST_PRESET=fhs` switches the policy preset.
+- Security suite only: `... cargo test --test security`.
 - Lint: `nix develop -c cargo clippy --all-targets`.
-- Demo: `nix develop -c cargo run -- run --repo examples/demo-repo --policy policies/nix.toml --agent scripted --script examples/scripts/fix-demo.toml`, then `cargo run -- trace`.
-- M0 practice program: `cd experiments/m0-ramp && cargo test`.
-- Sandbox and cgroup tests must run under a delegated cgroup: `systemd-run --user --scope -p Delegate=yes cargo test`.
+- Demo: `nix develop -c systemd-run --user --scope -p Delegate=yes cargo run -- run --repo examples/demo-repo --policy policies/nix.toml --agent scripted --script examples/scripts/fix-demo.toml`, then `cargo run -- trace`.
+- M0 practice program: `cd experiments/m0-ramp && cargo test`. Other experiments: see each `experiments/*/NOTES.md`.
+- Bugs the suites find in the runtime get a note in `docs/bugs.md`.
 
 ## Current status
 
-M1 (vertical slice) done, tag `m1`. Next: M2 sandbox. Update this line at the end of each milestone.
+M2 (sandbox) done with one gap (`fhs` preset not yet verified; needs CI after a push), tag `m2`. Next: M3 durability. Update this line at the end of each milestone.
