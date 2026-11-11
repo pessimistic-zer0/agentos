@@ -11,6 +11,7 @@ pub mod gateway;
 pub mod log;
 pub mod policy;
 pub mod runtime;
+pub mod sandbox;
 pub mod tools;
 pub mod trace;
 pub mod workspace;

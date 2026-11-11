@@ -60,6 +60,13 @@ enum AgentKind {
 }
 
 fn main() -> Result<()> {
+    // The sandbox helper: the runtime starts this same binary again with a
+    // hidden first argument (see sandbox/ns.rs). It is handled before clap,
+    // so it never shows up in --help.
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() == 3 && args[1] == "__sandbox-init" {
+        agentos::sandbox::ns::helper_main(&args[2]);
+    }
     let cli = Cli::parse();
     let state_dir = cli.state_dir.clone().unwrap_or_else(runtime::default_state_dir);
     match cli.cmd {
