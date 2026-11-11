@@ -1,0 +1,16 @@
+[package]
+name = "m0-ramp"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Week 0 exit criterion: a small CLI that reads a TOML file and writes rows to
+# SQLite. It uses the same crates the real runtime will use, so each one is met
+# once here, alone, before it is combined with namespaces and fsync later.
+[dependencies]
+anyhow = "1"
+thiserror = "2"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+rusqlite = { version = "0.42", features = ["bundled"] }

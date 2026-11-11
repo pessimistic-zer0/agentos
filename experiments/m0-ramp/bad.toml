@@ -1,0 +1,5 @@
+name = "bad-example"
+
+[[call]]
+tool = "fs.read"
+# no path: the loader must refuse this file with a clear message

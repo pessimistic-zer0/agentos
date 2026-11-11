@@ -720,6 +720,51 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 **Concepts to learn.** Nix flakes; lock files; toolchains.
 
+### D-030 — The week-0 program is a separate throwaway crate
+- **Date:** 2026-11-11
+- **Status:** Taken
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** The week-0 practice program (read a TOML file, write rows to SQLite) lives in `experiments/m0-ramp/` as its own small Rust project. It is not part of the `agentos` program.
+
+**The problem.** The v1 CLI is fixed at four commands (`run`, `status`, `trace`, `recover`). A practice command inside it would add a fifth that nobody needs.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Own crate under `experiments/` | Taken | Same place as the other experiments; the real crate starts clean in M1 |
+| A subcommand of `agentos` | Discarded | Adds CLI surface the plan does not list |
+| Start the `agentos` crate now and grow it | Discarded | Mixes practice code into the real code's history |
+
+**What this means for the code.** The practice crate uses the same libraries the runtime will use (`serde`, `toml`, `rusqlite`, `clap`, `anyhow`, `thiserror`), so each is met once alone. It has its own `Cargo.toml` and is not a workspace member.
+
+**Evidence.** None; reasoning only.
+
+**Concepts to learn.** Crates and packages; `Cargo.toml`.
+
+### D-031 — Crate versions: the newest release of each crate in the stack table
+- **Date:** 2026-11-11
+- **Status:** Taken
+- **Area:** tooling
+- **ADR:** none
+
+**In plain words.** Each library from the v1 stack table is used at its newest version as of today: `rusqlite` 0.42 (with bundled SQLite), `toml` 1, `clap` 4, `serde` 1, `serde_json` 1, `anyhow` 1, `thiserror` 2, `sha2` 0.10, `nix` 0.31. `Cargo.lock` is committed, so a build next year uses the same versions.
+
+**The problem.** The stack table names crates but not versions. Old versions would need upgrading mid-project.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Newest release, locked by a committed `Cargo.lock` | Taken | Current documentation matches the code; the lock file makes builds repeatable |
+| Versions already in the local cargo cache | Discarded | Saves a few downloads, but some were old (`toml` 0.x) |
+
+**What this means for the code.** `Cargo.lock` is committed for the `agentos` crate and for each experiment. `toml` 1.x is used even though many examples online show 0.x; the reading API (`toml::from_str`) is the same.
+
+**Evidence.** `cargo search` on 2026-11-11 listed rusqlite 0.42.0, nix 0.31.3, landlock 0.4.7, ureq 3.5.1, criterion 0.8.2. The M0 program built and passed its tests with these.
+
+**Concepts to learn.** Semantic versioning; `Cargo.lock`.
+
 ---
 
 ## Still open

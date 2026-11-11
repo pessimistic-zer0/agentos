@@ -1,0 +1,14 @@
+# A list of pretend tool calls, in the shape the real agent will make them.
+name = "ramp-example"
+
+[[call]]
+tool = "fs.list"
+path = "."
+
+[[call]]
+tool = "fs.read"
+path = "src/calc.py"
+
+[[call]]
+tool = "exec"
+argv = ["pytest", "-q"]
