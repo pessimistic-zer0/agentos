@@ -1,0 +1,8 @@
+[package]
+name = "m2-openat2"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+nix = { version = "0.31", features = ["fs"] }
