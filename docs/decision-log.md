@@ -765,6 +765,29 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 **Concepts to learn.** Semantic versioning; `Cargo.lock`.
 
+### D-032 — A small glob matcher written in the code, not a crate
+- **Date:** 2026-11-11
+- **Status:** Taken
+- **Area:** policy
+- **ADR:** none
+
+**In plain words.** The policy says which paths are allowed with patterns such as `src/**` or `**/.env`. Matching a path against such a pattern is about 30 lines of code, so it is written in `policy.rs` instead of adding a library. Writing it also fixes the exact rules, which matter for security.
+
+**The problem.** The v1 stack table lists no glob library, and adding a dependency needs a reason. The matching rules must be exact: whether `secrets/**` also covers the folder `secrets` itself decides whether that folder is copied into the workspace.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Own matcher: `**` = zero or more whole folders, `*` and `?` inside one name, nothing else | Taken | No dependency; the rules fit in five lines and have unit tests |
+| `glob` crate (`Pattern`) | Discarded | Small and dependency-free, but its `**` rules and options are easy to get subtly wrong for this use |
+| `globset` crate | Discarded | Pulls in regex and aho-corasick; far more than needed |
+
+**What this means for the code.** Patterns are relative to the workspace root, with no leading `/` and no `.` or `..` parts; the policy loader refuses anything else. `secrets/**` matches `secrets`, `secrets/a` and `secrets/a/b`. `**/.env` matches `.env` at any depth. `*` never crosses a `/`. There are no `[abc]` classes.
+
+**Evidence.** `policy::tests::glob_basics` (15 cases) and `deny_wins_over_allow` pass.
+
+**Concepts to learn.** Glob patterns; recursion; why "small and exact" can beat "general" for security rules.
+
 ---
 
 ## Still open

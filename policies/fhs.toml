@@ -1,0 +1,32 @@
+# Default AgentOS policy for FHS distributions (preset `fhs`).
+# The only difference from nix.toml is [sandbox].ro_mounts.
+policy_version = 1
+name = "default-fhs"
+
+[filesystem]
+# Paths are relative to the workspace root. `**` matches any number of folders.
+read  = ["**"]
+write = ["src/**", "tests/**", "**/__pycache__/**"]
+# Denied paths are never copied into the workspace (D-008) and never opened.
+deny  = [".env", ".env.*", "**/.env", "**/.env.*", "secrets/**", ".git/**", "**/*.pem", "**/id_rsa*"]
+
+[exec]
+# argv prefixes. Arguments after the prefix are allowed and logged.
+allow = [
+  ["pytest"],
+  ["python3", "-m", "pytest"],
+]
+
+[sandbox]
+# Host folders the sandbox sees, read-only: the usual places for programs and
+# libraries on Ubuntu, Debian, Fedora and Arch. A folder that is a symlink on the
+# host (for example /bin -> usr/bin) is recreated as the same symlink.
+ro_mounts = ["/usr", "/bin", "/lib", "/lib64"]
+
+[limits]
+memory_mb      = 512
+pids           = 128
+cpu_percent    = 200
+call_timeout_s = 60
+max_output_kb  = 64
+max_tool_calls = 50
