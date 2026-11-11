@@ -104,10 +104,11 @@ At the end of each milestone, write `docs/milestones/M<n>-<name>.md` from `docs/
 
 ## Commands
 
-No code exists yet. Update this section when the first milestone lands.
+Run everything inside the dev shell (`flake.nix`): `nix develop -c <command>`, or `nix develop` once for an interactive shell.
 
+- M0 practice program: `cd experiments/m0-ramp && cargo test`.
 - Sandbox and cgroup tests must run under a delegated cgroup: `systemd-run --user --scope -p Delegate=yes cargo test`.
 
 ## Current status
 
-Week 0 (Rust ramp). Update this line at the end of each milestone.
+M0 (Rust ramp) done, tag `m0`. Next: M1 vertical slice. Update this line at the end of each milestone.
