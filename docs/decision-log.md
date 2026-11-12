@@ -1366,6 +1366,78 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 **Concepts to learn.** Test oracles; mutation testing (seeding a bug to check the test); percentiles.
 
+### D-058 — The demo LLM is a local llama.cpp server; no hosted API, no API key
+- **Date:** 2026-11-12
+- **Status:** Taken (answers the open question "which LLM for the demo")
+- **Area:** tooling
+- **ADR:** none
+
+**In plain words.** The real-model run uses a model file that was already on the development machine (Qwen3-VL-4B-Instruct, GGUF, 3.7 GB) served by a `llama-server` that was already in the Nix store, on the laptop's own graphics card. Nothing was downloaded and nothing left the machine. The agent code itself talks to any OpenAI-compatible address, so a hosted API works by setting three environment variables.
+
+**The problem.** The exit criterion needs a real LLM. An `NVIDIA_NIM_API_KEY` was present in the shell environment, but Prince had not given it for this project, and the download speed (about 30 KB/s) ruled out fetching a better model.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Local llama.cpp with the model already on disk | Taken | Free, private, repeatable; listed first in the v1 table |
+| The hosted NVIDIA NIM endpoint with the key found in the environment | Discarded | The key was not handed over for this; using someone's credential and sending requests on their account is their decision |
+| Download a stronger coding model | Discarded | Several GB at 30 KB/s is many hours |
+| Mark M4 blocked and stop | Not needed | The local model completed the task once the agent loop was hardened (D-060) |
+
+**What this means for the code.** `AGENTOS_LLM_BASE_URL` (default `http://127.0.0.1:8080/v1`), `AGENTOS_LLM_MODEL`, `AGENTOS_LLM_API_KEY` (optional). The key is sent as a header and is never written to the log, `llm.json` or anywhere else (a test greps for it). The model is small and is a vision model used for text; it is the weakest model the demo is likely to meet, which made the agent loop's weak points visible.
+
+**Evidence.** `llama-server -m Qwen3-VL-4B-Instruct-UD-Q6_K_XL.gguf --jinja -ngl 99 -c 8192` answered `/health` with `{"status":"ok"}`; `nvidia-smi` showed 5,059 MiB in use. Four consecutive runs of the demo task completed (5 calls each, final `pytest -q` exit 0).
+
+**Concepts to learn.** OpenAI-compatible chat API; GGUF and llama.cpp; quantization (Q6); why credentials are not borrowed.
+
+### D-059 — The LLM agent: native tool calls, one per reply, every message an event
+- **Date:** 2026-11-12
+- **Status:** Taken
+- **Area:** tooling
+- **ADR:** 0005
+
+**In plain words.** The model is offered four functions (`fs_list`, `fs_read`, `fs_write`, `exec`) through the API's tool-calling feature. Each reply may use one. The runtime turns it into a normal `ToolCall` and sends it through the gateway, then gives the result back as a `tool` message. A reply with no tool call ends the run. Every message, in order, is written to the event log before the call it leads to.
+
+**The problem.** The agent must (a) never act by itself, (b) be rebuildable after a crash from the log alone.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| API tool calls (`tools` + `tool_calls`), first call only | Taken | Structured arguments, no parsing of free text; one call per step keeps "one intent at a time" |
+| Ask the model to print JSON in its text and parse it | Discarded | Fragile; every model formats differently |
+| Run several tool calls from one reply | Discarded | The gateway handles one call at a time; parallel calls would need a scheduler (cut from v1) |
+| Let the agent write to the log itself | Discarded | The agent has no access to anything; it hands messages to the runtime (`take_messages`), which appends them |
+
+**What this means for the code.** `src/agent/llm.rs`. Function names use `_` because the API forbids `.`. A malformed call (unknown tool, missing argument) is answered with an error message to the model, up to three times. On restart, `restore` rebuilds the message list from `agent.message` events and looks at how it ends: an assistant call that reached the gateway waits for its result (recovery's verdict, if it was cut off); an assistant call that never reached the gateway is dropped and the model is asked again; a trailing tool result means the request to the model was cut off, and it is simply sent again (D-017). Results of completed calls are read back from the blob store. `ureq` 3 (blocking HTTP, listed in the stack table) with its `json` feature is the client.
+
+**Evidence.** `tests/llm_agent.rs` (mock endpoint): message roles in the log are `system, user, (assistant, tool) × 5, assistant`; the first assistant message precedes the first `tool.requested`; after a kill at P4 the first request after restart carries four tool results and ends with the result for `call_4`; the write is not repeated.
+
+**Concepts to learn.** Function calling; chat roles (system, user, assistant, tool); event sourcing.
+
+### D-060 — Guard rails in the agent loop for weak models
+- **Date:** 2026-11-12
+- **Status:** Taken
+- **Area:** tooling
+- **ADR:** none
+
+**In plain words.** Four small protections were added after the first three real-model runs failed. (1) A reply is capped at 4,096 tokens. (2) If the model makes the same read-only call again and again, the result says so from the second time, and the run stops at the fifth. (3) If a write leaves out four or more lines the model had read in that file, the result warns and names some of them. (4) A run that gives up is recorded as `stopped`, not `completed`, and the stored summary is capped at 600 characters.
+
+**The problem.** The 4B model fixed the bug but sent only the changed function to `fs_write`, deleting the other function; it then insisted the function was still there. In run 1 it listed two folders alternately until the 50-call budget was gone; in run 2 it repeated one paragraph of text until its context was full, and that text became the run's "summary"; in run 3 it re-ran pytest five times.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Generic guard rails in the loop (the four above) | Taken | None mentions the demo task; each addresses a failure seen in a real run and helps any model |
+| A patch/edit tool instead of whole-file writes | Discarded | A fifth tool; the tool list is fixed in v1. Added to the parking lot |
+| Hints specific to the demo ("keep `median`") | Discarded | That would be faking the result |
+| Only a stronger model | Discarded | Not available offline (D-058), and a loop that burns its budget on repeats is a defect with any model |
+
+**What this means for the code.** `LlmAgent::track_file_content`, `note_call`/`repeat_count`, `MAX_REPLY_TOKENS`, `Action::GiveUp`. The warning text is plain information added to the tool result; the model still decides what to do. The system prompt states the whole-file rule as a numbered rule.
+
+**Evidence.** Runs 1–3 failed as described (traces in `docs/results/llm-failed-runs-qwen3-vl-4b.md`). With the guard rails, run 4 and three repeats completed: partial write at call #3, warning, full write at #4, `pytest -q` exit 0 at #5. Unit tests `a_write_that_drops_lines_gets_a_warning`, `repeated_calls_are_counted_until_a_write`.
+
+**Concepts to learn.** Context window; `max_tokens`; why temperature 0 makes a stuck model stay stuck.
+
 ---
 
 ## Still open
@@ -1375,7 +1447,7 @@ Which nixpkgs commit to pin was a second, smaller choice:
 | Project name | See D-023 |
 | License | MIT or Apache-2.0; Apache-2.0 adds a patent grant |
 | Public repo from day one, or after v0.1? | Not discussed yet |
-| Which LLM for the demo: local llama.cpp server or a hosted API? | Either works with an OpenAI-compatible endpoint |
+| ~~Which LLM for the demo: local llama.cpp server or a hosted API?~~ | Answered by D-058: local llama.cpp |
 
 ---
 
@@ -1405,6 +1477,11 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-12 | The fault-injection harness passed 72 of 72 on its first run. Two bugs were then seeded into recovery to see whether it could fail: it reported 31 duplicated effects and 21 violations respectively, and 0 again with the real code | A test that has never failed has not been tested; break the code on purpose once |
 | 2026-11-12 | Full run: 4,800 kills across P1–P8 and four tools, 0 invariant violations, 0 duplicated effects, 3,866/3,866 verdicts correct, recovery p50 19.1 ms / p99 49.8 ms (D-057, `docs/results/recovery-200-nix.md`) | The intent-before-effect design holds under process kill on this machine. It says nothing about power loss |
 | 2026-11-12 | With a kill timer of up to 8 ms, most P5 kills landed after the checkpoint copy (about 3 ms) had finished | Measure how long the window is before choosing the random delay |
+| 2026-11-12 | Real-model run 1 (Qwen3-VL 4B): the model wrote only the changed function to `fs_write`, deleting `median`; pytest then failed on import; the model listed `src` and `tests` alternately until the 50-call budget ran out | Small models misuse whole-file writes; a loop needs to notice repetition |
+| 2026-11-12 | Run 2: after the same partial write, the model repeated one paragraph until its context was full; the run ended "completed" with that text as its summary | Cap reply length; "the agent stopped" is not "the task is done"; cap what is stored as a summary |
+| 2026-11-12 | Run 3 (sharper prompt): same partial write; the model then tried to create a root `__init__.py` (denied: no matching write rule) and re-ran pytest five times | Prompt wording alone did not fix it. The policy held against a confused model exactly as against a hostile one |
+| 2026-11-12 | Run 4 (with a warning when a write drops previously read lines): the model made the partial write, read the warning, rewrote the whole file, tests passed. Repeated 3 more times with the same result; also completed after being killed at P4 and resumed | Tell the model what its action did to the world, in the tool result, instead of telling it harder what to do |
+| 2026-11-12 | A `llama-server` built with CUDA and a 3.7 GB model were already on the machine from another project; an API key for a hosted service was also in the environment and was not used (D-058) | Look at what is already there before downloading or borrowing |
 
 ---
 
@@ -1426,8 +1503,11 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | Advisory lock (`flock`) | A lock on a file that cooperating programs check; the kernel releases it when the holder dies |
 | Blob | A stored chunk of bytes (file content, tool output), named by its hash |
 | Execution | One run of one agent on one copy of a repo, with its own log and workspace |
+| Context window | How much text a language model can take in at once; when it is full, generation stops |
 | Event log | The ordered, add-only record of everything that happened |
 | `fsync` | Asking the kernel to really write a file to disk before continuing |
+| Function calling (tool calls) | An API feature where the model answers with a function name and arguments instead of text |
+| GGUF | The file format llama.cpp uses for model weights |
 | Glob | A path pattern: `*` matches part of a name, `**` any number of folders |
 | Hash | A short fingerprint of some data; the same data always gives the same hash |
 | Init (PID 1) | The first process in a PID namespace; it must collect dead children, and when it exits the kernel kills the rest |

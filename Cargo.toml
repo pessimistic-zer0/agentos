@@ -18,3 +18,4 @@ sha2 = "0.10"
 nix = { version = "0.31", features = ["fs", "dir", "mount", "sched", "process", "signal", "user"] }
 landlock = "0.4"
 libc = "0.2"
+ureq = { version = "3", features = ["json"] }

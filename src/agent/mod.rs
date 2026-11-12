@@ -4,6 +4,7 @@
 //! tool call to the gateway and hands the result back. It has no access to
 //! the workspace, the log or the host.
 
+pub mod llm;
 pub mod scripted;
 
 use anyhow::Result;
@@ -16,6 +17,8 @@ use crate::workspace::ExecDir;
 pub enum Action {
     Call(ToolCall),
     Finish { summary: String },
+    /// The agent cannot go on (for example, the model keeps repeating itself).
+    GiveUp { reason: String },
 }
 
 pub trait Agent {
@@ -26,6 +29,12 @@ pub trait Agent {
     fn kind(&self) -> &'static str;
     /// The task, in words, for the log and the trace.
     fn task(&self) -> String;
+    /// Conversation messages produced since the last call of this method.
+    /// The runtime stores each one in the event log as `agent.message`
+    /// (ADR 0005). The scripted agent has no conversation.
+    fn take_messages(&mut self) -> Vec<serde_json::Value> {
+        Vec::new()
+    }
     /// Save into the execution folder whatever is needed to build this agent
     /// again after a crash.
     fn persist(&self, dir: &ExecDir) -> Result<()>;

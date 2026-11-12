@@ -7,6 +7,7 @@
 //! ├── log.db         event log (SQLite)
 //! ├── policy.toml    the policy text this execution runs under
 //! ├── script.toml    the scripted agent's steps (to resume after a crash)
+//! ├── llm.json       the LLM agent's endpoint, model and task (no API key)
 //! ├── lock           held (flock) while a runtime works on this execution
 //! ├── work/          the workspace: the only folder the sandbox sees, as /work
 //! ├── checkpoints/   cp-0000, cp-0001, ...: full copies of work/
@@ -44,6 +45,10 @@ impl ExecDir {
     /// The scripted agent's script, kept so a resumed run can reload it.
     pub fn script(&self) -> PathBuf {
         self.root.join("script.toml")
+    }
+    /// The LLM agent's endpoint, model and task (never the API key).
+    pub fn llm_config(&self) -> PathBuf {
+        self.root.join("llm.json")
     }
     pub fn lock(&self) -> PathBuf {
         self.root.join("lock")

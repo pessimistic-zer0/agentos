@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 
+use agentos::agent::llm::{LlmAgent, LlmConfig};
 use agentos::agent::scripted::{Script, ScriptedAgent};
 use agentos::runtime::{self, RunOptions};
 use agentos::trace;
@@ -37,8 +38,12 @@ enum Cmd {
         /// For --agent scripted: the TOML script of tool calls
         #[arg(long)]
         script: Option<PathBuf>,
+        /// For --agent llm: the task, in words. The endpoint comes from
+        /// AGENTOS_LLM_BASE_URL, AGENTOS_LLM_MODEL and AGENTOS_LLM_API_KEY
+        #[arg(long)]
+        task: Option<String>,
         /// Continue this interrupted execution: recover it, then go on
-        #[arg(long, value_name = "ID", conflicts_with_all = ["repo", "policy", "script"])]
+        #[arg(long, value_name = "ID", conflicts_with_all = ["repo", "policy", "script", "task"])]
         resume: Option<String>,
         /// Print only the execution id
         #[arg(long, short)]
@@ -67,6 +72,7 @@ enum Cmd {
 #[derive(Clone, Copy, clap::ValueEnum)]
 enum AgentKind {
     Scripted,
+    Llm,
 }
 
 fn main() -> Result<()> {
@@ -86,13 +92,20 @@ fn main() -> Result<()> {
                     let script = Script::load(&ExecDir::new(&state_dir, &id).script())?;
                     runtime::resume(&state_dir, &id, &mut ScriptedAgent::new(script), !quiet)?
                 }
+                "llm" => {
+                    let text = std::fs::read_to_string(ExecDir::new(&state_dir, &id).llm_config())?;
+                    let mut cfg: LlmConfig = serde_json::from_str(&text)?;
+                    // The key is never saved; take it from the environment again.
+                    cfg.api_key = LlmConfig::from_env(String::new()).api_key;
+                    runtime::resume(&state_dir, &id, &mut LlmAgent::new(cfg), !quiet)?
+                }
                 other => bail!("execution {id} was started with agent `{other}`, which this build cannot resume"),
             };
             if quiet {
                 println!("{}", summary.id);
             }
         }
-        Cmd::Run { repo, policy, agent, script, quiet, resume: None } => {
+        Cmd::Run { repo, policy, agent, script, task, quiet, resume: None } => {
             let (Some(repo), Some(policy)) = (repo, policy) else { bail!("--repo and --policy are required") };
             let opts = RunOptions { state_dir, repo, policy, verbose: !quiet };
             let summary = match agent {
@@ -100,6 +113,10 @@ fn main() -> Result<()> {
                     let Some(script) = script else { bail!("--agent scripted needs --script <file>") };
                     let mut a = ScriptedAgent::new(Script::load(&script)?);
                     runtime::start(&opts, &mut a)?
+                }
+                AgentKind::Llm => {
+                    let Some(task) = task else { bail!("--agent llm needs --task \"...\"") };
+                    runtime::start(&opts, &mut LlmAgent::new(LlmConfig::from_env(task)))?
                 }
             };
             if quiet {

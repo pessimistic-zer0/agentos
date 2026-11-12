@@ -170,7 +170,7 @@ pub fn resume(state_dir: &Path, id: &str, agent: &mut dyn Agent, verbose: bool) 
     let calls = crate::log::calls(&events)?;
     let next_call_id = calls.iter().map(|c| c.call_id).max().unwrap_or(0) + 1;
     let last_cp = crate::log::named_checkpoints(&events).pop().context("no checkpoint in the log")?;
-    let history = crate::recovery::history(&events)?;
+    let history = crate::recovery::history(&events, &crate::blob::BlobStore::new(&dir.blobs()))?;
     agent.restore(&history, &events)?;
     let mut gw = Gateway::new(dir.clone(), log, policy, programs, sandbox, next_call_id, last_cp);
     if verbose {
@@ -185,8 +185,15 @@ pub fn drive(gw: &mut Gateway, agent: &mut dyn Agent, mut last: Option<ToolResul
     let max_calls = gw.policy.limits.max_tool_calls;
     let mut calls = calls_so_far;
     let (status, summary) = loop {
-        match agent.next_action(last.as_ref())? {
+        let action = agent.next_action(last.as_ref());
+        // Store the conversation before acting on it, so the log always
+        // holds the message that led to a call (ADR 0005).
+        for message in agent.take_messages() {
+            gw.log.append(EventBody::AgentMessage { message })?;
+        }
+        match action? {
             Action::Finish { summary } => break ("completed".to_string(), summary),
+            Action::GiveUp { reason } => break ("stopped".to_string(), reason),
             Action::Call(call) => {
                 if calls >= max_calls {
                     break ("stopped".to_string(), format!("tool call budget of {max_calls} used up"));
@@ -215,7 +222,7 @@ fn finish(gw: &mut Gateway, status: &str, summary: &str, verbose: bool) -> Resul
     })?;
     if verbose {
         let what = if changed { "patch" } else { "no changes; empty patch" };
-        println!("{}  {}  {summary}\n  {what}: {}", gw.dir.id, status.to_uppercase(), gw.dir.patch().display());
+        println!("{}  {}  {}\n  {what}: {}", gw.dir.id, status.to_uppercase(), truncate(summary, 200), gw.dir.patch().display());
     }
     Ok(())
 }

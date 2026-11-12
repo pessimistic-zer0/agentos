@@ -228,13 +228,17 @@ fn kill_leftover_cgroup(path: &Path) -> Result<()> {
 }
 
 /// The results the agent has seen so far, one per call, for rebuilding the
-/// agent's position after a restart (ADR 0005).
-pub fn history(events: &[Event]) -> Result<Vec<crate::tools::ToolResult>> {
+/// agent after a restart (ADR 0005). Outputs of completed calls are read
+/// back from the blob store; a reconciled call has none.
+pub fn history(events: &[Event], blobs: &crate::blob::BlobStore) -> Result<Vec<crate::tools::ToolResult>> {
     let mut out = Vec::new();
     for c in log::calls(events)? {
-        if let Some(outcome) = c.outcome() {
-            out.push(crate::tools::ToolResult { call_id: c.call_id, outcome, output: None });
-        }
+        let Some(outcome) = c.outcome() else { continue };
+        let output = match &c.state {
+            CallState::Completed { output, .. } => blobs.get(output).ok().and_then(|b| serde_json::from_slice(&b).ok()),
+            _ => None,
+        };
+        out.push(crate::tools::ToolResult { call_id: c.call_id, outcome, output });
     }
     Ok(out)
 }

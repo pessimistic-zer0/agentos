@@ -1071,6 +1071,7 @@ Uncommitted. Some are research projects on their own.
 - **Kubernetes operator** for running AgentOS workers (only if Phase 5 happens).
 - **Signed execution records:** attestations that a patch was produced under a given policy.
 - **Multi-model comparison harness** built on comparative replay.
+- **A patch/edit tool** (`fs.patch`: replace a range or apply a diff) so small models do not have to resend whole files. Came up in v1 M4 (D-060); not in v1 because the tool list is fixed at four.
 
 ---
 
