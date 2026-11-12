@@ -5,7 +5,10 @@
 SCOPE := systemd-run --user --scope -p Delegate=yes -q
 RUNS  ?= 200
 
-.PHONY: test lint eval eval-recovery eval-security bench
+.PHONY: demo test lint eval eval-recovery eval-security bench
+
+demo:            ## fix the demo repo in the sandbox, then crash, recover and resume
+	./demo.sh
 
 test:            ## everything, with 3 kills per recovery cell (about 30 s)
 	$(SCOPE) cargo test

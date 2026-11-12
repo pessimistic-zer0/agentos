@@ -1,6 +1,6 @@
 [package]
 name = "agentos"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2021"
 rust-version = "1.89"
 description = "Runs a coding agent's tool calls under a policy, with a durable event log"

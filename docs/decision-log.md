@@ -1362,7 +1362,7 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 **What this means for the code.** `tests/recovery/main.rs`. Cells: P1, P2, P3, P7 × four tools; P4, P5, P6, P8 × two mutating tools; 24 cells. For P8 the run is first killed at a random point P2–P6, then recovery is killed at a random one of its five P8 points, then recovery runs again. Default is 3 runs per cell so `cargo test` is quick; `make eval-recovery` uses 200. The report is printed and written to `target/recovery-report.json`. The test also fails if fewer than half the runs were actually killed.
 
-**Evidence.** `AGENTOS_RECOVERY_RUNS=200 systemd-run --user --scope -p Delegate=yes cargo test --test recovery -- --nocapture` (what `make eval-recovery` runs) on 2026-11-12, `nix` preset, debug build, 8 workers: 4,800 runs, 4,788 killed, 0 invariant violations, 0 duplicated effects, 3,866 of 3,866 cut-off calls classified correctly; `agentos recover` wall time p50 19.1 ms, p99 49.8 ms; 492 s. Full table: `docs/results/recovery-200-nix.md`. Mutation check with 4 runs per cell: seeding "no rollback for exec" gave 31 duplicated effects in 96 runs; seeding "keep orphan checkpoints" gave 21 violations in 96 runs; the restored code gave 0.
+**Evidence.** `AGENTOS_RECOVERY_RUNS=200 systemd-run --user --scope -p Delegate=yes cargo test --test recovery -- --nocapture` (what `make eval-recovery` runs) on 2026-11-12, `nix` preset, debug build, 8 workers: 4,800 runs, 4,788 killed, 0 invariant violations, 0 duplicated effects, 3,866 of 3,866 cut-off calls classified correctly; `agentos recover` wall time p50 19.1 ms, p99 49.8 ms; 492 s. Full table: `docs/results/recovery-200-nix-m3.md`. Mutation check with 4 runs per cell: seeding "no rollback for exec" gave 31 duplicated effects in 96 runs; seeding "keep orphan checkpoints" gave 21 violations in 96 runs; the restored code gave 0.
 
 **Concepts to learn.** Test oracles; mutation testing (seeding a bug to check the test); percentiles.
 
@@ -1555,6 +1555,52 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 **Concepts to learn.** Continuous integration; GitHub Actions; lingering user sessions in systemd.
 
+### D-066 — `make demo`: one script that shows the fix, the crash and the recovery
+- **Date:** 2026-11-12
+- **Status:** Taken
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** `./demo.sh` (or `make demo`) builds the program, shows the failing test, lets the scripted agent fix it in the sandbox, prints the patch, then runs the task again with a deliberate kill after the file write, and shows `recover` and `run --resume`. It puts itself under a delegated cgroup and picks the policy preset for the system it runs on.
+
+**The problem.** The M6 exit criterion is that a stranger can clone and run the demo in under ten minutes. Five commands with a `systemd-run` prefix and a policy path are five chances to get it wrong.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| One shell script, also reachable as `make demo` | Taken | One command after cloning; the script is short enough to read first |
+| A list of commands in the README | Discarded | Easy to mistype; the delegated-cgroup prefix is the usual stumbling block |
+| A new `agentos demo` subcommand | Discarded | CLI surface is fixed at four commands |
+
+**What this means for the code.** `demo.sh`: re-runs itself under `systemd-run --user --scope -p Delegate=yes` when needed; preset is `nix` if `/nix/store` exists and `/usr/bin/python3` does not, else `fhs` (override with `AGENTOS_TEST_PRESET`). The preset choice lives in the script, not in `src/`, which must not know about distros.
+
+**Evidence.** `docs/demo-transcript.md` is the script's unedited output on the development machine.
+
+**Concepts to learn.** Shell `exec`; why a demo should be one command.
+
+### D-067 — Execution ids carry milliseconds
+- **Date:** 2026-11-12
+- **Status:** Taken (replaces the id format in D-036)
+- **Area:** durability
+- **ADR:** none
+
+**In plain words.** An execution id was `YYYYMMDD-HHMMSS-xxxxxx`: the time to the second, then six random-looking characters. Two runs started in the same second were therefore ordered by those characters, that is, at random. The id is now `YYYYMMDD-HHMMSSmmm-xxxxxx`, with milliseconds.
+
+**The problem.** Bug B-006: `agentos trace` and `status` with no id, and the first version of the demo script, take "the latest execution" to be the last id in sorted order. The demo starts two runs back to back; in its first full run the "latest" was the wrong one, and the recover and resume steps were applied to the run that had already finished.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Milliseconds in the id | Taken | Smallest change; ids still sort as text; two runs in the same millisecond are not something a person or the demo produces |
+| A counter file in the state folder | Discarded | Needs a lock shared by all runs |
+| Find the latest by the first event's timestamp | Discarded | Opens every log just to list executions |
+
+**What this means for the code.** `workspace::new_execution_id`; its unit test now checks that two ids made 3 ms apart sort in order. The demo script no longer depends on ordering at all. D-036's main decision (one folder per execution) is unchanged. Old executions with the short id format still open; they sort before new ones made on the same day.
+
+**Evidence.** Before: demo steps 5–7 printed "already finished; nothing to recover" for the wrong id. After: `RECOVERED … #6 fs.write APPLIED`, then `RESUMING after 6 calls` (`docs/demo-transcript.md`).
+
+**Concepts to learn.** Why "sorts by time" needs enough time resolution; lexicographic order.
+
 ---
 
 ## Still open
@@ -1592,7 +1638,7 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-11 | `experiments/m3-rename-kill`: writing a file in place left it half-written in 149 of 200 kills; temp file + rename in 0 of 200, but left the temp file behind 164 times | Atomic rename works; recovery must delete the leftover temp file, so the intent records its name |
 | 2026-11-11 | `experiments/m3-sqlite-kill`: 200 kills during 3-row transactions, 0 corrupt databases, 0 gaps, 0 half transactions, 0 lost acknowledged commits. This is the evidence D-005 said was still to come | One event per transaction gives a gap-free, untorn log under process kill |
 | 2026-11-12 | The fault-injection harness passed 72 of 72 on its first run. Two bugs were then seeded into recovery to see whether it could fail: it reported 31 duplicated effects and 21 violations respectively, and 0 again with the real code | A test that has never failed has not been tested; break the code on purpose once |
-| 2026-11-12 | Full run: 4,800 kills across P1–P8 and four tools, 0 invariant violations, 0 duplicated effects, 3,866/3,866 verdicts correct, recovery p50 19.1 ms / p99 49.8 ms (D-057, `docs/results/recovery-200-nix.md`) | The intent-before-effect design holds under process kill on this machine. It says nothing about power loss |
+| 2026-11-12 | Full run: 4,800 kills across P1–P8 and four tools, 0 invariant violations, 0 duplicated effects, 3,866/3,866 verdicts correct, recovery p50 19.1 ms / p99 49.8 ms (D-057, `docs/results/recovery-200-nix-m3.md`) | The intent-before-effect design holds under process kill on this machine. It says nothing about power loss |
 | 2026-11-12 | With a kill timer of up to 8 ms, most P5 kills landed after the checkpoint copy (about 3 ms) had finished | Measure how long the window is before choosing the random delay |
 | 2026-11-12 | Real-model run 1 (Qwen3-VL 4B): the model wrote only the changed function to `fs_write`, deleting `median`; pytest then failed on import; the model listed `src` and `tests` alternately until the 50-call budget ran out | Small models misuse whole-file writes; a loop needs to notice repetition |
 | 2026-11-12 | Run 2: after the same partial write, the model repeated one paragraph until its context was full; the run ended "completed" with that text as its summary | Cap reply length; "the agent stopped" is not "the task is done"; cap what is stored as a summary |
@@ -1605,6 +1651,7 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-12 | A security test's "canary" string was found in the log: it was in the attack command's own argv, which is logged on purpose | Build canaries at run time inside the attack, or the test finds its own text |
 | 2026-11-12 | The benchmark's direct baseline failed: on NixOS `true` is a symlink to a multi-call `coreutils` binary that looks at `argv[0]` | Resolving a program to its real path must keep the original name as `argv[0]` (the gateway already did; the baseline did not) |
 | 2026-11-12 | Benchmarks (release build, i5-13420H, btrfs, commit `357c313`; `docs/results/bench-nix/`): sandboxed `true` p50 7.8 ms / p95 19.6 / p99 24.6 against 1.3 / 2.2 / 2.8 direct; `fs.write` 4 KB p50 13.7 ms / p95 20.4 / p99 23.8 against 1.9 / 2.5 / 2.8 for a durable direct write; demo task p50 507 ms / p95 620 / p99 663 against 376 / 432 / 521 direct (+35%) | The sandbox costs about 6 ms per command; a write costs about seven durable writes (three fsynced log records, a blob, the file, a checkpoint copy). Both are small next to an LLM call or a test run |
+| 2026-11-12 | First full run of the demo script: the recover and resume steps acted on the wrong execution. Two runs started in the same second, and ids had one-second resolution, so "latest" was picked by the random suffix (B-006, D-067) | Run the thing a stranger will run, end to end, before calling it done; an ordering claim ("ids sort by time") needs a test with two close ids |
 
 ---
 

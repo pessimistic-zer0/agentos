@@ -86,16 +86,18 @@ pub fn list_executions(state_dir: &Path) -> Result<Vec<String>> {
     Ok(ids)
 }
 
-/// A new execution id: `YYYYMMDD-HHMMSS-xxxxxx`. Sorts by creation time; the
-/// suffix (from the clock's nanoseconds and the process id) keeps two runs
-/// started in the same second apart.
+/// A new execution id: `YYYYMMDD-HHMMSSmmm-xxxxxx` (UTC, to the millisecond).
+/// Ids sort by creation time, which `agentos trace` and `status` rely on to
+/// find the latest execution. The suffix (from the clock's nanoseconds and
+/// the process id) keeps apart two runs started in the same millisecond;
+/// only those two could sort in the wrong order.
 pub fn new_execution_id() -> String {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
     let ts = crate::log::now_rfc3339(); // 2026-11-11T19:02:03.456Z
-    let compact: String = ts[..19].chars().filter(|c| c.is_ascii_digit()).collect(); // 20261111190203
+    let digits: String = ts.chars().filter(|c| c.is_ascii_digit()).collect(); // 20261111190203456
     let seed = format!("{}-{}", now.as_nanos(), std::process::id());
     let hash = crate::blob::content_hash(seed.as_bytes());
-    format!("{}-{}-{}", &compact[..8], &compact[8..14], &hash[7..13])
+    format!("{}-{}-{}", &digits[..8], &digits[8..17], &hash[7..13])
 }
 
 #[derive(Debug, Default)]
@@ -207,7 +209,11 @@ mod tests {
     #[test]
     fn execution_ids_sort_by_time() {
         let a = new_execution_id();
-        assert_eq!(a.len(), "20261111-190203-abcdef".len());
-        assert!(a.as_bytes()[8] == b'-' && a.as_bytes()[15] == b'-');
+        assert_eq!(a.len(), "20261111-190203456-abcdef".len());
+        assert!(a.as_bytes()[8] == b'-' && a.as_bytes()[18] == b'-');
+        // Two ids made a few milliseconds apart sort in the order they were made.
+        std::thread::sleep(std::time::Duration::from_millis(3));
+        let b = new_execution_id();
+        assert!(a < b, "{a} should sort before {b}");
     }
 }
