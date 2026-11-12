@@ -31,6 +31,78 @@ pub fn create(work: &Path, checkpoints: &Path, name: &str) -> Result<PathBuf> {
     Ok(final_path)
 }
 
+/// Number in a checkpoint name (`cp-0007` -> 7).
+pub fn number(name: &str) -> Option<u64> {
+    name.strip_prefix("cp-")?.parse().ok()
+}
+
+/// Folder used while restoring; a sibling of `work/`.
+fn restore_tmp(work: &Path) -> PathBuf {
+    work.with_file_name("work.restore-tmp")
+}
+
+/// Make `work` equal to checkpoint `cp` (roll back).
+///
+/// The checkpoint is copied to a temporary folder next to `work`, then the
+/// two folders are swapped with one `renameat2(RENAME_EXCHANGE)` call, which
+/// the kernel does atomically. A crash before the swap leaves `work`
+/// untouched; a crash after it leaves `work` fully restored. Either way,
+/// running the restore again gives the same result, which is what makes
+/// recovery safe to interrupt (crash point P8).
+pub fn restore(work: &Path, cp: &Path) -> Result<()> {
+    let tmp = restore_tmp(work);
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp)?; // left over from an interrupted restore
+    }
+    run_cp(cp, &tmp)?;
+    crate::faults::point("P8", None);
+    nix::fcntl::renameat2(
+        nix::fcntl::AT_FDCWD,
+        &tmp,
+        nix::fcntl::AT_FDCWD,
+        work,
+        nix::fcntl::RenameFlags::RENAME_EXCHANGE,
+    )
+    .with_context(|| format!("swapping {} into place", tmp.display()))?;
+    crate::faults::point("P8", None);
+    // `tmp` now holds the old workspace contents.
+    std::fs::remove_dir_all(&tmp)?;
+    Ok(())
+}
+
+/// Remove half-made things a crash can leave: `.tmp-*` checkpoint copies and
+/// the restore folder. Returns nothing; missing things are fine.
+pub fn remove_leftovers(work: &Path, checkpoints: &Path) -> Result<()> {
+    let tmp = restore_tmp(work);
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp)?;
+    }
+    if checkpoints.exists() {
+        for e in std::fs::read_dir(checkpoints)? {
+            let e = e?;
+            if e.file_name().to_string_lossy().starts_with(".tmp-") {
+                std::fs::remove_dir_all(e.path())?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Names of the checkpoint folders on disk, sorted.
+pub fn on_disk(checkpoints: &Path) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    if checkpoints.exists() {
+        for e in std::fs::read_dir(checkpoints)? {
+            let name = e?.file_name().to_string_lossy().into_owned();
+            if number(&name).is_some() {
+                out.push(name);
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
 /// `cp -a --reflink=auto SRC DST`, where DST does not exist yet.
 pub fn run_cp(src: &Path, dst: &Path) -> Result<()> {
     let out = Command::new("cp")

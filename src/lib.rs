@@ -7,9 +7,11 @@
 pub mod agent;
 pub mod blob;
 pub mod checkpoint;
+pub mod faults;
 pub mod gateway;
 pub mod log;
 pub mod policy;
+pub mod recovery;
 pub mod runtime;
 pub mod sandbox;
 pub mod tools;

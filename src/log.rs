@@ -75,6 +75,24 @@ pub enum EventBody {
     /// Code run by `exec` changed paths outside the write globs; they were put back.
     #[serde(rename = "policy.violation")]
     PolicyViolation { call_id: u64, reverted: Vec<String> },
+    /// Recovery began after a crash. `pending` lists the calls that had no
+    /// ending. May appear more than once if recovery itself was interrupted.
+    #[serde(rename = "recovery.started")]
+    RecoveryStarted { pending: Vec<u64>, orphan_checkpoints: Vec<String> },
+    /// Recovery's verdict on one call that had no ending (D-016).
+    #[serde(rename = "tool.reconciled")]
+    ToolReconciled {
+        call_id: u64,
+        /// Did the call's effect happen and stay?
+        applied: bool,
+        reason: String,
+        /// APPLIED: the checkpoint taken now for it.
+        checkpoint: Option<String>,
+        /// NOT APPLIED by rollback: the checkpoint the workspace was restored to.
+        restored: Option<String>,
+    },
+    #[serde(rename = "recovery.completed")]
+    RecoveryCompleted { reconciled: u64, duration_ms: u64 },
     #[serde(rename = "execution.finished")]
     ExecutionFinished { status: String, summary: String, patch: Option<String> },
 }
@@ -91,6 +109,9 @@ impl EventBody {
             EventBody::ToolCompleted { .. } => "tool.completed",
             EventBody::ToolFailed { .. } => "tool.failed",
             EventBody::PolicyViolation { .. } => "policy.violation",
+            EventBody::RecoveryStarted { .. } => "recovery.started",
+            EventBody::ToolReconciled { .. } => "tool.reconciled",
+            EventBody::RecoveryCompleted { .. } => "recovery.completed",
             EventBody::ExecutionFinished { .. } => "execution.finished",
         }
     }
@@ -102,6 +123,7 @@ impl EventBody {
             | EventBody::ToolIntent { call_id, .. }
             | EventBody::ToolCompleted { call_id, .. }
             | EventBody::ToolFailed { call_id, .. }
+            | EventBody::ToolReconciled { call_id, .. }
             | EventBody::PolicyViolation { call_id, .. } => Some(*call_id),
             _ => None,
         }
@@ -216,11 +238,16 @@ pub enum CallState {
     Completed { output: String, checkpoint: Option<String> },
     /// Terminal: the tool ran into an error; nothing was changed.
     Failed { error: String },
+    /// Terminal: the call was cut off by a crash and recovery settled it.
+    Reconciled { applied: bool, reason: String, checkpoint: Option<String> },
 }
 
 impl CallState {
     pub fn is_terminal(&self) -> bool {
-        matches!(self, CallState::Denied { .. } | CallState::Completed { .. } | CallState::Failed { .. })
+        matches!(
+            self,
+            CallState::Denied { .. } | CallState::Completed { .. } | CallState::Failed { .. } | CallState::Reconciled { .. }
+        )
     }
 }
 
@@ -240,6 +267,8 @@ impl CallRecord {
             CallState::Denied { rule } => Some(ToolOutcome::Denied { rule: rule.clone() }),
             CallState::Failed { error } => Some(ToolOutcome::Failed { error: error.clone() }),
             CallState::Completed { .. } => Some(ToolOutcome::Ok),
+            CallState::Reconciled { applied: true, .. } => Some(ToolOutcome::Ok),
+            CallState::Reconciled { applied: false, reason, .. } => Some(ToolOutcome::NotApplied { reason: reason.clone() }),
             _ => None,
         }
     }
@@ -273,10 +302,41 @@ pub fn calls(events: &[Event]) -> Result<Vec<CallRecord>> {
             (CallState::IntentLogged { .. }, EventBody::ToolFailed { error, .. }) => {
                 CallState::Failed { error: error.clone() }
             }
+            // A crash can cut a call off right after REQUESTED (no intent) or
+            // after its INTENT; recovery then writes the verdict.
+            (CallState::Requested | CallState::IntentLogged { .. }, EventBody::ToolReconciled { applied, reason, checkpoint, .. }) => {
+                CallState::Reconciled { applied: *applied, reason: reason.clone(), checkpoint: checkpoint.clone() }
+            }
             (state, body) => bail!("event {}: `{}` is not allowed after state {state:?}", ev.seq, body.type_name()),
         };
     }
     Ok(out)
+}
+
+/// Every checkpoint the log names, in order. "The last checkpoint" always
+/// means the last entry of this list (D-011); a checkpoint folder that is not
+/// in it does not count and is deleted by recovery.
+pub fn named_checkpoints(events: &[Event]) -> Vec<String> {
+    let mut out = Vec::new();
+    for ev in events {
+        match &ev.body {
+            EventBody::WorkspaceCreated { checkpoint, .. } => out.push(checkpoint.clone()),
+            EventBody::ToolCompleted { checkpoint: Some(c), .. } => out.push(c.clone()),
+            EventBody::ToolReconciled { checkpoint: Some(c), .. } => out.push(c.clone()),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Check invariant 5: sequence numbers are exactly 1, 2, 3, ... with no gap.
+pub fn check_gap_free(events: &[Event]) -> Result<()> {
+    for (i, ev) in events.iter().enumerate() {
+        if ev.seq != i as u64 + 1 {
+            bail!("event log has a gap: position {} holds seq {}", i + 1, ev.seq);
+        }
+    }
+    Ok(())
 }
 
 /// Current UTC time as `YYYY-MM-DDTHH:MM:SS.mmmZ`, without a date library.

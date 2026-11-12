@@ -10,7 +10,12 @@
 //!    recovery will need to check it later (design rule 3).
 //! 4. The tool runs (the effect). `exec` runs in the sandbox; afterwards,
 //!    changes outside the write globs are put back (D-009).
-//! 5. `tool.completed` (or `tool.failed`) is logged.
+//! 5. For a call that changes the workspace: a checkpoint is taken.
+//! 6. `tool.completed` is logged, naming that checkpoint (design rule 4), or
+//!    `tool.failed`.
+//!
+//! The `faults::point` calls mark the crash points P1..P7 of the
+//! fault-injection plan. They do nothing unless a test asks for a crash.
 
 use std::os::fd::OwnedFd;
 use std::path::PathBuf;
@@ -20,6 +25,7 @@ use serde_json::json;
 
 use crate::blob::BlobStore;
 use crate::checkpoint;
+use crate::faults;
 use crate::log::{EventBody, EventLog};
 use crate::policy::{Access, Decision, Policy};
 use crate::sandbox::{self, cgroup::CgroupRoot, beneath, SandboxSpec};
@@ -44,8 +50,8 @@ pub struct Gateway {
     sandbox: SandboxCtx,
     lang: String,
     next_call_id: u64,
-    /// The checkpoint the workspace was last equal to (outside the write
-    /// globs); `exec` changes are compared against it.
+    /// The last checkpoint named in the log. The workspace equals it between
+    /// calls; `exec` changes are compared against it.
     pub last_checkpoint: String,
 }
 
@@ -119,17 +125,36 @@ impl Gateway {
             Ok(plan) => plan,
             Err(e) => return self.fail_before_effect(call_id, &decision, e),
         };
+        let mutating = call.is_mutating();
+        faults::point("P1", Some(call_id)); // before the intent is written
         self.log.append(EventBody::ToolIntent { call_id, rule: decision.rule.clone(), plan })?;
+        faults::point("P2", Some(call_id)); // intent is on disk, effect not started
+        faults::arm("P3", Some(call_id)); // kill at a random moment during the effect
 
         match self.effect(call_id, approved)? {
             Ok(output) => {
+                // Rule 4: effect -> checkpoint -> COMPLETED naming the checkpoint.
+                let checkpoint = if mutating {
+                    faults::point("P4", Some(call_id)); // effect done, no checkpoint yet
+                    let name = checkpoint::name(checkpoint::number(&self.last_checkpoint).unwrap_or(0) + 1);
+                    faults::arm("P5", Some(call_id)); // kill during the copy
+                    checkpoint::create(&self.dir.work(), &self.dir.checkpoints(), &name)?;
+                    faults::point("P6", Some(call_id)); // checkpoint exists, log does not name it
+                    Some(name)
+                } else {
+                    None
+                };
                 let blob = self.blobs.put(&serde_json::to_vec(&output)?)?;
                 self.log.append(EventBody::ToolCompleted {
                     call_id,
                     summary: output.summary(),
                     output: blob,
-                    checkpoint: None,
+                    checkpoint: checkpoint.clone(),
                 })?;
+                if let Some(name) = checkpoint {
+                    self.last_checkpoint = name;
+                }
+                faults::point("P7", Some(call_id)); // completed, agent has not seen the result
                 Ok(ToolResult { call_id, outcome: ToolOutcome::Ok, output: Some(output) })
             }
             Err(e) => {
@@ -240,7 +265,9 @@ impl Gateway {
                 json!({
                     "argv": argv,
                     "program": program,
-                    "cgroup": sandbox::cgroup_name(&self.dir.id, call_id),
+                    // Full path, so recovery can kill a group left by a crashed
+                    // runtime that lived in a different systemd scope.
+                    "cgroup": self.sandbox.cgroups.path_of(&sandbox::cgroup_name(&self.dir.id, call_id)),
                 })
             }
         })

@@ -101,15 +101,89 @@ pub fn start(opts: &RunOptions, agent: &mut dyn Agent) -> Result<RunSummary> {
         println!("  workspace: {} files copied, left out by deny rules: {}", report.files_copied, report.denied.join(", "));
     }
 
+    // Whatever the agent needs to be rebuilt after a crash (the script).
+    agent.persist(&dir)?;
     let mut gw = Gateway::new(dir.clone(), log, policy, programs, sandbox, 1, base);
-    drive(&mut gw, agent, None, opts.verbose)
+    drive(&mut gw, agent, None, 0, opts.verbose)
 }
 
-/// The agent loop. `last` is the result to hand the agent first (used when
-/// resuming).
-pub fn drive(gw: &mut Gateway, agent: &mut dyn Agent, mut last: Option<ToolResult>, verbose: bool) -> Result<RunSummary> {
+/// Run recovery on an interrupted execution and print what it decided.
+pub fn recover(state_dir: &Path, id: &str, verbose: bool) -> Result<crate::recovery::RecoveryReport> {
+    let dir = ExecDir::new(state_dir, id);
+    let mut log = EventLog::open(&dir.log())?;
+    let _lock = lock_execution(&dir)?;
+    let report = crate::recovery::recover(&dir, &mut log)?;
+    if verbose {
+        print_recovery(id, &report);
+    }
+    Ok(report)
+}
+
+fn print_recovery(id: &str, report: &crate::recovery::RecoveryReport) {
+    if report.finished {
+        println!("{id}  already finished; nothing to recover");
+    } else if report.clean {
+        println!("{id}  no call was cut off; nothing to recover");
+    } else {
+        println!("{id}  RECOVERED");
+        for cp in &report.orphan_checkpoints {
+            println!("  removed checkpoint {cp}: the log does not name it");
+        }
+        for v in &report.verdicts {
+            let verdict = if v.applied { "APPLIED" } else { "NOT APPLIED" };
+            println!("  #{:<3} {:<8} {verdict}: {}", v.call_id, v.tool, v.reason);
+        }
+    }
+}
+
+/// The agent kind recorded when the execution was created.
+pub fn agent_kind(state_dir: &Path, id: &str) -> Result<String> {
+    let dir = ExecDir::new(state_dir, id);
+    for ev in EventLog::open(&dir.log())?.events()? {
+        if let EventBody::ExecutionCreated { agent, .. } = ev.body {
+            return Ok(agent);
+        }
+    }
+    bail!("execution {id} has no execution.created event")
+}
+
+/// Continue an interrupted execution: recover first (design rule 5), rebuild
+/// the agent's position from the log, then carry on with the agent loop.
+pub fn resume(state_dir: &Path, id: &str, agent: &mut dyn Agent, verbose: bool) -> Result<RunSummary> {
+    let dir = ExecDir::new(state_dir, id);
+    let mut log = EventLog::open(&dir.log())?;
+    let _lock = lock_execution(&dir)?;
+    let report = crate::recovery::recover(&dir, &mut log)?;
+    if verbose {
+        print_recovery(id, &report);
+    }
+    let events = log.events()?;
+    if report.finished {
+        let calls = crate::log::calls(&events)?.len() as u64;
+        return Ok(RunSummary { id: id.into(), status: "completed".into(), calls, patch: dir.patch() });
+    }
+    // The policy this execution started with, not whatever the file says now.
+    let (policy, _) = Policy::load(&dir.policy())?;
+    let host_path = std::env::var("PATH").unwrap_or_default();
+    let programs = Programs::resolve(&policy, &host_path)?;
+    let sandbox = prepare_sandbox()?;
+    let calls = crate::log::calls(&events)?;
+    let next_call_id = calls.iter().map(|c| c.call_id).max().unwrap_or(0) + 1;
+    let last_cp = crate::log::named_checkpoints(&events).pop().context("no checkpoint in the log")?;
+    let history = crate::recovery::history(&events)?;
+    agent.restore(&history, &events)?;
+    let mut gw = Gateway::new(dir.clone(), log, policy, programs, sandbox, next_call_id, last_cp);
+    if verbose {
+        println!("{id}  RESUMING after {} calls", history.len());
+    }
+    drive(&mut gw, agent, history.last().cloned(), history.len() as u64, verbose)
+}
+
+/// The agent loop. `last` is the result to hand the agent first, and
+/// `calls_so_far` the calls already made (both used when resuming).
+pub fn drive(gw: &mut Gateway, agent: &mut dyn Agent, mut last: Option<ToolResult>, calls_so_far: u64, verbose: bool) -> Result<RunSummary> {
     let max_calls = gw.policy.limits.max_tool_calls;
-    let mut calls = 0u64;
+    let mut calls = calls_so_far;
     let (status, summary) = loop {
         match agent.next_action(last.as_ref())? {
             Action::Finish { summary } => break ("completed".to_string(), summary),

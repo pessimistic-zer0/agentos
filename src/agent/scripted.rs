@@ -11,12 +11,12 @@
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::agent::{Action, Agent};
 use crate::tools::{ToolCall, ToolOutcome, ToolResult};
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Script {
     pub task: String,
@@ -69,6 +69,23 @@ impl Agent for ScriptedAgent {
     fn task(&self) -> String {
         self.script.task.clone()
     }
+
+    fn persist(&self, dir: &crate::workspace::ExecDir) -> Result<()> {
+        std::fs::write(dir.script(), toml::to_string(&self.script)?)?;
+        Ok(())
+    }
+
+    /// Replay the same rule over the recorded results: each one either moved
+    /// the script forward or (NOT APPLIED) left it on the same step. The last
+    /// result is not consumed here; the runtime passes it to `next_action`.
+    fn restore(&mut self, history: &[ToolResult], _events: &[crate::log::Event]) -> Result<()> {
+        self.pos = None;
+        for i in 0..history.len() {
+            let prev = if i == 0 { None } else { Some(&history[i - 1]) };
+            self.next_action(prev)?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -99,6 +116,28 @@ argv = ["pytest"]
         let again = a.next_action(Some(&result(ToolOutcome::NotApplied { reason: "rolled back".into() })))?;
         assert_eq!(again, exec, "a not-applied step is asked for again");
         assert!(matches!(a.next_action(Some(&result(ToolOutcome::Ok)))?, Action::Finish { .. }));
+        Ok(())
+    }
+
+    #[test]
+    fn restore_finds_the_position_again() -> Result<()> {
+        let script: Script = toml::from_str(
+            "task = \"t\"\n[[step]]\ntool = \"fs.list\"\npath = \"a\"\n[[step]]\ntool = \"fs.list\"\npath = \"b\"\n[[step]]\ntool = \"fs.list\"\npath = \"c\"\n",
+        )?;
+        let step = |p: &str| Action::Call(ToolCall::FsList { path: p.into() });
+        // Step a done, step b cut off and not applied: b must be asked again.
+        let history = vec![result(ToolOutcome::Ok), result(ToolOutcome::NotApplied { reason: "x".into() })];
+        let mut a = ScriptedAgent::new(script.clone());
+        a.restore(&history, &[])?;
+        assert_eq!(a.next_action(history.last())?, step("b"));
+        // Step b applied by recovery: go on to c.
+        let history = vec![result(ToolOutcome::Ok), result(ToolOutcome::Ok)];
+        let mut a = ScriptedAgent::new(script.clone());
+        a.restore(&history, &[])?;
+        assert_eq!(a.next_action(history.last())?, step("c"));
+        // Round trip through the saved file.
+        let again: Script = toml::from_str(&toml::to_string(&script)?)?;
+        assert_eq!(again.steps, script.steps);
         Ok(())
     }
 

@@ -182,7 +182,7 @@ The runtime resolves each allowed command to its real path on the host before th
 
 v1 is done only when three suites pass and are reproducible with one command (`make eval`).
 
-**1. Fault-injection harness (the headline result).** The runtime reads `AGENTOS_CRASH_AT=<point>` and calls `abort()` there. Mid-effect points use `SIGKILL` after a random delay instead. For each point and each tool, run the scripted agent 200 times, restart, run `recover`, and check the invariants from the recovery section.
+**1. Fault-injection harness (the headline result).** The runtime reads `AGENTOS_CRASH_AT=<point>` and sends itself `SIGKILL` there (not `abort()`, which would write thousands of core dumps; D-052). Mid-effect points use `SIGKILL` after a random delay instead. For each point and each tool, run the scripted agent 200 times, restart, run `recover`, and check the invariants from the recovery section.
 
 | Crash point | Where |
 | --- | --- |

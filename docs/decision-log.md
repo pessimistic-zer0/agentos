@@ -1225,6 +1225,147 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 **Concepts to learn.** Canary values; negative testing (why "the attack printed nothing" is not a pass).
 
+### D-052 — A test crash is SIGKILL to itself, chosen by environment variables
+- **Date:** 2026-11-12
+- **Status:** Taken
+- **Area:** durability
+- **ADR:** none
+
+**In plain words.** To test recovery, the runtime can be told to kill itself at a named point. `AGENTOS_CRASH_AT=P4` picks the point, `AGENTOS_CRASH_CALL=6` picks the tool call, `AGENTOS_CRASH_HIT=2` picks the second time the point is reached. For points in the middle of an effect (P3, P5), a timer thread kills the process after a random delay up to `AGENTOS_CRASH_DELAY_US`. The kill is always SIGKILL, the same signal as `kill -9`.
+
+**The problem.** The v1 document says the runtime "calls `abort()`" at the point. `abort()` raises SIGABRT, which makes the system write a core dump; the full suite kills the runtime about 5,000 times.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| `kill(getpid(), SIGKILL)` at every point | Taken | Exactly what `kill -9` does: no cleanup code runs, no core dump |
+| `abort()` as the v1 text says | Discarded | Thousands of core dumps; SIGABRT is not what the claim ("survives `kill -9`") is about |
+| The harness kills from outside after a delay | Discarded for the named points | Cannot hit "after the intent, before the effect" reliably; kept in spirit for P3 and P5 through the timer thread |
+| Compile the hooks only into test builds (`cfg`) | Discarded | The tests must run the same binary that ships; the hooks cost one environment lookup |
+
+**What this means for the code.** `src/faults.rs`: `point(name, call)` and `arm(name, call)`. `gateway.rs` has P1–P7, `recovery.rs` and `checkpoint::restore` have P8 (five places). The v1 document's sentence is updated. With no variable set the functions do nothing.
+
+**Evidence.** In the harness runs, killed processes ended with signal 9 (the harness checks `status.signal() == Some(9)`).
+
+**Concepts to learn.** Signals (SIGKILL, SIGABRT); core dumps; fault injection.
+
+### D-053 — Rolling back: copy the checkpoint, then swap folders atomically
+- **Date:** 2026-11-12
+- **Status:** Taken
+- **Area:** durability
+- **ADR:** 0003
+
+**In plain words.** To put the workspace back to a save point, the save point is copied to a temporary folder next to the workspace, and then the two folders are swapped in one kernel call. If the runtime dies before the swap, the workspace is untouched; if it dies after, the workspace is fully restored. There is no moment at which it is half of each.
+
+**The problem.** Recovery can be killed too (crash point P8). A rollback done as "delete the workspace, then copy the checkpoint in" would leave an empty or half-filled workspace if killed in between.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Copy to `work.restore-tmp`, `renameat2(RENAME_EXCHANGE)`, delete the old tree | Taken | One atomic step; repeating the whole thing after a crash gives the same result |
+| Delete `work/`, copy the checkpoint to `work/` | Discarded | A kill in the middle leaves a broken workspace |
+| Rename `work` away, rename the copy in (two renames) | Discarded | A kill between the two leaves no `work/` at all |
+| `rsync`-style in-place sync | Discarded | Many small steps; any of them can be interrupted |
+
+**What this means for the code.** `checkpoint::restore`. Recovery deletes a leftover `work.restore-tmp` first. The verdict record (`tool.reconciled`) is written only after the restore finished, so an interrupted recovery simply runs again. `RENAME_EXCHANGE` needs Linux 3.15 and a filesystem that supports it (btrfs, ext4, XFS and tmpfs do).
+
+**Evidence.** Harness cells `P8 fs.write` and `P8 exec`: recovery killed at a random one of five points, then run again; 0 violations (numbers in D-057).
+
+**Concepts to learn.** `renameat2` and `RENAME_EXCHANGE`; idempotent operations; re-entrant recovery.
+
+### D-054 — A checkpoint after every mutating call; unnamed checkpoints are deleted
+- **Date:** 2026-11-12
+- **Status:** Taken
+- **Area:** durability
+- **ADR:** 0002
+
+**In plain words.** After every `fs.write` and every `exec` that ran, the workspace is copied to `checkpoints/cp-0001`, `cp-0002`, … and the COMPLETED record names that copy. A copy that exists on disk but is not named in the log (the runtime died between making it and logging it) does not count, and recovery deletes it.
+
+**The problem.** D-011 fixed the order (effect, checkpoint, COMPLETED). What was open: whether a command that changed nothing still gets a checkpoint, how checkpoints are numbered, and what is and is not synced to disk.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Always checkpoint after a mutating call, changed or not | Taken | One rule; "workspace equals the last checkpoint between calls" always holds, which recovery and the post-exec revert both rely on |
+| Skip the copy when nothing changed | Discarded | Needs a full comparison to know, which costs about as much as a reflink copy |
+| Number = last named number + 1 | Taken | A deleted orphan's number is reused, so names stay dense and the log alone says what the next name is |
+| fsync every file of the checkpoint | Discarded | Only matters for power loss, which v1 does not claim (D-022); it would dominate the cost |
+
+**What this means for the code.** `gateway.rs` (P4/P5/P6 around `checkpoint::create`), `log::named_checkpoints`. A failed mutating call (`tool.failed`) gets no checkpoint: `fs.write` fails before its rename, and `exec` fails only if the sandbox could not start, so neither changed the workspace. Old checkpoints are never pruned in v1 (cheap with reflinks; a known disk cost on ext4).
+
+**Evidence.** Seeded-bug check: with orphan deletion removed from recovery, the harness reported `recover failed: checkpoint cp-0001 already exists` and leftover checkpoints (21 violations in 96 runs).
+
+**Concepts to learn.** Reflink copies; orphaned state; why two stores need an agreed "source of truth".
+
+### D-055 — Recovery kills what the dead runtime left running
+- **Date:** 2026-11-12
+- **Status:** Taken
+- **Area:** durability
+- **ADR:** none
+
+**In plain words.** If the runtime is killed while a command runs in the sandbox, that command must be gone before recovery repairs the workspace, or it could keep writing. Two things make sure: the sandbox processes are set to die when the runtime dies, and recovery also kills the command's cgroup by the path stored in the intent, then waits until it is empty.
+
+**The problem.** "Die with the parent" (`PR_SET_PDEATHSIG`) takes effect a moment after the kill, and recovery can start within milliseconds.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Both: `PR_SET_PDEATHSIG` in the helper, and `cgroup.kill` + wait in recovery | Taken | The second closes the timing gap of the first |
+| `PR_SET_PDEATHSIG` only | Discarded | A race between the dying command and the rollback |
+| Record process ids in the log and kill those | Discarded | Ids are reused; a cgroup is not |
+
+**What this means for the code.** The `exec` intent stores the cgroup's full path (the dead runtime lived in a different systemd scope than the recovering one, so the name alone is not enough). `recovery::kill_leftover_cgroup`: a missing folder means nothing is running, because a cgroup cannot be removed while it holds processes.
+
+**Evidence.** Harness cell `P3 exec` (killed while the command runs): 0 violations, 0 duplicated effects (numbers in D-057).
+
+**Concepts to learn.** Orphaned processes; why a cgroup is a reliable handle on "everything this command started".
+
+### D-056 — Resuming: `run --resume`, replaying results to place the agent
+- **Date:** 2026-11-12
+- **Status:** Taken
+- **Area:** durability
+- **ADR:** 0005
+
+**In plain words.** `agentos recover <id>` only repairs. `agentos run --resume <id>` repairs and then lets the agent continue. To know where the agent was, the runtime reads from the log the result of every earlier call, including the verdicts recovery wrote, and feeds them to the agent again. The scripted agent's script is saved in the execution folder at the start so it can be reloaded.
+
+**The problem.** The CLI has four commands and none is "resume". And the agent's position exists only in memory.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| `--resume <id>` on `run`; `recover` stays repair-only | Taken | No fifth command; `recover` is safe to run to inspect a crash without continuing |
+| `recover` always continues the agent | Discarded | Sometimes one wants the verdict and the repaired workspace without more calls |
+| Save the agent's position in a side file | Discarded | A second source of truth that can disagree with the log |
+
+**What this means for the code.** `Agent::persist` and `Agent::restore`; `runtime::resume`; `recovery::history`. New log records: `recovery.started` (may appear several times if recovery was interrupted), `tool.reconciled` (`applied`, `reason`, the checkpoint taken or the checkpoint restored to), `recovery.completed`. A reconciled APPLIED call counts as done for the agent; NOT APPLIED makes the scripted agent ask for the step again. The resumed run uses the policy copy stored with the execution, not the file on disk now.
+
+**Evidence.** Manual run: killed at P4 on call #6, `recover` printed `#6 fs.write APPLIED: file has the new content; checkpoint cp-0002 taken`, `run --resume` ran call #7 and completed. Unit test `restore_finds_the_position_again`. Every harness trial resumes to completion.
+
+**Concepts to learn.** Event sourcing (state rebuilt from the log); synthetic tool results.
+
+### D-057 — How the fault-injection harness decides pass or fail
+- **Date:** 2026-11-12
+- **Status:** Taken
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** The harness runs a seven-step script that uses all four tools, kills the runtime at a chosen point, and then checks the result against things it works out *independently of the runtime's own opinion*: it reads the files left on disk to decide whether the cut-off write really happened, and it adds up the applied calls in the log to predict what the workspace must contain. Each `exec` step appends one line to two files, so an effect that ran twice shows up as an extra line.
+
+**The problem.** A harness that asks the runtime "did you recover correctly?" proves nothing. It also must be shown able to fail.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Independent oracle: file hashes before recovery, a model built from the log, a final-state check after resuming | Taken | Catches wrong verdicts, missing rollbacks, doubled effects and leftovers |
+| Only check that `recover` exits 0 and the log parses | Discarded | Would pass with a recovery that does nothing |
+| P4–P6 for read-only tools too | Discarded | Those points surround the checkpoint, which reads do not take; the cells would test nothing |
+
+**What this means for the code.** `tests/recovery/main.rs`. Cells: P1, P2, P3, P7 × four tools; P4, P5, P6, P8 × two mutating tools; 24 cells. For P8 the run is first killed at a random point P2–P6, then recovery is killed at a random one of its five P8 points, then recovery runs again. Default is 3 runs per cell so `cargo test` is quick; `make eval-recovery` uses 200. The report is printed and written to `target/recovery-report.json`. The test also fails if fewer than half the runs were actually killed.
+
+**Evidence.** `AGENTOS_RECOVERY_RUNS=200 systemd-run --user --scope -p Delegate=yes cargo test --test recovery -- --nocapture` (what `make eval-recovery` runs) on 2026-11-12, `nix` preset, debug build, 8 workers: 4,800 runs, 4,788 killed, 0 invariant violations, 0 duplicated effects, 3,866 of 3,866 cut-off calls classified correctly; `agentos recover` wall time p50 19.1 ms, p99 49.8 ms; 492 s. Full table: `docs/results/recovery-200-nix.md`. Mutation check with 4 runs per cell: seeding "no rollback for exec" gave 31 duplicated effects in 96 runs; seeding "keep orphan checkpoints" gave 21 violations in 96 runs; the restored code gave 0.
+
+**Concepts to learn.** Test oracles; mutation testing (seeding a bug to check the test); percentiles.
+
 ---
 
 ## Still open
@@ -1261,6 +1402,9 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-11 | M1 test `denied_command_and_unknown_path_are_reported` asserted the old message `invalid request` for `../../etc/passwd`; with `openat2` the rule is `path leaves the workspace` | The assertion was updated to the new mechanism; it still requires a denial |
 | 2026-11-11 | `experiments/m3-rename-kill`: writing a file in place left it half-written in 149 of 200 kills; temp file + rename in 0 of 200, but left the temp file behind 164 times | Atomic rename works; recovery must delete the leftover temp file, so the intent records its name |
 | 2026-11-11 | `experiments/m3-sqlite-kill`: 200 kills during 3-row transactions, 0 corrupt databases, 0 gaps, 0 half transactions, 0 lost acknowledged commits. This is the evidence D-005 said was still to come | One event per transaction gives a gap-free, untorn log under process kill |
+| 2026-11-12 | The fault-injection harness passed 72 of 72 on its first run. Two bugs were then seeded into recovery to see whether it could fail: it reported 31 duplicated effects and 21 violations respectively, and 0 again with the real code | A test that has never failed has not been tested; break the code on purpose once |
+| 2026-11-12 | Full run: 4,800 kills across P1–P8 and four tools, 0 invariant violations, 0 duplicated effects, 3,866/3,866 verdicts correct, recovery p50 19.1 ms / p99 49.8 ms (D-057, `docs/results/recovery-200-nix.md`) | The intent-before-effect design holds under process kill on this machine. It says nothing about power loss |
+| 2026-11-12 | With a kill timer of up to 8 ms, most P5 kills landed after the checkpoint copy (about 3 ms) had finished | Measure how long the window is before choosing the random delay |
 
 ---
 
@@ -1287,6 +1431,7 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | Glob | A path pattern: `*` matches part of a name, `**` any number of folders |
 | Hash | A short fingerprint of some data; the same data always gives the same hash |
 | Init (PID 1) | The first process in a PID namespace; it must collect dead children, and when it exits the kernel kills the rest |
+| Idempotent | Doing it twice gives the same result as doing it once |
 | Idempotency key | A label sent with a request so that sending it twice has the effect of sending it once |
 | Intent | A log record written before an action, saying what is about to happen |
 | Helper (re-exec) | Starting your own program a second time to do a job that needs a fresh, single-threaded process |
@@ -1296,6 +1441,8 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | Namespace | A private view of some part of the system (mounts, process IDs, network, users) for one group of processes |
 | `no_new_privs` | A flag that stops a process from ever gaining more rights, for example through setuid programs |
 | `openat2` | A way to open a file that lets the kernel refuse any path leaving a given folder |
+| Oracle (testing) | The part of a test that knows the right answer, ideally worked out without the code under test |
+| Orphan checkpoint | A checkpoint folder on disk that no log record names; left by a crash, deleted by recovery |
 | Page cache | Memory where the kernel holds file data before writing it to disk |
 | Patch (unified diff) | A text file listing changed lines, which `patch` or `git apply` can apply to another copy |
 | `pivot_root` | Swapping what a process sees as the root folder `/` |
@@ -1303,7 +1450,9 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | Prompt injection | Text in a file or web page that tricks the AI into following it as an instruction |
 | `PR_SET_PDEATHSIG` | Ask the kernel to send this process a signal when its parent dies |
 | Reconciliation | Finding out whether an uncertain action really happened |
+| `RENAME_EXCHANGE` | A flag for `renameat2` that swaps two names in one atomic step |
 | Reflink | A copy that shares disk blocks with the original until one of them changes |
+| Mutation check | Breaking the code on purpose to see whether the tests notice |
 | seccomp | Kernel feature that blocks chosen system calls for a process |
 | tmpfs | A filesystem that lives in memory |
 | uid map | The table that says which user id inside a user namespace is which user id outside |

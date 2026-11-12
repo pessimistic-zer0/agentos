@@ -50,6 +50,11 @@ pub fn render_calls(events: &[Event]) -> Result<String> {
                 ("allow", format!("{summary}{cp}"))
             }
             CallState::Failed { error } => ("allow", format!("FAILED: {}", truncate(error, 60))),
+            CallState::Reconciled { applied, reason, checkpoint } => {
+                let cp = checkpoint.as_ref().map(|c| format!("  [{c}]")).unwrap_or_default();
+                let v = if *applied { "RECOVERED, APPLIED" } else { "RECOVERED, NOT APPLIED" };
+                ("allow", format!("{v}: {}{cp}", truncate(reason, 70)))
+            }
         };
         writeln!(
             out,

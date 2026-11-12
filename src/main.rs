@@ -22,21 +22,31 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Start a new execution: copy the repo, run the agent, write a patch
+    /// Start a new execution (copy the repo, run the agent, write a patch),
+    /// or continue an interrupted one with --resume
     Run {
         /// The repository to work on (it is copied, never changed)
-        #[arg(long)]
-        repo: PathBuf,
+        #[arg(long, required_unless_present = "resume")]
+        repo: Option<PathBuf>,
         /// Policy file (see policies/)
-        #[arg(long)]
-        policy: PathBuf,
+        #[arg(long, required_unless_present = "resume")]
+        policy: Option<PathBuf>,
         /// Which agent drives the run
         #[arg(long, value_enum, default_value = "scripted")]
         agent: AgentKind,
         /// For --agent scripted: the TOML script of tool calls
         #[arg(long)]
         script: Option<PathBuf>,
+        /// Continue this interrupted execution: recover it, then go on
+        #[arg(long, value_name = "ID", conflicts_with_all = ["repo", "policy", "script"])]
+        resume: Option<String>,
         /// Print only the execution id
+        #[arg(long, short)]
+        quiet: bool,
+    },
+    /// After a crash: settle the call that was cut off and repair the workspace
+    Recover {
+        id: String,
         #[arg(long, short)]
         quiet: bool,
     },
@@ -70,7 +80,20 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let state_dir = cli.state_dir.clone().unwrap_or_else(runtime::default_state_dir);
     match cli.cmd {
-        Cmd::Run { repo, policy, agent, script, quiet } => {
+        Cmd::Run { resume: Some(id), quiet, .. } => {
+            let summary = match runtime::agent_kind(&state_dir, &id)?.as_str() {
+                "scripted" => {
+                    let script = Script::load(&ExecDir::new(&state_dir, &id).script())?;
+                    runtime::resume(&state_dir, &id, &mut ScriptedAgent::new(script), !quiet)?
+                }
+                other => bail!("execution {id} was started with agent `{other}`, which this build cannot resume"),
+            };
+            if quiet {
+                println!("{}", summary.id);
+            }
+        }
+        Cmd::Run { repo, policy, agent, script, quiet, resume: None } => {
+            let (Some(repo), Some(policy)) = (repo, policy) else { bail!("--repo and --policy are required") };
             let opts = RunOptions { state_dir, repo, policy, verbose: !quiet };
             let summary = match agent {
                 AgentKind::Scripted => {
@@ -82,6 +105,9 @@ fn main() -> Result<()> {
             if quiet {
                 println!("{}", summary.id);
             }
+        }
+        Cmd::Recover { id, quiet } => {
+            runtime::recover(&state_dir, &id, !quiet)?;
         }
         Cmd::Status { id } => match id {
             Some(id) => {
