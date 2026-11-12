@@ -11,7 +11,7 @@ It is a learning and portfolio project, not a product. It does one thing: one ag
 **v0.1.** Everything below was built and tested on one machine: NixOS 26.05, Linux 7.1.8, btrfs, with the `nix` policy preset.
 
 - **Not yet verified: any other Linux distribution.** The `fhs` preset (Ubuntu, Debian, Fedora, Arch) and the CI job for it (`.github/workflows/ci.yml`) exist but have never run. Treat the Ubuntu instructions as untested.
-- No license has been chosen yet.
+- Licensed under MIT or Apache-2.0, at your option (see [License](#license)).
 - Read [what it does not do](#what-it-does-not-do) before trusting it with anything.
 
 ## The demo
@@ -214,3 +214,12 @@ make lint
 ```
 
 The git history is written to be read from the first commit: small steps, each saying what changed and why.
+
+## License
+
+Licensed under either of
+
+- Apache License, Version 2.0 ([`LICENSE-APACHE`](LICENSE-APACHE))
+- MIT license ([`LICENSE-MIT`](LICENSE-MIT))
+
+at your option. This is the usual choice for Rust projects (D-069).

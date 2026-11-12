@@ -1603,7 +1603,7 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 ### D-068 — What v0.1 ships, and what is left for Prince
 - **Date:** 2026-11-12
-- **Status:** Taken
+- **Status:** Taken (the "no license" part is replaced by D-069)
 - **Area:** process
 - **ADR:** none
 
@@ -1626,6 +1626,31 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 **Concepts to learn.** Software licenses (MIT, Apache-2.0); what a release tag means.
 
+### D-069 — License: MIT or Apache-2.0, at the user's choice
+- **Date:** 2026-11-12
+- **Status:** Taken (closes the "License" row of "Still open"; replaces the "no license" part of D-068)
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** A license is the text that tells other people what they may do with the code. Without one, the law says "nothing", even if the repository is public. AgentOS now carries two licenses, and anyone using the code picks whichever suits them: MIT (very short: do what you like, keep the copyright notice) or Apache-2.0 (longer: the same freedom, plus an explicit permission to use any patents the authors hold on the code). Prince chose this on 2026-11-12.
+
+**The problem.** D-068 left the repository without a license because it is a legal choice about Prince's work. The repository is now public on GitHub, and a public repository with no license cannot legally be reused by anyone.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Dual `MIT OR Apache-2.0` | Taken | Prince's decision, on Claude's recommendation. It is what the Rust compiler and most Rust crates use, so the code can be combined with almost anything; Apache-2.0 gives the patent grant, MIT keeps it compatible with GPLv2-only projects, which Apache-2.0 alone is not |
+| MIT only | Discarded | Simplest, but has no patent grant |
+| Apache-2.0 only | Discarded | Has the patent grant, but cannot be combined with GPLv2-only code |
+| A copyleft license (GPL) | Discarded | Not asked for; makes reuse harder for a portfolio project meant to be read and borrowed from |
+| No license | Discarded | Was the state at v0.1; nobody may legally reuse the code |
+
+**What this means for the code.** Two files at the top of the repository, `LICENSE-MIT` (copyright line "2026 Patel Prince", the name in the git history) and `LICENSE-APACHE` (the unmodified Apache-2.0 text). `Cargo.toml` has `license = "MIT OR Apache-2.0"`, the machine-readable form (an SPDX expression). The README has a "License" section. No per-file headers: neither license requires them. The tag `v0.1` points at a commit without a license; the license applies from the commit that adds it.
+
+**Evidence.** `LICENSE-APACHE` was copied from the `anyhow` 1.0.104 crate in the local cargo cache (176 lines, ends at "END OF TERMS AND CONDITIONS"); it is the standard text with no project-specific lines. `nix develop -c cargo build` accepts the manifest. The compatibility statements are general knowledge, not legal advice and not checked for this entry.
+
+**Concepts to learn.** Software licenses; permissive versus copyleft; patent grant; SPDX license expressions; dual licensing.
+
 ---
 
 ## Still open
@@ -1633,7 +1658,7 @@ Which nixpkgs commit to pin was a second, smaller choice:
 | Question | Notes |
 |---|---|
 | Project name | See D-023. Still open at v0.1 (D-068) |
-| License | MIT or Apache-2.0; Apache-2.0 adds a patent grant. Still open at v0.1: there is no `LICENSE` file (D-068) |
+| ~~License~~ | Answered by D-069: dual MIT OR Apache-2.0 |
 | Public repo from day one, or after v0.1? | Not discussed yet. Nothing has been pushed (D-027) |
 | Does the `fhs` preset pass on Ubuntu? | Unknown until Prince pushes and `.github/workflows/ci.yml` runs (D-065) |
 | ~~Which LLM for the demo: local llama.cpp server or a hosted API?~~ | Answered by D-058: local llama.cpp |
@@ -1697,6 +1722,7 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | `cgroup.kill` | A file in a cgroup; writing `1` kills every process in the group at once |
 | cgroup v2 | Kernel feature that limits memory, CPU and process count for a group of processes |
 | Checkpoint | A saved copy of the workspace at a known moment |
+| Dual licensing | Offering the same code under two licenses; the person using it picks one |
 | Content-addressed storage | Storing a file under the name of its own hash |
 | FIFO (named pipe) | A special file that passes bytes from a writer to a reader; opening it waits for the other side |
 | Advisory lock (`flock`) | A lock on a file that cooperating programs check; the kernel releases it when the holder dies |
@@ -1733,6 +1759,7 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | `RENAME_EXCHANGE` | A flag for `renameat2` that swaps two names in one atomic step |
 | Reflink | A copy that shares disk blocks with the original until one of them changes |
 | Mutation check | Breaking the code on purpose to see whether the tests notice |
+| SPDX expression | A short standard spelling of a license choice, such as `MIT OR Apache-2.0`, that tools can read |
 | seccomp | Kernel feature that blocks chosen system calls for a process |
 | tmpfs | A filesystem that lives in memory |
 | uid map | The table that says which user id inside a user namespace is which user id outside |

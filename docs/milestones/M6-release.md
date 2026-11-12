@@ -184,3 +184,9 @@ Read next, in this order: `README.md`, `docs/threat-model.md`, `docs/recovery-se
 10. Why was a license not chosen by the agent?
 11. An interviewer asks: "How do you know your sandbox is secure?" Give the answer this project can honestly support.
 12. If you could add one thing to v0.2, what would you choose from the "does not do" lists, and which existing test or document would you extend first?
+
+## Notes added after the milestone
+
+The text above is left as it was written at tag `v0.1`. Later changes are listed here.
+
+- **2026-11-12, license.** Prince chose dual `MIT OR Apache-2.0` (D-069). `LICENSE-MIT`, `LICENSE-APACHE`, the `license` field in `Cargo.toml` and a README section were added after the tag. "No license chosen" above describes the state at `v0.1`, not the current state.

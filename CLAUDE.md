@@ -124,7 +124,7 @@ v0.1 tagged locally (tags `m0`–`m6`, `v0.1`). All seven milestones are done on
 Open, and only Prince can close them:
 
 - Push. Nothing has been pushed. The `fhs` preset is not yet verified; `.github/workflows/ci.yml` has never run and may need fixing on its first run.
-- Choose a license (there is no `LICENSE` file) and decide the project name (D-023, D-068).
+- Decide the project name (D-023, D-068). The license is settled: dual MIT OR Apache-2.0 (D-069).
 - The "Bonus" section of the v1 document has not been started. It may start now that v0.1 is tagged, but only if Prince asks for it.
 
 Update this section when any of these changes.
