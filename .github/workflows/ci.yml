@@ -1,0 +1,43 @@
+# Runs the test suites with the `fhs` policy preset on Ubuntu.
+#
+# NOT YET VERIFIED: this file was written on the NixOS development machine and
+# has never run, because the agent that wrote it does not push (D-027). Until
+# a run is green, the `fhs` preset is recorded as "not yet verified" in the
+# milestone documents. Expect to adjust the user-session setup below.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  fhs:
+    runs-on: ubuntu-24.04
+    env:
+      AGENTOS_TEST_PRESET: fhs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Install pytest and hyperfine
+        run: sudo apt-get update && sudo apt-get install -y python3-pytest hyperfine
+      - name: Allow unprivileged user namespaces (Ubuntu 23.10+ restricts them through AppArmor)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Start a systemd user session for the runner (needed for cgroup delegation)
+        run: |
+          sudo loginctl enable-linger "$(id -un)"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
+          sleep 3
+      - name: Lint
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Tests (unit, vertical slice, security, benign, LLM mock, quick recovery)
+        run: make test
+      - name: Fault injection, 200 kills per cell
+        run: make eval-recovery
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: recovery-report-fhs
+          path: target/recovery-report.json

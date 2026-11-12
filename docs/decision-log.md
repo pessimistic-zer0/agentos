@@ -1438,6 +1438,123 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 **Concepts to learn.** Context window; `max_tokens`; why temperature 0 makes a stuck model stay stuck.
 
+### D-061 — How the three overhead numbers are measured
+- **Date:** 2026-11-12
+- **Status:** Taken
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** Three costs are measured, each against doing the same thing without AgentOS: starting a command in the sandbox, one 4 KB file write through the gateway, and the whole demo task. One script (`bench/run.sh`, or `make bench`) runs all three, writes every raw sample to `docs/results/bench-<preset>/`, records the machine, and builds the summary table from those files.
+
+**The problem.** The v1 design names the three numbers and the tools (hyperfine, criterion) but not what exactly is timed or what "direct execution" means for each. A number without a stated baseline is not a result.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Spawn: a small example program (`examples/sandbox_spawn.rs`) that uses the library; in-process timing of 500 spawns, plus hyperfine on the whole program | Taken | In-process timing is the spawn alone; hyperfine (which the plan names) can only time whole programs, so it also counts program start and the startup checks. Both are reported and labelled |
+| Spawn: a hidden `agentos` subcommand for hyperfine | Discarded | Adds CLI surface for a benchmark |
+| `fs.write`: criterion around `gateway.handle`, with two baselines: the same durable replace (temp file, fsync, rename) and a plain write | Taken | The durable baseline is the fair one; the plain one shows what durability itself costs |
+| `fs.write`: only against a plain write | Discarded | Would blame AgentOS for the cost of fsync, which any durable writer pays |
+| End to end: `agentos run` with the scripted demo against a shell script doing the same steps on a copy of the repo | Taken | Same work on both sides, including the copy |
+| Percentiles from criterion's summary | Discarded | criterion reports a mean with a confidence interval, not p95/p99; each sample's time is recorded by the benchmark itself and percentiles are computed from that |
+
+**What this means for the code.** `runtime::create` was split out of `runtime::start` so a benchmark can get a real gateway. `criterion` is a dev-dependency with default features off (no plotting). Release build. The numbers are from one laptop on battery-or-mains unknown, with a desktop session running; they are an order of magnitude, not a guarantee.
+
+**Evidence.** `docs/results/bench-nix/summary.md` and the raw files next to it (see the Findings row of 2026-11-12 for the values).
+
+**Concepts to learn.** Percentiles (p50, p95, p99) and why the mean hides slow cases; baselines; warm-up; why fsync dominates small writes.
+
+### D-062 — The TOCTOU test uses an attacker stronger than the threat model
+- **Date:** 2026-11-12
+- **Status:** Taken
+- **Area:** sandbox
+- **ADR:** none
+
+**In plain words.** The race test needs something that changes a symlink at the same moment the runtime opens a path through it. Inside AgentOS that cannot happen: the agent makes one call at a time, and every process a command started is dead before the call returns. So the test cheats in the attacker's favour: a thread of the test program, running on the host, re-points a symlink in the workspace thousands of times while the scripted agent makes 300 writes and reads through it.
+
+**The problem.** The v1 design asks for "a TOCTOU loop that swaps a symlink while the agent writes". A test where the swap can never coincide with the open would pass trivially.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Host thread re-pointing `src/swap` (a symlink) between an inside folder and an outside folder, by atomic rename of a fresh link | Taken | Exercises the real race; the workspace stays valid at every instant |
+| Exchanging two names inside the workspace (`RENAME_EXCHANGE`) | Discarded | Tried first. A checkpoint copied mid-exchange captured both names as symlinks; after one rollback the real folder was gone and nearly every call was refused, so the "race" was no longer one |
+| A sandboxed background process doing the swaps | Discarded | Impossible by design: it is killed with its cgroup when its call ends |
+
+**What this means for the code.** `toctou_symlink_swap_during_writes_and_reads_never_escapes`. The host thread also races the runtime's own checkpoint copy, which can make the runtime stop with an error; the test then resumes the execution until all steps are settled. It asserts: nothing was created in the outside folder, the outside file is unchanged, its content appears in no tool result and not in the log, more than 1,000 swaps happened, and at least 20 calls ended each way (inside, and refused as leaving the workspace).
+
+**Evidence.** Three consecutive runs: 6,425 / 6,747 / 6,396 swaps; 130 / 148 / 153 calls completed inside; 169 / 151 / 146 refused; 0 escapes.
+
+**Concepts to learn.** TOCTOU; why "the test passed" needs "and the dangerous case actually occurred".
+
+### D-063 — The benign suite: 23 ordinary operations under the shipped policy
+- **Date:** 2026-11-12
+- **Status:** Taken
+- **Area:** policy
+- **ADR:** none
+
+**In plain words.** A sandbox that refuses everything has no escapes either. The benign suite runs the things a well-behaved agent does (list, read, write source and test files, run pytest three ways, use symlinks that stay inside, names with spaces and accents, `..` that stays inside) under the policy exactly as shipped, and requires that none is denied, none fails, and nothing is reverted.
+
+**The problem.** The v1 pass criteria are "0 escapes" and "0 false denials"; the second needs its own test.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| One scripted run of 23 named steps; each must reach COMPLETED | Taken | A failure names the step and the rule |
+| Count the vertical-slice demo as the benign suite | Discarded | Seven steps, one of them an intended denial |
+
+**What this means for the code.** `tests/benign.rs`. `make eval-security` runs the adversarial and the benign suite together.
+
+**Evidence.** `benign: 23 operations, 0 false denials, 0 failures, 0 reverts`.
+
+**Concepts to learn.** False positives versus false negatives in a security control.
+
+### D-064 — `fs.read` only reads regular files
+- **Date:** 2026-11-12
+- **Status:** Taken
+- **Area:** sandbox
+- **ADR:** none
+
+**In plain words.** `fs.read` now refuses anything that is not an ordinary file: named pipes (FIFOs), sockets, device files. It opens with a flag (`O_NONBLOCK`) that makes the open return at once instead of waiting.
+
+**The problem.** Bug B-005: a command could create a FIFO in the workspace, and a later `fs.read` of it blocked the runtime forever.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| `O_NONBLOCK` on open, then refuse non-regular files | Taken | No waiting at any point; the agent gets a clear failure |
+| A timeout thread around every file read | Discarded | More machinery, and a blocked `open` cannot be cancelled cleanly |
+| Remove special files during the post-exec revert | Discarded | They can be inside the write globs, where changes are allowed |
+
+**What this means for the code.** `tools/fs.rs::open_for_read` and `read`. `fs.write` already refused to replace non-regular files (D-047); recovery's hash check already used `O_NONBLOCK`.
+
+**Evidence.** The new test timed out at 20 s before the fix and passes after it; the two calls are logged as FAILED with "not a regular file".
+
+**Concepts to learn.** FIFOs (named pipes); blocking `open`; availability as a security property.
+
+### D-065 — A CI workflow for the `fhs` preset, written but never run
+- **Date:** 2026-11-12
+- **Status:** Taken
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** `.github/workflows/ci.yml` tells GitHub to run the linter, all tests and the 200-kill fault-injection suite on Ubuntu 24.04 with the `fhs` policy. It has never run, because the agent does not push. It will probably need fixing on its first run.
+
+**The problem.** CLAUDE.md says the `fhs` preset is tested in CI on an Ubuntu runner. Without a workflow file, a push would test nothing.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Write the workflow now, mark it unverified in the file and in the milestone documents | Taken | A push then gives a real answer; nobody is told it passes |
+| Leave CI for Prince | Discarded | The portability claim would have no way to be checked |
+| Test `fhs` locally in a container or VM | Discarded | No container tool is installed, and downloading an Ubuntu image over this link is impractical |
+
+**What this means for the code.** The uncertain part is cgroup delegation on a GitHub runner: the workflow enables a systemd user session for the runner user (`loginctl enable-linger`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`) so `systemd-run --user` works, and turns off Ubuntu's AppArmor restriction on user namespaces. If that does not work, the suites will fail at startup with the runtime's own "cannot run the sandbox" message.
+
+**Evidence.** None; the workflow has not run.
+
+**Concepts to learn.** Continuous integration; GitHub Actions; lingering user sessions in systemd.
+
 ---
 
 ## Still open

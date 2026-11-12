@@ -566,3 +566,247 @@ fn patch_does_not_follow_symlinks_to_host_files() {
     assert!(patch.contains("leak.py"), "the new link is in the patch: {patch}");
     assert!(!patch.contains("PATCH-CANARY-9"), "the patch must not contain the linked file's content");
 }
+
+// ===========================================================================
+// 8. Added in M5: races, special files, argv tricks, floods
+// ===========================================================================
+
+/// The TOCTOU race from the v1 design: while the agent writes and reads
+/// through `src/swap/...`, something keeps re-pointing the symlink `src/swap`
+/// between a folder inside the workspace and a folder outside it.
+///
+/// Inside AgentOS nothing can run at the same time as a file tool (one call
+/// at a time, and every sandboxed process is dead when its call returns), so
+/// the test plays a stronger attacker than the threat model allows: a host
+/// thread doing the swaps directly on the workspace folder.
+#[test]
+fn toctou_symlink_swap_during_writes_and_reads_never_escapes() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    let text = policy_text(256, 64, 20).replace("max_tool_calls = 50", "max_tool_calls = 1000");
+    assert!(text.contains("max_tool_calls = 1000"));
+    let t = TestEnv::new("sec-toctou").with_policy_text(&text);
+    let repo = make_repo(&t);
+    let outside = t.root.join("outside");
+    std::fs::create_dir(&outside).unwrap();
+    std::fs::write(outside.join("secret.txt"), "TOCTOU-CANARY-77\n").unwrap();
+    // In the repo: a real folder, and `src/swap`, a symlink that the attacker
+    // re-points between that folder (harmless) and the outside folder.
+    std::fs::create_dir(repo.join("src/realdir")).unwrap();
+    std::fs::write(repo.join("src/realdir/secret.txt"), "inside\n").unwrap();
+    std::os::unix::fs::symlink("realdir", repo.join("src/swap")).unwrap();
+
+    const ROUNDS: usize = 150;
+    let mut steps = String::new();
+    for i in 0..ROUNDS {
+        steps.push_str(&format!("[[step]]\ntool = \"fs.write\"\npath = \"src/swap/w{i}.txt\"\ncontent = \"pwned {i}\"\n"));
+        steps.push_str("[[step]]\ntool = \"fs.read\"\npath = \"src/swap/secret.txt\"\n");
+    }
+    let script = t.write_script("toctou.toml", &format!("task = \"toctou\"\n{steps}"));
+    let child = t
+        .cmd(&["run", "--quiet", "--repo", repo.to_str().unwrap(), "--policy", t.policy.to_str().unwrap(), "--script", script.to_str().unwrap()])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    // The swapper: wait for the workspace, then exchange the two names as
+    // fast as possible until the run ends.
+    let stop = Arc::new(AtomicBool::new(false));
+    let (stop2, state, outside2) = (stop.clone(), t.state.clone(), outside.clone());
+    let swapper = std::thread::spawn(move || {
+        let work = loop {
+            if stop2.load(Ordering::SeqCst) {
+                return 0u64;
+            }
+            let found = std::fs::read_dir(state.join("executions")).ok().and_then(|mut d| d.next()).and_then(|e| e.ok()).map(|e| e.path().join("work"));
+            match found {
+                Some(w) if std::fs::symlink_metadata(w.join("src/swap")).is_ok() => break w,
+                _ => std::thread::sleep(std::time::Duration::from_millis(1)),
+            }
+        };
+        // Re-point the link atomically: make a new link under a temporary
+        // name, then rename it over `src/swap`.
+        let (link, tmp) = (work.join("src/swap"), work.join("src/.swap-tmp"));
+        let mut swaps = 0u64;
+        while !stop2.load(Ordering::SeqCst) {
+            let target: &std::path::Path = if swaps.is_multiple_of(2) { &outside2 } else { std::path::Path::new("realdir") };
+            let _ = std::fs::remove_file(&tmp);
+            if std::os::unix::fs::symlink(target, &tmp).is_ok() && std::fs::rename(&tmp, &link).is_ok() {
+                swaps += 1;
+            }
+            // A short pause, so some runtime operations fit between two swaps.
+            std::thread::sleep(std::time::Duration::from_micros(150));
+        }
+        swaps
+    });
+    let first = child.wait_with_output().unwrap();
+    // The swapper also races the runtime's own checkpoint copy (`cp -a`),
+    // which nothing inside AgentOS could ever do. When that copy fails the
+    // runtime stops with an error; the test then resumes the execution (which
+    // recovers first) until every step is settled, so that all 300 racy calls
+    // really happen.
+    let id = std::fs::read_dir(t.state.join("executions")).unwrap().next().unwrap().unwrap().file_name().to_string_lossy().into_owned();
+    let mut finished = first.status.success();
+    let mut restarts = 0;
+    while !finished && restarts < 400 {
+        restarts += 1;
+        finished = t.output(&["run", "--quiet", "--resume", &id]).status.success();
+    }
+    stop.store(true, Ordering::SeqCst);
+    let swaps = swapper.join().unwrap();
+    assert!(finished, "the run did not finish even after {restarts} restarts");
+
+    let leaked: Vec<_> = std::fs::read_dir(&outside).unwrap().map(|e| e.unwrap().file_name()).filter(|n| n != "secret.txt").collect();
+    assert!(leaked.is_empty(), "files were written outside the workspace: {leaked:?}");
+    assert_eq!(std::fs::read_to_string(outside.join("secret.txt")).unwrap(), "TOCTOU-CANARY-77\n", "outside file was modified");
+    // The secret was never read into a tool result or the log.
+    let grep = std::process::Command::new("grep")
+        .args(["-r", "-l", "-a", "TOCTOU-CANARY-77"])
+        .arg(t.exec_dir(&id).join("blobs"))
+        .arg(t.exec_dir(&id).join("log.db"))
+        .output()
+        .unwrap();
+    assert!(grep.stdout.is_empty(), "the outside secret was read: {}", String::from_utf8_lossy(&grep.stdout));
+    let events = t.events(&id);
+    let denied = events.iter().filter(|e| e["type"] == "tool.denied").count();
+    let done = events.iter().filter(|e| e["type"] == "tool.completed").count();
+    println!("toctou: {swaps} swaps, {done} calls completed inside the workspace, {denied} refused as leaving it, {restarts} restarts");
+    assert!(swaps > 1000, "the swapper only managed {swaps} swaps; the race was not exercised");
+    assert!(denied >= 20 && done >= 20, "both outcomes must occur often for the race to mean anything (denied {denied}, completed {done})");
+}
+
+#[test]
+fn fs_read_of_a_fifo_planted_by_a_command_does_not_hang_the_runtime() {
+    // Opening a FIFO for reading blocks until someone writes to it. A command
+    // can create one inside the write globs and then ask the runtime to read it.
+    let t = TestEnv::new("sec-fifo").with_policy_text(&policy_text(256, 64, 20));
+    let repo = make_repo(&t);
+    let steps = "[[step]]\ntool = \"exec\"\nargv = [\"python3\", \"-c\", \"import os; os.mkfifo('src/pipe'); print('made')\"]\n\
+                 [[step]]\ntool = \"fs.read\"\npath = \"src/pipe\"\n\
+                 [[step]]\ntool = \"fs.write\"\npath = \"src/pipe\"\ncontent = \"x\"\n\
+                 [[step]]\ntool = \"fs.list\"\npath = \"src\"\n";
+    let script = t.write_script("fifo.toml", &format!("task = \"fifo\"\n{steps}"));
+    let mut child = t
+        .cmd(&["run", "--quiet", "--repo", repo.to_str().unwrap(), "--policy", t.policy.to_str().unwrap(), "--script", script.to_str().unwrap()])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let start = std::time::Instant::now();
+    let status = loop {
+        if let Some(s) = child.try_wait().unwrap() {
+            break s;
+        }
+        if start.elapsed() > std::time::Duration::from_secs(20) {
+            child.kill().unwrap();
+            panic!("the runtime hung for 20 s reading a FIFO");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    let out = child.wait_with_output().unwrap();
+    assert!(status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let id = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    let r = Run { events: t.events(&id), id };
+    assert!(r.failed(2).unwrap().contains("not a regular file"), "{:?}", r.failed(2));
+    assert!(r.failed(3).unwrap().contains("not a regular file"), "{:?}", r.failed(3));
+    assert!(r.events.iter().any(|e| e["type"] == "execution.finished"));
+}
+
+#[test]
+fn exec_cannot_hardlink_host_files_or_create_devices() {
+    let t = env("sec-link-dev");
+    let repo = make_repo(&t);
+    let code = py(
+        "import stat, glob\n\
+         target = (glob.glob('/nix/store/*/bin/*') + glob.glob('/usr/bin/*'))[0]\n\
+         probe('hardlink a system file into /work', lambda: os.link(target, '/work/src/linked'))\n\
+         probe('mknod a disk device', lambda: os.mknod('/work/src/sda', stat.S_IFBLK | 0o666, os.makedev(8, 0)))\n\
+         probe('mknod /dev/mem', lambda: os.mknod('/tmp/mem', stat.S_IFCHR | 0o666, os.makedev(1, 1)))\n\
+         probe('write to /proc/sys', lambda: open('/proc/sys/kernel/hostname', 'w').write('pwned'))\n\
+         probe('open /dev/mem', lambda: open('/dev/mem', 'rb'))",
+    );
+    let (_, out) = attack(&t, &repo, &code);
+    assert_blocked(&out, &["hardlink a system file into /work", "mknod a disk device", "mknod /dev/mem", "write to /proc/sys", "open /dev/mem"]);
+}
+
+#[test]
+fn exec_cannot_escape_through_proc_root_links() {
+    let t = env("sec-proc-root");
+    let repo = make_repo(&t);
+    let home = std::env::var("HOME").unwrap();
+    let code = py(&format!(
+        "probe('/proc/1/root to host home', lambda: os.listdir('/proc/1/root' + {home:?}))\n\
+         probe('/proc/self/root/etc/passwd', lambda: open('/proc/self/root/etc/passwd').read())\n\
+         probe('/proc/1/cwd outside /work', lambda: os.readlink('/proc/1/cwd') if os.readlink('/proc/1/cwd') != '/work' else (_ for _ in ()).throw(ValueError()))\n\
+         probe('chroot', lambda: os.chroot('/tmp'))"
+    ));
+    let (_, out) = attack(&t, &repo, &code);
+    assert_blocked(&out, &["/proc/1/root to host home", "/proc/self/root/etc/passwd", "/proc/1/cwd outside /work", "chroot"]);
+}
+
+#[test]
+fn shipped_policy_refuses_shells_interpreters_and_path_tricks() {
+    // With the policy as shipped (no python3 -c), none of these may run.
+    let t = TestEnv::new("sec-argv");
+    let repo = make_repo(&t);
+    let tries: [&[&str]; 9] = [
+        &["sh", "-c", "cat /etc/passwd"],
+        &["bash"],
+        &["/bin/sh"],
+        &["python3", "-c", "print(1)"],
+        &["python3"],
+        &["env", "pytest"],
+        &["pytest; cat .env"],
+        &["../../bin/sh"],
+        &["python3", "-m", "http.server"],
+    ];
+    let mut steps = String::new();
+    for argv in tries {
+        let list: Vec<String> = argv.iter().map(|a| format!("{a:?}")).collect();
+        steps.push_str(&format!("[[step]]\ntool = \"exec\"\nargv = [{}]\n", list.join(", ")));
+    }
+    steps.push_str("[[step]]\ntool = \"exec\"\nargv = []\n");
+    let r = run_steps(&t, &repo, &steps);
+    for c in 1..=9u64 {
+        assert_eq!(r.denied_rule(c).as_deref(), Some("no matching rule"), "argv {:?} was not denied", tries[c as usize - 1]);
+    }
+    assert_eq!(r.denied_rule(10).as_deref(), Some("invalid request"));
+    assert!(!r.events.iter().any(|e| e["type"] == "tool.intent"), "no denied command may get as far as an intent");
+}
+
+#[test]
+fn denied_paths_cannot_be_created_or_read_later() {
+    let t = env("sec-deny-later");
+    let repo = make_repo(&t);
+    let steps = "[[step]]\ntool = \"fs.write\"\npath = \".env\"\ncontent = \"TOKEN=x\"\n\
+                 [[step]]\ntool = \"fs.write\"\npath = \"src/.env\"\ncontent = \"TOKEN=x\"\n\
+                 [[step]]\ntool = \"fs.write\"\npath = \"src/key.pem\"\ncontent = \"k\"\n\
+                 [[step]]\ntool = \"exec\"\nargv = [\"python3\", \"-c\", \"open('src/.env','w').write('LATER-' + 'CANARY'); import os; os.symlink('.env', 'src/alias')\"]\n\
+                 [[step]]\ntool = \"fs.read\"\npath = \"src/.env\"\n\
+                 [[step]]\ntool = \"fs.read\"\npath = \"src/alias\"\n";
+    let r = run_steps(&t, &repo, steps);
+    for c in [1, 2, 3, 5] {
+        assert!(r.denied_rule(c).unwrap_or_default().starts_with("filesystem.deny"), "call {c}: {:?}", r.denied_rule(c));
+    }
+    // (The canary is assembled inside the command, so it is not in the logged argv.)
+    // The denied file a command created is removed again (D-009), so the
+    // alias points at nothing; either way its content is never returned.
+    assert!(r.denied_rule(6).is_some() || r.failed(6).is_some(), "call 6 must not succeed");
+    assert!(!t.exec_dir(&r.id).join("work/src/.env").exists());
+    let grep = std::process::Command::new("grep").args(["-r", "-l", "-a", "LATER-CANARY"]).arg(t.exec_dir(&r.id)).output().unwrap();
+    assert!(grep.stdout.is_empty(), "denied content kept in {}", String::from_utf8_lossy(&grep.stdout));
+}
+
+#[test]
+fn output_flood_is_truncated_and_does_not_fill_the_log() {
+    let t = env("sec-flood");
+    let repo = make_repo(&t);
+    let code = "chunk = 'A' * 65536\nfor _ in range(800):\n    sys.stdout.write(chunk); sys.stderr.write(chunk)\nprint('end')";
+    let (r, out) = attack(&t, &repo, code); // ~52 MB on each stream
+    assert_eq!(out["truncated"], true);
+    assert_eq!(out["exit_code"], 0, "the command is not blocked by a full pipe");
+    assert!(out["stdout"].as_str().unwrap().len() <= 64 * 1024);
+    let size = |p: &str| std::fs::metadata(t.exec_dir(&r.id).join(p)).map(|m| m.len()).unwrap_or(0);
+    assert!(size("log.db") + size("log.db-wal") < 2 * 1024 * 1024, "log grew to {} bytes", size("log.db") + size("log.db-wal"));
+}

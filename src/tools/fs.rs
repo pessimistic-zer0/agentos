@@ -43,7 +43,12 @@ pub fn work_real(work: &Path) -> Result<PathBuf, ToolError> {
 /// Open `path` beneath the workspace for reading (`dir`: as a folder).
 pub fn open_for_read(work: &Path, path: &str, dir: bool) -> Result<Opened, ToolError> {
     let root = beneath::open_root(work).map_err(|e| ToolError::new(format!("workspace: {e}")))?;
-    let flags = if dir { OFlag::O_RDONLY | OFlag::O_DIRECTORY } else { OFlag::O_RDONLY };
+    // O_NONBLOCK: opening a FIFO for reading normally blocks until a writer
+    // appears, and a command can plant a FIFO in the workspace. With this
+    // flag the open returns at once; `read` then refuses anything that is not
+    // a regular file. For regular files and folders the flag changes nothing.
+    // (Bug B-005 in docs/bugs.md.)
+    let flags = if dir { OFlag::O_RDONLY | OFlag::O_DIRECTORY } else { OFlag::O_RDONLY | OFlag::O_NONBLOCK };
     match beneath::open_beneath(&root, path, flags, ResolveFlag::empty()) {
         Ok(fd) => Ok(Opened::Inside { rel: resolved_rel(work, &fd)?, fd }),
         Err(e) if beneath::is_escape(e) => Ok(Opened::Outside(e)),
@@ -60,8 +65,13 @@ fn resolved_rel(work: &Path, fd: impl AsFd) -> Result<String, ToolError> {
 
 pub fn read(fd: OwnedFd, rel: &str, max_bytes: u64) -> Result<String, ToolError> {
     let st = fstat(&fd).map_err(|e| errno(rel, e))?;
-    if SFlag::from_bits_truncate(st.st_mode) & SFlag::S_IFMT == SFlag::S_IFDIR {
+    let kind = SFlag::from_bits_truncate(st.st_mode) & SFlag::S_IFMT;
+    if kind == SFlag::S_IFDIR {
         return Err(ToolError::new(format!("`{}` is a directory; use fs.list", show(rel))));
+    }
+    if kind != SFlag::S_IFREG {
+        // FIFOs, sockets, devices: reading them can block or never end.
+        return Err(ToolError::new(format!("`{}` is not a regular file", show(rel))));
     }
     if st.st_size as u64 > max_bytes {
         return Err(ToolError::new(format!(

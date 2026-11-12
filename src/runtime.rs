@@ -65,6 +65,14 @@ pub fn prepare_sandbox() -> Result<SandboxCtx> {
 }
 
 pub fn start(opts: &RunOptions, agent: &mut dyn Agent) -> Result<RunSummary> {
+    let (mut gw, _lock) = create(opts, agent)?;
+    drive(&mut gw, agent, None, 0, opts.verbose)
+}
+
+/// Set up a new execution (folder, log, workspace copy, base checkpoint) and
+/// return its gateway and the lock that must be held while it is used.
+/// `start` drives an agent on it; the benchmarks call the gateway directly.
+pub fn create(opts: &RunOptions, agent: &dyn Agent) -> Result<(Gateway, File)> {
     let (policy, policy_text) = Policy::load(&opts.policy)?;
     let host_path = std::env::var("PATH").unwrap_or_default();
     let programs = Programs::resolve(&policy, &host_path)?;
@@ -74,7 +82,7 @@ pub fn start(opts: &RunOptions, agent: &mut dyn Agent) -> Result<RunSummary> {
     let id = workspace::new_execution_id();
     let dir = ExecDir::new(&opts.state_dir, &id);
     std::fs::create_dir_all(&dir.root).with_context(|| format!("creating {}", dir.root.display()))?;
-    let _lock = lock_execution(&dir)?;
+    let lock = lock_execution(&dir)?;
     std::fs::write(dir.policy(), &policy_text)?;
     let mut log = EventLog::create(&dir.log())?;
     log.append(EventBody::ExecutionCreated {
@@ -103,8 +111,7 @@ pub fn start(opts: &RunOptions, agent: &mut dyn Agent) -> Result<RunSummary> {
 
     // Whatever the agent needs to be rebuilt after a crash (the script).
     agent.persist(&dir)?;
-    let mut gw = Gateway::new(dir.clone(), log, policy, programs, sandbox, 1, base);
-    drive(&mut gw, agent, None, 0, opts.verbose)
+    Ok((Gateway::new(dir.clone(), log, policy, programs, sandbox, 1, base), lock))
 }
 
 /// Run recovery on an interrupted execution and print what it decided.

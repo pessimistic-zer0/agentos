@@ -32,3 +32,10 @@ are in the Findings table of `decision-log.md`, not here.)
 - **Cause:** the parent folder is opened with `O_PATH`. The helper added `O_NOCTTY` to every open. Plain `open` ignores unknown flag combinations; `openat2` is strict and rejects `O_PATH` combined with anything except `O_CLOEXEC`, `O_DIRECTORY` and `O_NOFOLLOW`.
 - **Fix:** `beneath::open_beneath` adds `O_NOCTTY` only when `O_PATH` is not set.
 - **Lesson:** `openat2` validates its arguments where `open` silently ignores them. That strictness is a feature, and it means the experiment (which never used `O_PATH` with `openat2`) did not cover the real use.
+
+## B-005 — `fs.read` of a FIFO hung the runtime forever
+- **Found:** 2026-11-12, by `fs_read_of_a_fifo_planted_by_a_command_does_not_hang_the_runtime` (added in M5; it failed on its first run by timing out at 20 s).
+- **Symptom:** the run never ended. No error, no log record after the `tool.requested`.
+- **Cause:** a command run by `exec` may create a FIFO (named pipe) inside the write globs. `fs.read` opened the path with a plain `O_RDONLY`. Opening a FIFO for reading blocks until some process opens it for writing, and nobody ever does: every sandboxed process is dead by then. The path stayed inside the workspace, so `openat2` rightly had no objection. Confinement was intact; availability was not.
+- **Fix:** `fs.read` opens with `O_NONBLOCK` and refuses anything that is not a regular file (`tools/fs.rs`). `fs.write` already refused non-regular targets. The same run now records two FAILED calls ("not a regular file") and finishes.
+- **Lesson:** "the path is inside the workspace" is not the same as "the thing at that path is safe to open". Files are not the only things with names. This is a denial of service by the agent against its own run, so the damage is small, but an unattended runtime that hangs silently is exactly what the watchdog exists to prevent for commands, and the file tools had no such guard.

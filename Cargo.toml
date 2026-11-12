@@ -19,3 +19,13 @@ nix = { version = "0.31", features = ["fs", "dir", "mount", "sched", "process", 
 landlock = "0.4"
 libc = "0.2"
 ureq = { version = "3", features = ["json"] }
+
+[dev-dependencies]
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "fs_write"
+harness = false
+
+[profile.release]
+debug = 1
