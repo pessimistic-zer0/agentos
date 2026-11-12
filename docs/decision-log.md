@@ -1601,15 +1601,41 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 **Concepts to learn.** Why "sorts by time" needs enough time resolution; lexicographic order.
 
+### D-068 — What v0.1 ships, and what is left for Prince
+- **Date:** 2026-11-12
+- **Status:** Taken
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** v0.1 is tagged locally with the code, the three suites passing on NixOS, a README, a threat model, a recovery-semantics document, eleven ADRs and a demo transcript. Three things are deliberately left undone because they are Prince's to do or decide: pushing (which is also what lets the Ubuntu tests run), choosing a license, and deciding the project's name.
+
+**The problem.** The v1 "definition of done" has six boxes. One of them, "both suites pass with the `fhs` and the `nix` preset", cannot be checked by an agent that does not push. The question was whether to tag v0.1 anyway.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Tag `v0.1` locally; state the open box in the README, the M6 document, the v1 document and here | Taken | CLAUDE.md says to tag `v0.1` at the end and to record `fhs` as "not yet verified", never as passing. The definition of done gates putting the project on the resume, and that gate stays closed until CI is green |
+| Do not tag until CI has run | Discarded | The agent cannot make CI run; the work would end without its last marker |
+| Choose MIT or Apache-2.0 so the repository has a license | Discarded | A license is a legal choice about Prince's work; it is listed under "Still open" for him |
+| Rename the project | Discarded | D-023 leaves the name open; nothing forces a choice now |
+| Record the demo as a video or asciinema cast | Discarded | No recorder is installed; a text transcript of the real output is checkable and searchable |
+
+**What this means for the code.** No `LICENSE` file. The README says "No license has been chosen yet" and "Not yet verified: any other Linux distribution". The "Bonus" (a fake external tool) has not been started.
+
+**Evidence.** Fresh clone on the development machine: `nix develop -c make demo` finished in 23 seconds with crates and the Nix shell already on disk. `make test` and `make lint` pass. `docs/results/` holds the suites' results of record. Nothing was run on Ubuntu.
+
+**Concepts to learn.** Software licenses (MIT, Apache-2.0); what a release tag means.
+
 ---
 
 ## Still open
 
 | Question | Notes |
 |---|---|
-| Project name | See D-023 |
-| License | MIT or Apache-2.0; Apache-2.0 adds a patent grant |
-| Public repo from day one, or after v0.1? | Not discussed yet |
+| Project name | See D-023. Still open at v0.1 (D-068) |
+| License | MIT or Apache-2.0; Apache-2.0 adds a patent grant. Still open at v0.1: there is no `LICENSE` file (D-068) |
+| Public repo from day one, or after v0.1? | Not discussed yet. Nothing has been pushed (D-027) |
+| Does the `fhs` preset pass on Ubuntu? | Unknown until Prince pushes and `.github/workflows/ci.yml` runs (D-065) |
 | ~~Which LLM for the demo: local llama.cpp server or a hosted API?~~ | Answered by D-058: local llama.cpp |
 
 ---
@@ -1652,6 +1678,8 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-12 | The benchmark's direct baseline failed: on NixOS `true` is a symlink to a multi-call `coreutils` binary that looks at `argv[0]` | Resolving a program to its real path must keep the original name as `argv[0]` (the gateway already did; the baseline did not) |
 | 2026-11-12 | Benchmarks (release build, i5-13420H, btrfs, commit `357c313`; `docs/results/bench-nix/`): sandboxed `true` p50 7.8 ms / p95 19.6 / p99 24.6 against 1.3 / 2.2 / 2.8 direct; `fs.write` 4 KB p50 13.7 ms / p95 20.4 / p99 23.8 against 1.9 / 2.5 / 2.8 for a durable direct write; demo task p50 507 ms / p95 620 / p99 663 against 376 / 432 / 521 direct (+35%) | The sandbox costs about 6 ms per command; a write costs about seven durable writes (three fsynced log records, a blob, the file, a checkpoint copy). Both are small next to an LLM call or a test run |
 | 2026-11-12 | First full run of the demo script: the recover and resume steps acted on the wrong execution. Two runs started in the same second, and ids had one-second resolution, so "latest" was picked by the random suffix (B-006, D-067) | Run the thing a stranger will run, end to end, before calling it done; an ordering claim ("ids sort by time") needs a test with two close ids |
+| 2026-11-12 | Final fault-injection run on the release code: 4,800 runs, 4,797 killed, 0 violations, 0 duplicated effects, 3,918/3,918 verdicts correct, recovery p50 20.4 ms / p99 55.1 ms (`docs/results/recovery-200-nix.md`). Agrees with the M3 run on older code | Two independent full runs, one result |
+| 2026-11-12 | Fresh clone, `nix develop -c make demo`: 23 s including a full debug build. Suspiciously fast, so checked: the clone had built its own 428 MB `target/`; crate sources and Nix packages were already on the machine | Check a number that looks too good; say what it does not include (downloads) |
 
 ---
 

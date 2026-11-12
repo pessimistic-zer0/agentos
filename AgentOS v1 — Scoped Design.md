@@ -278,12 +278,16 @@ agentos/
 
 AgentOS replaces Drishti on the resume only when all of these are true:
 
-- [ ] P1–P8 fault-injection suite passes with 0 invariant violations.
-- [ ] Security suite: 30+ cases, 0 escapes, 0 false denials on the benign suite.
-- [ ] Both suites pass with the `fhs` and the `nix` preset.
-- [ ] Three benchmarks published with scripts, raw data and hardware details.
-- [ ] Demo runs from a fresh clone in under 10 minutes.
-- [ ] Threat model, recovery semantics and at least 3 ADRs written.
+Status at tag `v0.1` (2026-11-12; evidence in `docs/results/` and `docs/milestones/M6-release.md`):
+
+- [x] P1–P8 fault-injection suite passes with 0 invariant violations. *(`nix` preset: 4,800 runs.)*
+- [x] Security suite: 30+ cases, 0 escapes, 0 false denials on the benign suite. *(`nix` preset: 32 cases, 23 benign operations.)*
+- [ ] Both suites pass with the `fhs` and the `nix` preset. ***Open:** `nix` passes; `fhs` has never been run. It needs the Ubuntu CI job, which runs after a push.*
+- [x] Three benchmarks published with scripts, raw data and hardware details.
+- [x] Demo runs from a fresh clone in under 10 minutes. *(NixOS: 23 s with dependencies already downloaded. Ubuntu: not run.)*
+- [x] Threat model, recovery semantics and at least 3 ADRs written. *(11 ADRs.)*
+
+One box is open, so by this document's own rule AgentOS does not replace Drishti on the resume yet.
 
 **Resume bullet templates.** Replace each bracketed placeholder only with numbers you measured.
 

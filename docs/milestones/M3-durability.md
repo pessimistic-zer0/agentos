@@ -19,7 +19,7 @@ Exit criterion from the v1 table: *"P1–P8 pass all invariants over 200 runs ea
 
 | Requirement | Met? | Evidence (command and result) |
 |---|---|---|
-| P1–P8, 200 runs per point and tool, all five invariants (`nix` preset) | Yes | `nix develop -c make eval-recovery`: 4,800 runs, 4,788 killed, **0 invariant violations**. Table in `docs/results/recovery-200-nix.md`, raw report in `docs/results/recovery-200-nix.json` |
+| P1–P8, 200 runs per point and tool, all five invariants (`nix` preset) | Yes | `nix develop -c make eval-recovery`: 4,800 runs, 4,788 killed, **0 invariant violations**. Table in `docs/results/recovery-200-nix-m3.md`, raw report in `docs/results/recovery-200-nix-m3.json` |
 | 0 duplicated side effects | Yes | Same run: 0 duplicated effects |
 | Cut-off calls classified correctly | Yes | Same run: 3,866 of 3,866 (the other runs had no call open at the moment of the kill, for example all P7 runs) |
 | Recovery is re-entrant (P8) | Yes | Cells `P8 fs.write` and `P8 exec`: 400 runs, recovery itself killed in 315 of them, 0 violations |

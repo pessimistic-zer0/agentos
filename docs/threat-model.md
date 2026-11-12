@@ -1,0 +1,101 @@
+# Threat model
+
+What AgentOS v0.1 protects, against whom, how, with which test, and where it stops. Plain words first; the Linux term is given next to it. Terms are explained in the glossary of `decision-log.md`.
+
+## 1. Who is trusted
+
+| Trusted | Not trusted |
+|---|---|
+| The host kernel | The agent (scripted or LLM) and every request it makes |
+| The `agentos` binary and the user who runs it | Everything in the target repository (it may contain text that steers the model, or code that runs under `pytest`) |
+| The policy file | Every process started by an allowed command, and its output |
+| The programs in the read-only system folders, as files (not what they do with hostile input) | |
+
+The agent may be hostile from the start or become so by reading a file ("prompt injection"). AgentOS does not try to tell the two apart, and does not try to stop the model from being talked into things. It limits what any request can do.
+
+**The allowlist is not the boundary.** `pytest` runs the repository's `conftest.py`; `cargo test` runs `build.rs`. Any allowed test command is arbitrary code execution. The argv allowlist limits what the agent *asks for*; the **sandbox** limits what the code *can do*. Every test below that says "from code" assumes the attacker runs arbitrary code inside the sandbox.
+
+## 2. What is protected
+
+1. Host files outside the workspace, especially `~/.ssh`, `~/.config`, tokens.
+2. Files in the target repository that the policy denies (for example `.env`).
+3. The runtime's environment variables and credentials (including the LLM API key).
+4. Network egress.
+5. The event log, the checkpoints and the blob store (the agent must not rewrite its own history).
+6. Host CPU, memory and process ids.
+7. The original repository (never modified; the output is a patch).
+
+## 3. Attacks in scope, the defence, and the test
+
+All tests are in `tests/security/main.rs` unless another file is named. Results: `docs/results/security-nix.md` (32 passed, 0 escapes, `nix` preset).
+
+| # | Attack | Defence | Test |
+|---|---|---|---|
+| 1 | `../` path traversal through a file tool | `openat2(RESOLVE_BENEATH)`: the kernel refuses any step out of the workspace | `fs_read_dotdot_traversal_is_denied` |
+| 2 | Absolute paths | same | `fs_read_absolute_path_is_denied` |
+| 3 | Symlinks pointing outside (absolute, relative, to `/`) | same | `fs_read_through_symlinks_pointing_outside_is_denied` |
+| 4 | `/proc/self/root/...` magic links | `RESOLVE_NO_MAGICLINKS` | `fs_read_proc_magic_link_is_denied` |
+| 5 | Writing through a symlinked folder inside the write globs | The parent folder is opened beneath the workspace; policy is checked on the resolved path | `fs_write_through_symlinked_folder_is_denied` |
+| 6 | Writing over a symlink to a host file | `O_NOFOLLOW`; `renameat` replaces the name, never the target | `fs_write_over_a_symlink_does_not_follow_it` |
+| 7 | Symlink swapped between check and use (TOCTOU) | Check and open are one kernel call; the handle is reused for the read or write | `toctou_symlink_swap_during_writes_and_reads_never_escapes` (≈6,000 flips, 300 calls) |
+| 8 | Reaching `../log.db` or `../checkpoints` with file tools | `RESOLVE_BENEATH` | `fs_tools_cannot_reach_log_or_checkpoints` |
+| 9 | Reading a denied file from code | Denied files are never copied into the workspace (ADR 0008) | `exec_cannot_read_a_denied_file`, `conftest_cannot_read_a_denied_file` |
+| 10 | Reading host files from code (`~`, `~/.ssh`, `/etc/passwd`, the original repo) | New root built from nothing: only `/work`, read-only system folders, 5 devices, own `/proc`, own `/tmp`; Landlock behind it | `exec_cannot_read_host_home_or_original_repo` |
+| 11 | Reading or changing the log and checkpoints from code | They are outside `/work` and never mounted | `exec_cannot_read_or_change_the_event_log_and_checkpoints` |
+| 12 | Secrets in environment variables or `/proc/*/environ` | Environment cleared (PATH, HOME, LANG only); PID namespace with its own `/proc` | `exec_sees_no_host_secrets_in_environment_or_proc` |
+| 13 | Writing outside the write globs from code | Compare with the checkpoint after each `exec`, revert, log `policy.violation` (ADR 0009) | `exec_changes_outside_write_globs_are_reverted` |
+| 14 | Planting a symlink so the revert writes outside | Revert works through handles opened with `RESOLVE_NO_SYMLINKS` | `exec_cannot_replace_a_folder_with_a_symlink_to_escape_the_revert` |
+| 15 | Network: TCP, UDP, IPv6, DNS, the host's loopback | Empty network namespace (own loopback only) | `exec_has_no_network` |
+| 16 | Host abstract unix sockets | Network namespace | `exec_cannot_reach_host_abstract_unix_sockets` |
+| 17 | Fork bomb | cgroup `pids.max` | `fork_bomb_is_stopped_by_pids_max` |
+| 18 | Memory exhaustion | cgroup `memory.max`, swap off for the group | `memory_exhaustion_is_stopped_by_memory_max` |
+| 19 | Infinite loop | Watchdog kills the cgroup at `call_timeout_s`; `cpu.max` | `infinite_loop_is_killed_at_the_time_limit` |
+| 20 | A daemon that outlives the command and writes later | PID namespace (PID 1 exit kills all) and cgroup destroyed after each call | `background_processes_die_with_the_command` |
+| 21 | Gaining privileges (`setuid(0)`, capabilities) | No capabilities in any set; `no_new_privs`; uid mapped to itself | `exec_has_no_capabilities_and_cannot_gain_root` |
+| 22 | Re-arranging mounts, also from a nested user namespace | Landlock forbids mounting for restricted processes | `exec_cannot_mount_even_in_a_nested_user_namespace` |
+| 23 | Signalling host processes | PID namespace | `exec_cannot_signal_host_processes` |
+| 24 | Leaving files in the host's `/tmp` | Private tmpfs at `/tmp` | `exec_tmp_is_private` |
+| 25 | Leaking a host file through the output patch (symlink in the workspace) | `diff --no-dereference`; one-sided links listed as comments | `patch_does_not_follow_symlinks_to_host_files` |
+| 26 | Hanging the runtime with a FIFO | `fs.read` opens non-blocking and reads regular files only | `fs_read_of_a_fifo_planted_by_a_command_does_not_hang_the_runtime` |
+| 27 | Hard links to system files; device files | Separate mounts; no `CAP_MKNOD`; `nodev` | `exec_cannot_hardlink_host_files_or_create_devices` |
+| 28 | `/proc/1/root`, `chroot` | Own PID namespace; no capability | `exec_cannot_escape_through_proc_root_links` |
+| 29 | Shells and interpreters under the shipped policy (`sh -c`, `python3 -c`, `env pytest`, path tricks) | Default deny; argv prefix match on exact words; `execve`, no shell | `shipped_policy_refuses_shells_interpreters_and_path_tricks` |
+| 30 | Creating or reading a denied path later | Deny rules checked on the requested and the resolved path; revert after `exec` | `denied_paths_cannot_be_created_or_read_later` |
+| 31 | Output flood | Output read on threads and cut at `max_output_kb`; log stores hashes | `output_flood_is_truncated_and_does_not_fill_the_log` |
+| 32 | Rewriting history (the log) | No tool reaches it (rows 8, 11); events are only ever inserted | covered by 8 and 11 |
+| — | The API key ending up on disk | Sent as a header only; excluded from serialization | `tests/llm_agent.rs`: `llm_loop_fixes_the_demo_and_logs_the_conversation` |
+| — | Refusing ordinary work (false denials) | — | `tests/benign.rs`: 23 operations, 0 false denials |
+
+The second line of defence for rows 10, 11, 22, 27: Landlock allows only `/work`, `/tmp`, the read-only system folders, five device files and `/proc` (read-only). It would still hold if the mount setup had a bug that left a host folder visible.
+
+## 4. Out of scope
+
+These are not defended against. They are limits, not oversights.
+
+- **Kernel exploits.** The sandbox is kernel features; a kernel bug that breaks namespaces or Landlock breaks AgentOS. There is no seccomp filter (cut from v1), so sandboxed code can call any system call an unprivileged process may, including creating nested user namespaces. That is more kernel surface than a hardened container runtime exposes.
+- **A malicious host user or root.** Anyone who can run commands as the user can read the log and edit the workspace.
+- **Side channels.** Timing, cache, CPU frequency.
+- **A malicious or leaky LLM provider.** With a hosted API, everything the agent reads is sent to it. Denied files are never in the workspace, so they cannot be sent; anything else can.
+- **Several mutually hostile agents on one host.** v1 runs one agent per execution and makes no claim about two executions attacking each other.
+- **Filling the disk.** The workspace is on disk with no size cap (ADR 0010). A command can write until the disk is full. Sandbox `/tmp` is bounded by the memory limit.
+- **Power loss.** The tests kill the process; they do not cut power. Checkpoint contents are not fsynced. No power-loss claim is made (D-022).
+- **What happens after the patch is applied.** A patch can change test hooks, CI files or build scripts that later run unsandboxed on the human's machine. Containment ends when the patch leaves AgentOS. Read the patch.
+- **The quality of the model's work.** A wrong but harmless patch is not a security failure.
+
+## 5. Known weaknesses inside the scope
+
+Stated so nobody has to find them.
+
+- **Information about the host is visible inside the sandbox.** `/proc/self/mountinfo` shows the workspace's path on the host (which usually contains the user name) and the disk device; `uname` shows the host name and kernel version; `/proc/cpuinfo` and `/proc/meminfo` show the hardware; `/proc/self/cgroup` shows the cgroup path. These are names and facts, not file contents, and without a network they cannot be sent anywhere except into the patch or the model's conversation. There is no UTS or cgroup namespace because the v1 design lists only user, mount, PID and network.
+- **The read-only system folders are fully readable.** On NixOS that is all of `/nix/store`: every installed package, and anything a user ever put into the store. Do not keep secrets in the Nix store. On other systems it is `/usr`, `/bin`, `/lib`, `/lib64`.
+- **Mounts below a read-only folder keep their own flags.** The read-only remount is not recursive. Landlock still limits them to read access.
+- **The post-`exec` revert walks the whole workspace** and compares file contents. A command can make that slow by creating many or large files. It is bounded by the disk, not by a limit.
+- **Checkpoints are never pruned**, and each mutating call makes one.
+- **An interpreter in the allowlist means arbitrary code.** The shipped policies allow `pytest` and `python3 -m pytest`, which grant the same thing: the repository's own code runs, inside the sandbox. A policy that allows `["python3"]` or `["sh"]` lets the agent run any code directly. That is still confined by the sandbox, but the allowlist then limits nothing.
+- **The `fhs` preset has not been run.** Everything above was tested with the `nix` preset on NixOS 26.05, kernel 7.1.8. The Ubuntu job in `.github/workflows/ci.yml` has never executed.
+
+## 6. What is and is not claimed
+
+Claimed, with tests: on the tested system, none of the 32 attacks above got out of the sandbox or past the file tools, and none of 23 ordinary operations was refused.
+
+Not claimed: perfect isolation, safety against kernel bugs, safety on systems that were not tested, or that the list of attacks is complete. A passing suite shows the attacks someone thought of.

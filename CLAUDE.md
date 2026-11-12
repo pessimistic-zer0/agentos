@@ -7,7 +7,7 @@ A Rust runtime that runs a coding agent's tool calls inside a rootless Linux san
 - `AgentOS v1 — Scoped Design.md` is **the plan**. Read it before any design or code work.
 - `AgentOS_Project_Spec.md` is a "maybe someday" list. It never adds work to v1. If the two disagree, the v1 document wins.
 - `docs/decision-log.md` records every decision taken or discarded, with reasons. Prince will study from it later, so it must stay complete.
-- `docs/decisions/` holds ADRs (once it exists).
+- `docs/decisions/` holds the ADRs. `docs/threat-model.md`, `docs/recovery-semantics.md`, `docs/bugs.md` and `docs/results/` are the other documents of record.
 
 ## Keep the decision log up to date
 
@@ -113,10 +113,18 @@ Run everything inside the dev shell (`flake.nix`): `nix develop -c <command>`, o
 - The three suites of the v1 design: `nix develop -c make eval` (= `eval-recovery`, `eval-security`, `bench`). Benchmarks alone: `make bench`; raw data and `summary.md` land in `docs/results/bench-<preset>/`. No number goes into a document unless it is in `docs/results/`.
 - Security suite only: `make eval-security` (32 adversarial cases plus the benign suite).
 - Lint: `nix develop -c cargo clippy --all-targets`.
-- Demo: `nix develop -c systemd-run --user --scope -p Delegate=yes cargo run -- run --repo examples/demo-repo --policy policies/nix.toml --agent scripted --script examples/scripts/fix-demo.toml`, then `cargo run -- trace`.
+- Demo: `nix develop -c make demo` (the fix, then a deliberate kill, recover and resume). By hand: `systemd-run --user --scope -p Delegate=yes cargo run -- run --repo examples/demo-repo --policy policies/nix.toml --agent scripted --script examples/scripts/fix-demo.toml`, then `cargo run -- trace`.
 - M0 practice program: `cd experiments/m0-ramp && cargo test`. Other experiments: see each `experiments/*/NOTES.md`.
 - Bugs the suites find in the runtime get a note in `docs/bugs.md`.
 
 ## Current status
 
-M5 (benchmarks, full security suite) done, tag `m5`. Open gap carried from M2: the `fhs` preset is not yet verified (`.github/workflows/ci.yml` exists but has never run; needs a push). Next: M6 release documents and v0.1. Update this line at the end of each milestone.
+v0.1 tagged locally (tags `m0`–`m6`, `v0.1`). All seven milestones are done on the `nix` preset.
+
+Open, and only Prince can close them:
+
+- Push. Nothing has been pushed. The `fhs` preset is not yet verified; `.github/workflows/ci.yml` has never run and may need fixing on its first run.
+- Choose a license (there is no `LICENSE` file) and decide the project name (D-023, D-068).
+- The "Bonus" section of the v1 document has not been started. It may start now that v0.1 is tagged, but only if Prince asks for it.
+
+Update this section when any of these changes.
