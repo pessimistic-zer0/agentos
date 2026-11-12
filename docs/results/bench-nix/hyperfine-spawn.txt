@@ -1,0 +1,11 @@
+Benchmark 1: <repo>/target/release/examples/sandbox_spawn once
+  Time (mean ± σ):      39.0 ms ±   5.7 ms    [User: 7.1 ms, System: 16.1 ms]
+  Range (min … max):    20.6 ms …  57.7 ms    300 runs
+ 
+Benchmark 2: true
+  Time (mean ± σ):       1.7 ms ±   0.5 ms    [User: 0.5 ms, System: 0.9 ms]
+  Range (min … max):     1.0 ms …   3.8 ms    300 runs
+ 
+Summary
+  true ran
+   23.62 ± 8.13 times faster than <repo>/target/release/examples/sandbox_spawn once

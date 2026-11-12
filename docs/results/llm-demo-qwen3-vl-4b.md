@@ -5,7 +5,7 @@ The runtime was killed (`AGENTOS_CRASH_AT=P4 AGENTOS_CRASH_CALL=4`) after call #
 
 ```text
 execution 20261112-070906-21df29
-  repo    /home/zer0/Desktop/agentos/examples/demo-repo
+  repo    <repo>/examples/demo-repo
   policy  default-nix
   agent   llm
   task    The test suite of this Python project has a failing test. Find the bu…

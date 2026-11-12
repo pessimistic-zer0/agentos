@@ -12,7 +12,7 @@ that try to read and write various places. Run:
 landlock status: FullyEnforced, no_new_privs: true
   write in work: ok
   PermissionError: [Errno 13] Permission denied: '/etc/passwd'
-  PermissionError: [Errno 13] Permission denied: '/home/zer0'
+  PermissionError: [Errno 13] Permission denied: '/home/<user>'
   PermissionError: [Errno 13] Permission denied: '/tmp/landlock-escape'
 ```
 

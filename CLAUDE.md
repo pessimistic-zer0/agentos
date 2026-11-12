@@ -110,7 +110,8 @@ Run everything inside the dev shell (`flake.nix`): `nix develop -c <command>`, o
 - Fault-injection suite at full size: `nix develop -c make eval-recovery` (200 kills per cell, about 8 minutes; `RUNS=20` for a quick look). Results of record go in `docs/results/`.
 - Crash by hand: `AGENTOS_CRASH_AT=P4 AGENTOS_CRASH_CALL=6 agentos run ...`, then `agentos recover <id>` and `agentos run --resume <id>` (see `src/faults.rs`).
 - LLM agent: start any OpenAI-compatible server (for llama.cpp: `llama-server -m <model>.gguf --jinja --port 8080`), set `AGENTOS_LLM_BASE_URL` / `AGENTOS_LLM_MODEL` (and `AGENTOS_LLM_API_KEY` for a hosted API), then `agentos run --agent llm --task "..." --repo ... --policy ...`. `tests/llm_agent.rs` uses a mock endpoint and needs no model. Never use a credential found in the environment that Prince did not give for this project (D-058).
-- Security suite only: `... cargo test --test security`.
+- The three suites of the v1 design: `nix develop -c make eval` (= `eval-recovery`, `eval-security`, `bench`). Benchmarks alone: `make bench`; raw data and `summary.md` land in `docs/results/bench-<preset>/`. No number goes into a document unless it is in `docs/results/`.
+- Security suite only: `make eval-security` (32 adversarial cases plus the benign suite).
 - Lint: `nix develop -c cargo clippy --all-targets`.
 - Demo: `nix develop -c systemd-run --user --scope -p Delegate=yes cargo run -- run --repo examples/demo-repo --policy policies/nix.toml --agent scripted --script examples/scripts/fix-demo.toml`, then `cargo run -- trace`.
 - M0 practice program: `cd experiments/m0-ramp && cargo test`. Other experiments: see each `experiments/*/NOTES.md`.
@@ -118,4 +119,4 @@ Run everything inside the dev shell (`flake.nix`): `nix develop -c <command>`, o
 
 ## Current status
 
-M4 (LLM agent) done, tag `m4`. Open gap carried from M2: the `fhs` preset is not yet verified (needs CI after a push). Next: M5 benchmarks and the full security suite. Update this line at the end of each milestone.
+M5 (benchmarks, full security suite) done, tag `m5`. Open gap carried from M2: the `fhs` preset is not yet verified (`.github/workflows/ci.yml` exists but has never run; needs a push). Next: M6 release documents and v0.1. Update this line at the end of each milestone.

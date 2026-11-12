@@ -50,5 +50,7 @@ hyperfine -N --warmup 3 --runs 100 --export-json "$out/hyperfine-e2e.json" \
   "bench/direct-demo.sh examples/demo-repo $scratch" > "$out/hyperfine-e2e.txt"
 
 rm -rf "$scratch"
+# Results are meant to be published: replace this machine's absolute path.
+sed -i "s|$PWD|<repo>|g" "$out"/*.json "$out"/*.txt
 python3 bench/summarize.py "$out" > /dev/null
 echo "summary: $out/summary.md"

@@ -1599,6 +1599,12 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-12 | Run 3 (sharper prompt): same partial write; the model then tried to create a root `__init__.py` (denied: no matching write rule) and re-ran pytest five times | Prompt wording alone did not fix it. The policy held against a confused model exactly as against a hostile one |
 | 2026-11-12 | Run 4 (with a warning when a write drops previously read lines): the model made the partial write, read the warning, rewrote the whole file, tests passed. Repeated 3 more times with the same result; also completed after being killed at P4 and resumed | Tell the model what its action did to the world, in the tool result, instead of telling it harder what to do |
 | 2026-11-12 | A `llama-server` built with CUDA and a 3.7 GB model were already on the machine from another project; an API key for a hosted service was also in the environment and was not used (D-058) | Look at what is already there before downloading or borrowing |
+| 2026-11-12 | A new security test timed out: `fs.read` of a FIFO created by a command blocked the runtime for ever (B-005) | A path inside the workspace can still name something unsafe to open; check the file type, not only the location |
+| 2026-11-12 | First TOCTOU test "passed" in 0.16 s having made only 15 calls: the host-side swapper also broke the runtime's checkpoint copy, the run stopped, and the test skipped its statistics | A test must fail when its dangerous case did not happen; it now requires >1,000 swaps and ≥20 calls ending each way |
+| 2026-11-12 | Second TOCTOU attacker (exchanging two names in the workspace): 290 of 300 calls refused. A checkpoint copied mid-exchange held two symlinks and no real folder, and a rollback restored that | The attacker's own setup can spoil the race; re-pointing one symlink keeps the workspace valid (D-062) |
+| 2026-11-12 | A security test's "canary" string was found in the log: it was in the attack command's own argv, which is logged on purpose | Build canaries at run time inside the attack, or the test finds its own text |
+| 2026-11-12 | The benchmark's direct baseline failed: on NixOS `true` is a symlink to a multi-call `coreutils` binary that looks at `argv[0]` | Resolving a program to its real path must keep the original name as `argv[0]` (the gateway already did; the baseline did not) |
+| 2026-11-12 | Benchmarks (release build, i5-13420H, btrfs, commit `357c313`; `docs/results/bench-nix/`): sandboxed `true` p50 7.8 ms / p95 19.6 / p99 24.6 against 1.3 / 2.2 / 2.8 direct; `fs.write` 4 KB p50 13.7 ms / p95 20.4 / p99 23.8 against 1.9 / 2.5 / 2.8 for a durable direct write; demo task p50 507 ms / p95 620 / p99 663 against 376 / 432 / 521 direct (+35%) | The sandbox costs about 6 ms per command; a write costs about seven durable writes (three fsynced log records, a blob, the file, a checkpoint copy). Both are small next to an LLM call or a test run |
 
 ---
 
@@ -1617,6 +1623,7 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | cgroup v2 | Kernel feature that limits memory, CPU and process count for a group of processes |
 | Checkpoint | A saved copy of the workspace at a known moment |
 | Content-addressed storage | Storing a file under the name of its own hash |
+| FIFO (named pipe) | A special file that passes bytes from a writer to a reader; opening it waits for the other side |
 | Advisory lock (`flock`) | A lock on a file that cooperating programs check; the kernel releases it when the holder dies |
 | Blob | A stored chunk of bytes (file content, tool output), named by its hash |
 | Execution | One run of one agent on one copy of a repo, with its own log and workspace |
@@ -1640,6 +1647,7 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | `openat2` | A way to open a file that lets the kernel refuse any path leaving a given folder |
 | Oracle (testing) | The part of a test that knows the right answer, ideally worked out without the code under test |
 | Orphan checkpoint | A checkpoint folder on disk that no log record names; left by a crash, deleted by recovery |
+| p50 / p95 / p99 | The time that 50%, 95%, 99% of samples stayed under; p99 shows the slow cases the average hides |
 | Page cache | Memory where the kernel holds file data before writing it to disk |
 | Patch (unified diff) | A text file listing changed lines, which `patch` or `git apply` can apply to another copy |
 | `pivot_root` | Swapping what a process sees as the root folder `/` |
