@@ -106,7 +106,9 @@ At the end of each milestone, write `docs/milestones/M<n>-<name>.md` from `docs/
 
 Run everything inside the dev shell (`flake.nix`): `nix develop -c <command>`, or `nix develop` once for an interactive shell.
 
-- Build and test: `nix develop -c systemd-run --user --scope -p Delegate=yes cargo test` (unit tests, `tests/vertical_slice.rs` and `tests/security/`, which run the real binary in the sandbox). Without the delegated cgroup the sandbox tests fail at startup with a message saying so. `AGENTOS_TEST_PRESET=fhs` switches the policy preset.
+- Build and test: `nix develop -c make test` (= `systemd-run --user --scope -p Delegate=yes cargo test`: unit tests, `tests/vertical_slice.rs`, `tests/security/`, and `tests/recovery/` with 3 kills per cell). Without the delegated cgroup the sandbox tests fail at startup with a message saying so. `AGENTOS_TEST_PRESET=fhs` switches the policy preset.
+- Fault-injection suite at full size: `nix develop -c make eval-recovery` (200 kills per cell, about 8 minutes; `RUNS=20` for a quick look). Results of record go in `docs/results/`.
+- Crash by hand: `AGENTOS_CRASH_AT=P4 AGENTOS_CRASH_CALL=6 agentos run ...`, then `agentos recover <id>` and `agentos run --resume <id>` (see `src/faults.rs`).
 - Security suite only: `... cargo test --test security`.
 - Lint: `nix develop -c cargo clippy --all-targets`.
 - Demo: `nix develop -c systemd-run --user --scope -p Delegate=yes cargo run -- run --repo examples/demo-repo --policy policies/nix.toml --agent scripted --script examples/scripts/fix-demo.toml`, then `cargo run -- trace`.
@@ -115,4 +117,4 @@ Run everything inside the dev shell (`flake.nix`): `nix develop -c <command>`, o
 
 ## Current status
 
-M2 (sandbox) done with one gap (`fhs` preset not yet verified; needs CI after a push), tag `m2`. Next: M3 durability. Update this line at the end of each milestone.
+M3 (durability) done, tag `m3`. Open gap carried from M2: the `fhs` preset is not yet verified (needs CI after a push). Next: M4 LLM agent. Update this line at the end of each milestone.
