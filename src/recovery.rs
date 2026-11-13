@@ -12,6 +12,9 @@
 //! | `fs.write`, file has the old hash | NOT APPLIED |
 //! | `fs.write`, anything else | roll back to the last checkpoint; NOT APPLIED |
 //! | `exec` | cannot be known: roll back to the last checkpoint; NOT APPLIED |
+//! | `ext.call`, the service answers 2xx to the same request and key | APPLIED (it was done before, or it is done now; never twice) |
+//! | `ext.call`, the service answers 4xx | NOT APPLIED: the service refused it |
+//! | `ext.call`, no answer | **stays uncertain**: recovery stops with an error and is run again later |
 //!
 //! Recovery can itself be killed (crash point P8). Every step is therefore
 //! safe to repeat: the verdict record is written only after its work is done,
@@ -32,6 +35,7 @@ use crate::checkpoint;
 use crate::faults;
 use crate::log::{self, CallRecord, CallState, Event, EventBody, EventLog};
 use crate::sandbox::{beneath, cgroup::ExecCgroup};
+use crate::tools::ext::{self, Answer};
 use crate::tools::LoggedCall;
 use crate::workspace::ExecDir;
 
@@ -150,6 +154,7 @@ fn reconcile(dir: &ExecDir, c: &CallRecord, last: &str, named: &[String]) -> Res
     match &c.call {
         LoggedCall::FsRead { .. } | LoggedCall::FsList { .. } => Ok(not_applied("read-only call; nothing to undo")),
         LoggedCall::Exec { .. } => rollback("a command's effects cannot be known after a crash"),
+        LoggedCall::ExtCall { service, payload_hash, .. } => reconcile_external(dir, c.call_id, service, payload_hash, plan),
         LoggedCall::FsWrite { .. } => {
             let field = |k: &str| plan.get(k).and_then(Value::as_str).map(str::to_string);
             let path = field("path").context("fs.write intent has no path")?;
@@ -174,6 +179,47 @@ fn reconcile(dir: &ExecDir, c: &CallRecord, last: &str, named: &[String]) -> Res
                 None => rollback("the file's folder could not be inspected safely"),
             }
         }
+    }
+}
+
+/// Settle an `ext.call` that has an intent and no ending (D-078).
+///
+/// A workspace can be rolled back; a request that may have reached another
+/// program cannot. So this call is settled *forwards*: the same request is
+/// sent again with the same idempotency key, both taken from the intent.
+/// The service applies a key at most once, so whether the first request
+/// arrived or not, afterwards the effect has happened exactly once.
+///
+/// If the service still gives no answer, nothing is decided and nothing is
+/// written: the call stays uncertain, the execution stays interrupted, and
+/// recovery has to be run again. Guessing here would break design rule 5.
+fn reconcile_external(dir: &ExecDir, call_id: u64, service: &str, payload_hash: &str, plan: &Value) -> Result<Outcome> {
+    let text = |k: &str| plan.get(k).and_then(Value::as_str).with_context(|| format!("ext.call intent has no {k}"));
+    let number = |k: &str| plan.get(k).and_then(Value::as_u64).with_context(|| format!("ext.call intent has no {k}"));
+    let (url, key) = (text("url")?, text("key")?);
+    let timeout = std::time::Duration::from_millis(number("timeout_ms")?);
+    let attempts = number("attempts")? as u32;
+    let payload = crate::blob::BlobStore::new(&dir.blobs())
+        .get(payload_hash)
+        .with_context(|| format!("the payload of call {call_id} is not in the blob store"))?;
+    let payload = String::from_utf8(payload).context("the stored payload is not text")?;
+    let (answer, sent) = ext::send_until_answered(url, key, &payload, timeout, attempts, 64 * 1024);
+    match answer {
+        Answer::Applied { status, body } => Ok(Outcome {
+            applied: true,
+            reason: format!(
+                "service `{service}` answered HTTP {status} to the same request sent again with idempotency key {key}; answer: {}",
+                body.chars().take(200).collect::<String>()
+            ),
+            checkpoint: None,
+            restored: None,
+        }),
+        Answer::Refused { status, .. } => Ok(not_applied(&format!("service `{service}` refused the request (HTTP {status}); it did nothing"))),
+        Answer::Unknown { why } => bail!(
+            "call #{call_id} to external service `{service}` is still UNCERTAIN: no answer after {sent} request(s) ({why}). \
+             Nothing was decided. Run `agentos recover {}` again when the service is reachable.",
+            dir.id
+        ),
     }
 }
 

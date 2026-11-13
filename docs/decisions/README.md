@@ -18,3 +18,4 @@ The full reasoning, with the options that lost, is in `../decision-log.md`
 | [0009](0009-write-globs-checked-after-exec.md) | How do write globs bind code run by `exec`? | Compare and revert after each `exec` |
 | [0010](0010-workspace-on-disk.md) | Workspace on a size-capped tmpfs or on disk? | On disk; disk filling is a known limit |
 | [0011](0011-system-folders-from-policy.md) | Which system folders does the sandbox see? | Listed in the policy; `fhs` and `nix` presets |
+| [0012](0012-uncertain-external-call-is-sent-again.md) | How is an uncertain call to an outside service settled? (bonus, after v0.1) | Send it again with the same idempotency key; no answer means still uncertain |

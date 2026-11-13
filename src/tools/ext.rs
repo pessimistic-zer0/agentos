@@ -25,6 +25,17 @@ pub enum Answer {
     Unknown { why: String },
 }
 
+/// The idempotency key of one tool call: the execution id and the call id.
+///
+/// It is worked out from things that are already in the log, not drawn at
+/// random, so the runtime that sends the request and a later recovery that
+/// sends it again cannot disagree about it. Execution ids are unique per
+/// state folder and call ids are never reused inside an execution, so one
+/// key means one intended effect (D-077).
+pub fn idempotency_key(execution_id: &str, call_id: u64) -> String {
+    format!("agentos-{execution_id}-c{call_id}")
+}
+
 /// Send `payload` to `url` once, with `key` as the `Idempotency-Key` header.
 pub fn send(url: &str, key: &str, payload: &str, timeout: Duration, max_body: usize) -> Answer {
     let agent: ureq::Agent = ureq::Agent::config_builder()

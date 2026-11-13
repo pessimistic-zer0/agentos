@@ -14,6 +14,11 @@
 //! 6. `tool.completed` is logged, naming that checkpoint (design rule 4), or
 //!    `tool.failed`.
 //!
+//! The bonus tool `ext.call` follows the same steps. Its effect is an HTTP
+//! request to a service named in the policy, sent with an idempotency key
+//! that is written into the intent first. It takes no checkpoint, because
+//! its effect is not in the workspace.
+//!
 //! The `faults::point` calls mark the crash points P1..P7 of the
 //! fault-injection plan. They do nothing unless a test asks for a crash.
 
@@ -30,6 +35,7 @@ use crate::log::{EventBody, EventLog};
 use crate::policy::{Access, Decision, Policy};
 use crate::sandbox::{self, cgroup::CgroupRoot, beneath, SandboxSpec};
 use crate::tools::exec::Programs;
+use crate::tools::ext::{self, Answer};
 use crate::tools::fs::{self as fstool, Opened, OpenedParent, WriteTarget};
 use crate::tools::{ToolCall, ToolError, ToolOutcome, ToolOutput, ToolResult};
 use crate::workspace::ExecDir;
@@ -62,6 +68,8 @@ enum Approved {
     List { fd: OwnedFd, rel: String },
     Write { target: WriteTarget, content: String },
     Exec { argv: Vec<String> },
+    /// `url` comes from the policy rule that allowed the call, never from the agent.
+    Ext { service: String, url: String, payload: String },
 }
 
 /// The outcome of the policy step.
@@ -97,10 +105,17 @@ impl Gateway {
         let call_id = self.next_call_id;
         self.next_call_id += 1;
 
-        if let ToolCall::FsWrite { content, .. } = &call {
-            // The new content goes to the blob store before anything is logged,
-            // so every hash the log mentions can be looked up.
-            self.blobs.put(content.as_bytes())?;
+        // File content and request payloads go to the blob store before
+        // anything is logged, so every hash the log mentions can be looked up.
+        // Recovery needs the payload to send an uncertain request again.
+        match &call {
+            ToolCall::FsWrite { content, .. } => {
+                self.blobs.put(content.as_bytes())?;
+            }
+            ToolCall::ExtCall { payload, .. } => {
+                self.blobs.put(payload.as_bytes())?;
+            }
+            _ => {}
         }
         self.log.append(EventBody::ToolRequested { call_id, call: serde_json::to_value(call.logged())? })?;
 
@@ -243,6 +258,12 @@ impl Gateway {
                 let d = policy.check_exec(argv);
                 if d.allowed { Decided::Allow(d, Approved::Exec { argv: argv.clone() }) } else { Decided::Deny(d) }
             }
+            ToolCall::ExtCall { service, payload } => match policy.check_external(service) {
+                (d, Some(s)) if d.allowed => {
+                    Decided::Allow(d, Approved::Ext { service: service.clone(), url: s.url.clone(), payload: payload.clone() })
+                }
+                (d, _) => Decided::Deny(d),
+            },
         }
     }
 
@@ -270,6 +291,16 @@ impl Gateway {
                     "cgroup": self.sandbox.cgroups.path_of(&sandbox::cgroup_name(&self.dir.id, call_id)),
                 })
             }
+            // Everything needed to send the request again after a crash,
+            // exactly as it would have been sent the first time (D-077).
+            Approved::Ext { service, url, payload } => json!({
+                "service": service,
+                "url": url,
+                "key": ext::idempotency_key(&self.dir.id, call_id),
+                "payload_hash": crate::blob::content_hash(payload.as_bytes()),
+                "timeout_ms": self.policy.external.timeout_ms,
+                "attempts": self.policy.external.attempts,
+            }),
         })
     }
 
@@ -288,6 +319,28 @@ impl Gateway {
                     Err(e) => return Ok(Err(e)),
                 };
                 Ok(out)
+            }
+            Approved::Ext { service, url, payload } => {
+                let key = ext::idempotency_key(&self.dir.id, call_id);
+                let timeout = std::time::Duration::from_millis(self.policy.external.timeout_ms);
+                let (answer, sent) = ext::send_until_answered(&url, &key, &payload, timeout, self.policy.external.attempts, max as usize);
+                match answer {
+                    Answer::Applied { status, body } => Ok(ToolOutput::External { status, body, attempts: sent }),
+                    Answer::Refused { status, body } => Err(ToolError::new(format!(
+                        "service `{service}` refused the request (HTTP {status}): {}",
+                        body.chars().take(200).collect::<String>()
+                    ))),
+                    // Neither COMPLETED nor FAILED would be true. Stop with the
+                    // intent open: that is exactly the state a crash leaves, and
+                    // `agentos recover` settles it the same way (D-079).
+                    Answer::Unknown { why } => anyhow::bail!(
+                        "call #{call_id} to external service `{service}` is UNCERTAIN: no answer after {sent} request(s) ({why}). \
+                         It may or may not have been carried out. The run is stopped here. \
+                         When the service is reachable, run `agentos recover {id}` (or `agentos run --resume {id}`): \
+                         it sends the same request again with the same idempotency key.",
+                        id = self.dir.id
+                    ),
+                }
             }
         })
     }

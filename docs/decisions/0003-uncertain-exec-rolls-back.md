@@ -19,3 +19,5 @@ Fault-injection cells `P2–P6 exec` and `P8 exec`: 0 violations, 0 duplicated e
 
 ## Look again if
 A tool with an effect outside the workspace is added (the "Bonus" after v0.1). That effect cannot be rolled back; it needs idempotency keys or a human.
+
+*Note, 2026-11-13: that tool now exists (`ext.call`, the bonus). Its rule is ADR 0012. This ADR still holds for `exec`.*

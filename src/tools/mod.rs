@@ -1,4 +1,5 @@
-//! The four tools the agent can ask for, and what it gets back.
+//! The tools the agent can ask for, and what it gets back: the four of v1
+//! (`fs.read`, `fs.list`, `fs.write`, `exec`) and the bonus tool `ext.call`.
 //!
 //! The agent never runs a tool itself (design rule 1). It hands a `ToolCall`
 //! to the gateway, and the gateway decides, logs and dispatches it.
@@ -24,6 +25,10 @@ pub enum ToolCall {
     FsWrite { path: String, content: String },
     #[serde(rename = "exec")]
     Exec { argv: Vec<String> },
+    /// Ask an outside service, named in the policy, to act on `payload`.
+    /// The only tool whose effect cannot be rolled back.
+    #[serde(rename = "ext.call")]
+    ExtCall { service: String, payload: String },
 }
 
 impl ToolCall {
@@ -33,10 +38,13 @@ impl ToolCall {
             ToolCall::FsList { .. } => "fs.list",
             ToolCall::FsWrite { .. } => "fs.write",
             ToolCall::Exec { .. } => "exec",
+            ToolCall::ExtCall { .. } => "ext.call",
         }
     }
 
     /// Does this tool change the workspace? Only these get a checkpoint.
+    /// `ext.call` has an effect too, but outside the workspace, where a
+    /// checkpoint cannot reach it.
     pub fn is_mutating(&self) -> bool {
         matches!(self, ToolCall::FsWrite { .. } | ToolCall::Exec { .. })
     }
@@ -53,6 +61,11 @@ impl ToolCall {
                 bytes: content.len() as u64,
             },
             ToolCall::Exec { argv } => LoggedCall::Exec { argv: argv.clone() },
+            ToolCall::ExtCall { service, payload } => LoggedCall::ExtCall {
+                service: service.clone(),
+                payload_hash: content_hash(payload.as_bytes()),
+                bytes: payload.len() as u64,
+            },
         }
     }
 }
@@ -69,6 +82,10 @@ pub enum LoggedCall {
     FsWrite { path: String, content_hash: String, bytes: u64 },
     #[serde(rename = "exec")]
     Exec { argv: Vec<String> },
+    /// The payload is in the blob store under `payload_hash`; recovery
+    /// needs it to send the request again.
+    #[serde(rename = "ext.call")]
+    ExtCall { service: String, payload_hash: String, bytes: u64 },
 }
 
 impl LoggedCall {
@@ -78,6 +95,7 @@ impl LoggedCall {
             LoggedCall::FsList { .. } => "fs.list",
             LoggedCall::FsWrite { .. } => "fs.write",
             LoggedCall::Exec { .. } => "exec",
+            LoggedCall::ExtCall { .. } => "ext.call",
         }
     }
 
@@ -87,6 +105,7 @@ impl LoggedCall {
             LoggedCall::FsRead { path } | LoggedCall::FsList { path } => path.clone(),
             LoggedCall::FsWrite { path, bytes, .. } => format!("{path} ({bytes} bytes)"),
             LoggedCall::Exec { argv } => argv.join(" "),
+            LoggedCall::ExtCall { service, bytes, .. } => format!("{service} ({bytes} bytes)"),
         }
     }
 }
@@ -115,6 +134,9 @@ pub enum ToolOutput {
     List { entries: Vec<ListEntry> },
     Write { bytes: u64 },
     Exec(ExecOutput),
+    /// The service's answer to an `ext.call`. `attempts` is how many
+    /// requests it took (all with the same idempotency key).
+    External { status: u16, body: String, attempts: u32 },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -150,6 +172,9 @@ impl ToolOutput {
             ToolOutput::Read { content } => format!("{} bytes", content.len()),
             ToolOutput::List { entries } => format!("{} entries", entries.len()),
             ToolOutput::Write { bytes } => format!("wrote {bytes} bytes"),
+            ToolOutput::External { status, attempts, .. } => {
+                format!("HTTP {status} after {attempts} request{}", if *attempts == 1 { "" } else { "s" })
+            }
             ToolOutput::Exec(e) => {
                 let status = match (e.exit_code, e.signal) {
                     _ if e.timed_out => "timed out".to_string(),

@@ -376,6 +376,9 @@ fn render_result(r: &ToolResult) -> String {
             }
             s
         }
+        // The LLM is not offered `ext.call` (D-073); this arm only keeps the
+        // match complete.
+        (ToolOutcome::Ok, Some(ToolOutput::External { status, body, .. })) => format!("HTTP {status}\n{body}"),
         (ToolOutcome::Ok, None) => "OK: the call was applied (the runtime was restarted; its output was not kept).".into(),
     };
     if text.chars().count() > MAX_RESULT_CHARS {

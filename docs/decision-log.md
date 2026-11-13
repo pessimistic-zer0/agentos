@@ -1826,6 +1826,81 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 **Concepts to learn.** The two-generals problem in its everyday form (a lost request and a lost answer look the same); HTTP status classes; why "unknown" is a real third state.
 
+### D-077 — The idempotency key is the execution id plus the call id, written in the intent
+- **Date:** 2026-11-13
+- **Status:** Taken
+- **Area:** durability
+- **ADR:** 0012
+
+**In plain words.** Every `ext.call` is sent with a label, the idempotency key, that tells the service "if you have seen this label before, do not do the work again". The label is `agentos-<execution id>-c<call number>`. It is not random: it is built from two things already in the diary. It is written into the intent record, with the service's address, the payload's fingerprint, the timeout and the number of attempts, before the first request leaves.
+
+**The problem.** After a crash, recovery must send *exactly* the request the dead runtime sent or was about to send. If the two could disagree about the key, the service would see two different requests and do the work twice.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Key computed from execution id and call id; stored in the intent as well | Taken | Cannot differ between the first send and any later one; unique because ids are unique per state folder and call numbers are never reused; readable in the trace |
+| A random key (UUID) stored in the intent | Discarded | Works, since the intent is durable before the request, but needs a randomness source (a new dependency or hand-rolled) and gives nothing the computed key lacks |
+| A hash of the payload as the key | Discarded | Two deliberate, separate calls with the same payload ("charge 5 euros" twice) would be merged into one |
+| Let the agent supply the key | Discarded | A hostile or confused agent could reuse or vary keys; the guarantee would depend on the least trusted part |
+
+**What this means for the code.** `tools::ext::idempotency_key`. The intent's `plan` holds `service`, `url`, `key`, `payload_hash`, `timeout_ms`, `attempts`. The payload itself goes to the blob store before `tool.requested` is logged (as file content does for `fs.write`, ADR 0004), so the log holds only its hash and recovery can read it back. A step the agent asks for again after NOT APPLIED is a new call with a new number, hence a new key; that is safe only because NOT APPLIED is never said unless the service did nothing (D-078). Two different state folders on one machine could, in theory, produce the same execution id in the same millisecond with the same 6-character suffix; that is not defended against.
+
+**Evidence.** `tests/external.rs::allowed_call_is_logged_keyed_and_applied_once`: the intent's key is `agentos-<id>-c1`, the service recorded that key, and the log's `tool.requested` has a `payload_hash` and no payload. `a_lost_answer_is_retried_with_the_same_key_and_applied_once`: two requests, one key, one effect.
+
+**Concepts to learn.** Idempotency keys; why "the same request" has to be defined before the first send; deterministic versus random identifiers.
+
+### D-078 — An uncertain `ext.call` is settled by sending it again; silence settles nothing
+- **Date:** 2026-11-13
+- **Status:** Taken (adds a rule to D-016 for the new tool)
+- **Area:** durability
+- **ADR:** 0012
+
+**In plain words.** For files and commands, recovery can always fall back on "put the folder back as it was". A request that may have reached another program cannot be put back. So recovery goes forwards instead: it sends the same request again, with the same key. The service does the work only if it had not done it already. If the service answers "done", the call is APPLIED. If it answers "refused", NOT APPLIED. If it does not answer, recovery does not decide anything: it stops with an error, and the run stays stopped until recovery is tried again and the service answers.
+
+**The problem.** This is the case D-020 kept for the bonus: "the uncertain call that cannot be rolled back". Design rule 5 says an uncertain call is never re-executed before it is reconciled. The rule had to be given a meaning for a tool with no rollback.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Send again with the same key; 2xx = APPLIED, 4xx = NOT APPLIED, no answer = still uncertain, stop | Taken | No moment at which the answer can be wrong. The re-send is the reconciliation, not a re-execution: the key makes it the same request |
+| Ask the service "did you apply key K?" and trust the answer | Discarded | "No" can be stale: the first request may still be in flight and land afterwards. The agent would then ask again under a new key, and the work would be done twice |
+| Mark it NOT APPLIED and let the agent decide | Discarded | Same double effect, with certainty whenever the answer (not the request) was lost |
+| Mark it APPLIED without contacting the service | Discarded | Loses the effect whenever the request never left |
+| Pause for a human every time | Discarded | Human approval is cut from v1; and with a key-honouring service the machine can settle it safely |
+| Keep retrying inside recovery until the service answers | Discarded | `agentos recover` would hang for as long as a service is down. A bounded number of attempts, then a clear error, leaves the choice of when to retry to the person |
+
+**What this means for the code.** `recovery::reconcile_external`. No workspace rollback, no checkpoint. The verdict text carries the first 200 characters of the service's answer, because a reconciled call has no stored output (the agent sees "applied" without the body; a known limit, same as for a reconciled `fs.write`). When there is no answer, `recover` exits with an error after `recovery.started` and without a `tool.reconciled`; D-056 already allows `recovery.started` to appear more than once. `run --resume` recovers first, so it stops the same way and the agent makes no further call. The guarantee rests on the service honouring keys; AgentOS cannot verify that from outside, and says so in the threat model.
+
+**Evidence.** `tests/external.rs::an_outage_leaves_the_call_uncertain_until_recovery_gets_an_answer`: the first request is applied and its answer lost; `recover` and `run --resume` both fail with "still UNCERTAIN", write no verdict and make no new call; once the service answers, the verdict is APPLIED with `"replayed":true`, and the service holds each order once. `killed_after_the_intent_recovery_sends_the_request`: killed at P2, the service had seen nothing, recovery sent the request, the step was not asked for again.
+
+**Concepts to learn.** Roll-forward versus roll-back recovery; at-least-once delivery plus idempotency equals effectively-once; why a status query is weaker than an idempotent retry.
+
+### D-079 — No answer during a live run stops the run with the intent open
+- **Date:** 2026-11-13
+- **Status:** Taken
+- **Area:** durability
+- **ADR:** 0012
+
+**In plain words.** A call can become uncertain without any crash: the service simply does not answer. The gateway tries up to `external.attempts` times (three by default), always with the same key. If there is still no answer, it does not write "completed" and does not write "failed", because it knows neither. It stops the whole run with an error message. The diary then looks exactly as it does after a crash at that point, and `agentos recover` deals with it by the rule of D-078.
+
+**The problem.** The log has two endings for a call that ran: COMPLETED and FAILED ("nothing was changed"). Neither is true after a timeout.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Stop the run with an error; the open intent is the record | Taken | No new state and no new record type: an existing, tested path (recovery) handles it. "Uncertain" stays what it was, an intent without an ending |
+| A new terminal state `UNCERTAIN` handed to the agent as a result | Discarded | The agent would continue past a call nobody has settled, which is what rule 5 forbids; and every reader of the log would need to learn a new ending |
+| Record FAILED after the last timeout | Discarded | A lie whenever the service did the work |
+| Retry for ever | Discarded | A run that hangs silently on a dead service |
+| Refused (4xx) also stops the run | Discarded | A refusal is definite and nothing was done, so it is an honest FAILED and the agent can react |
+
+**What this means for the code.** `gateway.rs::effect` returns a runtime error for `Answer::Unknown`; the process exits with status 1 and a message that names the call, the service, the number of requests and the two commands that continue. `agentos status` shows the execution as interrupted and `agentos trace` shows the call as UNCERTAIN. Worst-case time for one call is `attempts × timeout_ms`.
+
+**Evidence.** `an_outage_leaves_the_call_uncertain_until_recovery_gets_an_answer`: exit code 1 (not a signal), stderr contains "is UNCERTAIN: no answer after 3 request(s)", one intent and no ending in the log, `status` says interrupted.
+
+**Concepts to learn.** Fail-stop behaviour; why adding a state is more expensive than reusing one.
+
 ---
 
 ## Still open
@@ -1954,3 +2029,5 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | SSRF | Server-side request forgery: tricking a trusted program into making a network request the attacker chose |
 | Test double (fake) | A simple stand-in for a real outside system, built so tests can control and inspect it |
 | HTTP status classes | 2xx: done. 4xx: the request was refused. 5xx: the server had a problem (the work may or may not have happened) |
+| Roll forward | Finishing an interrupted action instead of undoing it; the only choice when undoing is impossible |
+| Effectively-once | The result of sending a request possibly several times to a receiver that ignores repeats of the same key |
