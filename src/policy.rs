@@ -27,6 +27,10 @@ pub enum PolicyError {
     RelativeMount(String),
     #[error("limits.{0} must be greater than zero")]
     ZeroLimit(&'static str),
+    #[error("external.service `{name}`: {reason}")]
+    External { name: String, reason: &'static str },
+    #[error("external.{0} must be greater than zero")]
+    ZeroExternal(&'static str),
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -38,6 +42,10 @@ pub struct Policy {
     pub exec: ExecRules,
     pub sandbox: SandboxRules,
     pub limits: Limits,
+    /// Services `ext.call` may reach (the v1 "Bonus"). Absent in the shipped
+    /// policies, so by default every `ext.call` is denied (design rule 2).
+    #[serde(default)]
+    pub external: ExternalRules,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -83,6 +91,62 @@ pub struct Limits {
     pub max_output_kb: u64,
     /// The run stops after this many tool calls.
     pub max_tool_calls: u64,
+}
+
+/// The `[external]` section: which outside services the gateway may call for
+/// the agent, and how long it waits for an answer.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalRules {
+    /// `[[external.service]]` entries. The agent names a service; it never
+    /// supplies a URL.
+    #[serde(rename = "service", default)]
+    pub services: Vec<ExternalService>,
+    /// How long one request may take before it counts as "no answer".
+    #[serde(default = "default_ext_timeout_ms")]
+    pub timeout_ms: u64,
+    /// How many times one call is sent (with the same idempotency key)
+    /// before the runtime gives up and leaves the call uncertain.
+    #[serde(default = "default_ext_attempts")]
+    pub attempts: u32,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalService {
+    pub name: String,
+    /// Must be `http://127.0.0.1:<port>[/path]`: the same machine, by number
+    /// (D-074). Anything else is refused when the policy is loaded.
+    pub url: String,
+}
+
+fn default_ext_timeout_ms() -> u64 {
+    2000
+}
+
+fn default_ext_attempts() -> u32 {
+    3
+}
+
+impl Default for ExternalRules {
+    fn default() -> Self {
+        ExternalRules { services: Vec::new(), timeout_ms: default_ext_timeout_ms(), attempts: default_ext_attempts() }
+    }
+}
+
+/// Is `url` exactly `http://127.0.0.1:<port>` or that followed by `/path`?
+/// A plain text check is right here: the policy file is trusted, and the
+/// point is to refuse a policy that names another machine, not to confine
+/// an attacker.
+fn is_loopback_url(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("http://127.0.0.1:") else { return false };
+    let port = rest.split('/').next().unwrap_or("");
+    let path_ok = rest.len() == port.len() || rest[port.len()..].starts_with('/');
+    path_ok
+        && !port.is_empty()
+        && port.bytes().all(|b| b.is_ascii_digit())
+        && port.parse::<u16>().map(|p| p != 0).unwrap_or(false)
+        && !url.bytes().any(|b| b.is_ascii_whitespace() || b.is_ascii_control() || b == b'@' || b == b'#')
 }
 
 /// What the policy says about one call, and which rule said it.
@@ -163,6 +227,24 @@ impl Policy {
                 return Err(PolicyError::ZeroLimit(name));
             }
         }
+        if self.external.timeout_ms == 0 {
+            return Err(PolicyError::ZeroExternal("timeout_ms"));
+        }
+        if self.external.attempts == 0 {
+            return Err(PolicyError::ZeroExternal("attempts"));
+        }
+        for (i, s) in self.external.services.iter().enumerate() {
+            let err = |reason| PolicyError::External { name: s.name.clone(), reason };
+            if s.name.is_empty() {
+                return Err(err("the name is empty"));
+            }
+            if self.external.services[..i].iter().any(|o| o.name == s.name) {
+                return Err(err("the name is used twice"));
+            }
+            if !is_loopback_url(&s.url) {
+                return Err(err("the url must be http://127.0.0.1:<port>[/path]"));
+            }
+        }
         Ok(())
     }
 
@@ -202,6 +284,16 @@ impl Policy {
             }
         }
         Decision::deny("no matching rule".into())
+    }
+
+    /// Decide an `ext.call`: allowed only if the policy lists a service with
+    /// exactly this name. Returns the service too, so the caller uses the
+    /// URL of the rule that allowed the call.
+    pub fn check_external(&self, service: &str) -> (Decision, Option<&ExternalService>) {
+        match self.external.services.iter().position(|s| s.name == service) {
+            Some(i) => (Decision::allow(format!("external.service[{i}] {service:?}")), Some(&self.external.services[i])),
+            None => (Decision::deny("no matching rule".into()), None),
+        }
     }
 
     /// The distinct program names that exec rules allow (`argv[0]` of each rule).
@@ -372,5 +464,56 @@ max_tool_calls = 20
         assert!(matches!(Policy::parse(&zero), Err(PolicyError::ZeroLimit("pids"))));
         let rel = DEMO.replace(r#"ro_mounts = ["/usr"]"#, r#"ro_mounts = ["usr"]"#);
         assert!(matches!(Policy::parse(&rel), Err(PolicyError::RelativeMount(_))));
+    }
+
+    fn with_external(extra: &str) -> Result<Policy, PolicyError> {
+        Policy::parse(&format!("{DEMO}\n{extra}"))
+    }
+
+    #[test]
+    fn external_services_are_denied_unless_listed() {
+        // No [external] section at all: nothing is allowed.
+        let none = demo();
+        let (d, s) = none.check_external("ledger");
+        assert_eq!(d, Decision { allowed: false, rule: "no matching rule".into() });
+        assert!(s.is_none());
+
+        let p = with_external("[external]\ntimeout_ms = 300\n[[external.service]]\nname = \"ledger\"\nurl = \"http://127.0.0.1:8099/apply\"\n").unwrap();
+        assert_eq!((p.external.timeout_ms, p.external.attempts), (300, 3), "attempts falls back to its default");
+        let (d, s) = p.check_external("ledger");
+        assert!(d.allowed);
+        assert_eq!(d.rule, r#"external.service[0] "ledger""#);
+        assert_eq!(s.unwrap().url, "http://127.0.0.1:8099/apply");
+        assert!(!p.check_external("Ledger").0.allowed, "names match exactly");
+        assert!(!p.check_external("").0.allowed);
+    }
+
+    #[test]
+    fn external_urls_must_be_loopback_by_number() {
+        for ok in ["http://127.0.0.1:1", "http://127.0.0.1:8099", "http://127.0.0.1:8099/", "http://127.0.0.1:65535/a/b?x=1"] {
+            assert!(is_loopback_url(ok), "{ok}");
+        }
+        for bad in [
+            "https://127.0.0.1:8099/",          // not plain http
+            "http://localhost:8099/",           // a name, not the number
+            "http://127.0.0.1/",                // no port
+            "http://127.0.0.1:0/",              // port 0
+            "http://127.0.0.1:99999/",          // not a port
+            "http://127.0.0.1:80@evil.example/", // user-info trick: the real host is evil.example
+            "http://127.0.0.1:8099.evil.example/",
+            "http://127.0.0.1:8099#x",
+            "http://127.0.0.2:8099/",
+            "http://example.com:80/",
+            "http://127.0.0.1:80 80/",
+        ] {
+            assert!(!is_loopback_url(bad), "{bad}");
+            let text = format!("[[external.service]]\nname = \"s\"\nurl = \"{bad}\"\n");
+            assert!(matches!(with_external(&text), Err(PolicyError::External { .. })), "{bad}");
+        }
+        let twice = "[[external.service]]\nname = \"s\"\nurl = \"http://127.0.0.1:1\"\n[[external.service]]\nname = \"s\"\nurl = \"http://127.0.0.1:2\"\n";
+        assert!(matches!(with_external(twice), Err(PolicyError::External { .. })));
+        assert!(matches!(with_external("[external]\nattempts = 0\n"), Err(PolicyError::ZeroExternal("attempts"))));
+        assert!(matches!(with_external("[external]\ntimeout_ms = 0\n"), Err(PolicyError::ZeroExternal("timeout_ms"))));
+        assert!(matches!(with_external("[external]\nretries = 3\n"), Err(PolicyError::Parse { .. })), "unknown keys are refused");
     }
 }

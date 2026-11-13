@@ -1727,6 +1727,55 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 **Concepts to learn.** Continuous integration; why one passing run of a randomized test is weaker evidence than it looks; flaky tests versus rare real bugs.
 
+### D-073 — The bonus starts: one external tool, `ext.call`, as a fifth gateway tool
+- **Date:** 2026-11-13
+- **Status:** Taken (carries out D-020)
+- **Area:** scope
+- **ADR:** none
+
+**In plain words.** Everything the agent could do in v0.1 happened inside the working folder, and a folder can be put back from a copy. The bonus adds the one thing a copy cannot undo: asking a service outside the runtime to do something. There is a new tool, `ext.call`, with two fields: the name of a service and a text payload. The gateway sends the payload to that service over HTTP. The service is a small fake written for this project. It is the "milestone 7" of the record, and it is not part of v0.1.
+
+**The problem.** D-020 allowed the bonus once v0.1 was tagged, and the v1 document describes it in two sentences: "a small local service with injectable timeouts, called through the gateway with an idempotency key". Prince asked for it on 2026-11-12, to start after CI was green (it has been since run 43385661105, D-072). The shape of the tool had to be chosen, and so did how much of the rest of the system it may touch.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| A fifth tool `ext.call {service, payload}` that goes through the same gateway steps as the other four | Taken | The bonus says "called through the gateway". Same log records, same intent-before-effect rule, same fault points |
+| Let `exec` reach the service (give the sandbox a network) | Discarded | Breaks "no network for commands", and an effect made by a command could not be given an idempotency key by the runtime |
+| A general HTTP tool (method, URL, headers chosen by the agent) | Discarded | Far more than "one fake external tool"; the agent choosing URLs is a data-leak tool |
+| Offer `ext.call` to the LLM agent as a fifth function | Discarded | The bonus is about recovery, which the scripted agent tests. The LLM's tool list stays at four; a model talked into calling an outside service is a different problem (human approval was cut from v1) |
+| Allow it in the shipped policies | Discarded | No rule means deny. The shipped `fhs` and `nix` policies have no `[external]` section, so `ext.call` is refused unless someone writes a policy for it |
+
+**What this means for the code.** `ToolCall::ExtCall`, a `[external]` policy section (D-074), `src/tools/ext.rs` for the HTTP request, a new branch in `gateway.rs` and in `recovery.rs`. No new dependency: `ureq` is already in the stack table for the LLM client. The CLI keeps its four commands. An `ext.call` does not change the workspace, so it takes no checkpoint. The v1 document's cut-list line "External tools … See Bonus" and its Bonus section get a status note; the five parts and the build order do not change.
+
+**Evidence.** None; this entry fixes the plan. The entries after it carry the evidence.
+
+**Concepts to learn.** Side effects that cannot be rolled back; why a tool boundary is also a security boundary.
+
+### D-074 — External services are named in the policy and must be on `127.0.0.1`
+- **Date:** 2026-11-13
+- **Status:** Taken
+- **Area:** policy
+- **ADR:** none
+
+**In plain words.** The agent never gives a web address. It says a name, such as `ledger`. The policy file has a list of names with their addresses, and a name that is not on the list is refused. Every address must start with `http://127.0.0.1:` and a port number, which means "a program on this same computer". A policy that names any other machine is refused when it is loaded.
+
+**The problem.** v1 says "network of any kind" is cut, and the threat model lists network egress as something protected. A tool that makes HTTP requests could quietly end that. The bonus only needs a *local* fake service.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| `[[external.service]]` with `name` and `url`; the URL must be `http://127.0.0.1:<port>[/path]`, checked at load | Taken | The runtime can still only talk to its own machine; a typo or a hostile policy edit cannot point it at the internet without the load failing |
+| Any `http://` or `https://` URL in the policy | Discarded | That is a real external tool. It needs its own decision (TLS, credentials, what data may leave), not a bonus |
+| Also accept `localhost` | Discarded | `localhost` is a name that is looked up; `/etc/hosts` or a resolver can make it mean another machine |
+| The agent passes the URL, the policy has allowed prefixes | Discarded | Prefix rules on URLs are easy to get wrong (`http://127.0.0.1:80@evil.example/` has host `evil.example`) |
+
+**What this means for the code.** `policy::ExternalRules { services, timeout_ms, attempts }`, with defaults 2000 ms and 3 attempts when the section leaves them out. `Policy::check_external(name)` returns the decision and the matching service. `is_loopback_url` is a text check; that is acceptable here because the policy file is trusted input, and it rejects the user-info trick above, `#`, spaces and a zero or missing port. The request itself is made with redirects off and with no proxy taken from the environment (D-075), so the loopback rule cannot be bypassed after the check.
+
+**Evidence.** `policy::tests::external_services_are_denied_unless_listed` and `external_urls_must_be_loopback_by_number` (4 accepted forms, 11 refused forms, a duplicate name, zero limits, an unknown key) pass.
+
+**Concepts to learn.** Loopback address; URL user-info (`user@host`); server-side request forgery (SSRF); why names need a lookup and numbers do not.
+
 ---
 
 ## Still open
@@ -1851,3 +1900,5 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | uid map | The table that says which user id inside a user namespace is which user id outside |
 | TOCTOU | "Time of check to time of use": a bug where something changes between checking it and using it |
 | WAL | Write-ahead log: changes go to a side file first, which makes crashes safe |
+| Loopback (`127.0.0.1`) | The address that always means "this same computer"; nothing sent to it leaves the machine |
+| SSRF | Server-side request forgery: tricking a trusted program into making a network request the attacker chose |
