@@ -1950,6 +1950,29 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 **Concepts to learn.** How `cargo test` runs tests in parallel threads; why a measurement needs the same conditions each time.
 
+### D-082 — The bonus counts as verified on `fhs` by one green CI run on the M7 commit
+- **Date:** 2026-11-13
+- **Status:** Taken (same rule as D-072, applied to the bonus)
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** The bonus was built and tested on NixOS. Prince pushed it, and GitHub's CI ran the same tests on Ubuntu 24.04. That run is green, so the documents now say the bonus passes on both systems, name the run, and keep the limits that D-072 set: one run, one Ubuntu version.
+
+**The problem.** D-072 said a commit counts as verified on `fhs` only when a CI run on that commit is green. The bonus commits were written after the run D-072 cites, so they were "not yet verified" until now.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Record the first green run on `1bc27da`, save both of its reports, and update the documents that said "not yet verified" for the bonus | Taken | The rule from D-072, unchanged |
+| Rewrite the M7 milestone document so it never says "not yet verified" | Discarded | Milestone documents keep their text; a dated note says what changed |
+| Run the mutation check in CI as well | Discarded | It needs deliberately broken source; it shows the harness can fail, which does not depend on the distribution |
+
+**What this means for the code.** No code change. `docs/results/recovery-ext-200-fhs.{md,json}` and `recovery-200-fhs-m7.json` are the results of record. The README bonus table has an `fhs` column; `docs/recovery-semantics.md` §9.4, `docs/threat-model.md` §7, the v1 document's Bonus status and CLAUDE.md cite the run. The M7 document has a dated note.
+
+**Evidence.** <https://github.com/pessimistic-zer0/agentos/actions/runs/43436681321>, commit `1bc27da`, conclusion `success`. External cells: 1,600 runs, 0 violations, 0 duplicated effects, 942/942 verdicts matching the service, 303 stops with the call left uncertain. The 24 original cells in the same run: 4,800 runs, 4,799 killed, 0 violations, 0 duplicated effects (`docs/results/recovery-ext-200-fhs.md`). The run's `make test` step, which includes `tests/external.rs`, passed. This was the first CI run on the bonus; unlike v0.1, it needed no fix.
+
+**Concepts to learn.** None new; see D-072.
+
 ---
 
 ## Still open
@@ -2016,6 +2039,7 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-13 | First version of the external cells compared recovery's verdict with the service even when the kill timer had fired late, inside a later file write. No failure was seen, but an applied `fs.write` would have been reported as a wrong verdict | A timer-based kill can land in a different call than the one aimed at; check which call was actually cut off before judging it |
 | 2026-11-13 | Full-size run with the bonus, `nix` preset, tests one at a time: external cells 1,600 runs, 0 invariant violations, 0 duplicated effects, 932 of 932 verdicts matching the service's record; the 24 original cells 4,800 runs, 4,791 killed, 0 violations, 0 duplicated effects, 3,895/3,895 verdicts correct, recovery p50 19.8 ms / p99 55.9 ms (`docs/results/recovery-ext-200-nix.md`, `recovery-200-nix-m7.md`) | Sending the same request again with the same key held at every kill point and for every kind of silence the fake service can produce. It says nothing about a service that ignores keys, and nothing yet about Ubuntu |
 | 2026-11-13 | CI run <https://github.com/pessimistic-zer0/agentos/actions/runs/43436681321> on the M7 commit `1bc27da` (Ubuntu 24.04, `fhs`): green. External cells: 1600 runs, 0 invariant violations, 0 duplicated effects, 942/942 cut-off calls classified correctly, 303 stops with the call left uncertain. The 24 original cells: 4800 runs, 4799 killed, 0 invariant violations, 0 duplicated effects, 3724/3724 classified correctly (`docs/results/recovery-ext-200-fhs.md`) | The bonus holds on the second system as well. One green run, as with D-072 |
+| 2026-11-13 | Commit `75c9178` cites D-082, but the entry itself was missing from it: the script that wrote the entry stopped on an undefined variable, and the commit command ran anyway. The entry was added in the next commit, not by rewriting history | Chain steps so that a failed one stops the rest (`&&`), and look at the diff before committing. The same kind of slip as the M1 series (Findings, 2026-11-11) |
 
 ---
 
