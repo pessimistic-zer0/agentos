@@ -16,8 +16,10 @@ test:            ## everything, with 3 kills per recovery cell (about 30 s)
 lint:
 	cargo clippy --all-targets
 
-eval-recovery:   ## suite 1: fault injection, RUNS kills per crash point and tool
-	AGENTOS_RECOVERY_RUNS=$(RUNS) $(SCOPE) cargo test --test recovery -- --nocapture
+eval-recovery:   ## suite 1: fault injection, RUNS kills per crash point and tool, then the external-call cells
+	# One test at a time: the two big tests each start 8 workers, and running
+	# them together would load the machine twice and blur the recovery times.
+	AGENTOS_RECOVERY_RUNS=$(RUNS) $(SCOPE) cargo test --test recovery -- --nocapture --test-threads=1
 
 eval-security:   ## suite 2: adversarial cases (0 escapes) and benign cases (0 false denials)
 	$(SCOPE) cargo test --test security --test benign -- --nocapture

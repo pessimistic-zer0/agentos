@@ -14,6 +14,11 @@
 //! stays quick; `make eval` uses 200). Parallel workers: `AGENTOS_RECOVERY_JOBS`
 //! (default 8). The report goes to stdout and to `target/recovery-report.json`.
 //!
+//! The second big test, `external_calls_hold_under_kills_and_timeouts`, does
+//! the same for the bonus tool `ext.call`, whose effect cannot be rolled
+//! back. Its oracle is the fake service's own record of what it applied.
+//! Report: `target/recovery-ext-report.json`.
+//!
 //! Needs a delegated cgroup:
 //!   systemd-run --user --scope -p Delegate=yes cargo test --test recovery
 
@@ -28,6 +33,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use agentos::blob::content_hash;
+use common::fake_service::{FakeService, Fault};
 use common::*;
 use serde_json::{json, Value};
 
@@ -595,4 +601,361 @@ fn recovery_holds_at_every_crash_point() {
     // The harness must actually have killed things, or it proves nothing.
     assert!(total_crashed * 2 > total_runs, "only {total_crashed} of {total_runs} runs were killed");
     let _ = Duration::ZERO;
+}
+
+// ---------------------------------------------------------------------------
+// The bonus: `ext.call`, an effect outside the workspace (D-080).
+//
+// Same idea as above, with a different oracle. The fake service runs inside
+// this test program, so it survives every kill of `agentos`, and its own
+// list of applied requests is the ground truth: each order must be there
+// exactly once at the end, whatever was killed or lost on the way.
+// ---------------------------------------------------------------------------
+
+const EXT_TIMEOUT_MS: u64 = 300;
+/// How long the service sits on a dropped request; longer than the timeout.
+const EXT_HOLD_MS: u64 = 500;
+/// The two `ext.call` steps: (payload, call id on a first run).
+const ORDERS: [(&str, u64); 2] = [("order-1", 2), ("order-2", 4)];
+
+fn ext_script_text() -> String {
+    let ext = |payload: &str| format!("[[step]]\ntool = \"ext.call\"\nservice = \"ledger\"\npayload = \"{payload}\"\n");
+    let exec = format!("[[step]]\ntool = \"exec\"\nargv = [\"python3\", \"-c\", '''\n{APPEND}\n''']\n");
+    format!(
+        "task = \"external-call workload\"\n[[step]]\ntool = \"fs.write\"\npath = \"src/a.txt\"\ncontent = \"A1\\n\"\n{}{exec}{}[[step]]\ntool = \"fs.write\"\npath = \"src/new.txt\"\ncontent = \"new\\n\"\n",
+        ext(ORDERS[0].0),
+        ext(ORDERS[1].0),
+    )
+}
+
+fn ext_policy_text(url: &str) -> String {
+    format!("{}\n[external]\ntimeout_ms = {EXT_TIMEOUT_MS}\nattempts = 3\n\n[[external.service]]\nname = \"ledger\"\nurl = \"{url}\"\n", policy_text())
+}
+
+/// Kill cells use the crash points that exist for a call without a
+/// checkpoint. The T cells kill nothing: the *service* misbehaves.
+const EXT_CELLS: [(&str, &str); 8] = [
+    ("P1", "killed before the intent"),
+    ("P2", "killed after the intent, before the request"),
+    ("P3", "killed while the request is in flight"),
+    ("P7", "killed after the completion record"),
+    ("P8", "killed at P2 or P3, then recovery killed too"),
+    ("T1", "request lost (no kill)"),
+    ("T2", "answer lost (no kill)"),
+    ("T3", "no answer to any attempt (no kill)"),
+];
+
+#[derive(Default, Clone)]
+struct ExtOutcome {
+    crashed: bool,
+    recovery_crashed: bool,
+    /// How often a run or a recovery stopped and left the call uncertain.
+    uncertain_stops: u32,
+    /// The cell's intended situation really occurred (see the asserts at the end).
+    as_intended: bool,
+    violations: Vec<String>,
+    duplicates: u64,
+    classified: Option<bool>,
+    recover_ms: Option<f64>,
+}
+
+fn intent_keys(events: &[Value]) -> BTreeSet<String> {
+    events.iter().filter(|e| e["type"] == "tool.intent").filter_map(|e| e["plan"]["key"].as_str().map(str::to_string)).collect()
+}
+
+fn says_uncertain(out: &std::process::Output) -> bool {
+    String::from_utf8_lossy(&out.stderr).contains("UNCERTAIN")
+}
+
+fn run_ext_trial(cell: &'static str, n: usize, seed: u64) -> ExtOutcome {
+    let mut rng = Rng::new(seed);
+    let mut out = ExtOutcome::default();
+    let svc = FakeService::start(0, Duration::from_millis(EXT_HOLD_MS)).unwrap();
+    let t = TestEnv::new(&format!("ext-{cell}-{n}")).with_policy_text(&ext_policy_text(&svc.url()));
+    let repo = t.root.join("repo");
+    make_repo(&repo);
+    let script = t.write_script("workload.toml", &ext_script_text());
+    let (payload, call) = ORDERS[rng.below(2) as usize];
+    let lost = |rng: &mut Rng| if rng.below(2) == 0 { Fault::DropBefore } else { Fault::DropAfter };
+
+    // What the service will do to requests for the chosen order, and where
+    // (if anywhere) the runtime is killed.
+    let first_point = match cell {
+        "P8" => Some(["P2", "P3"][rng.below(2) as usize]),
+        "P1" | "P2" | "P3" | "P7" => Some(cell),
+        _ => None,
+    };
+    let mut kill_delay_us = 1_500;
+    match (cell, first_point) {
+        (_, Some("P3")) => {
+            // Either a slow request (the kill lands before or after the
+            // service applies it) or a lost answer (the kill lands while the
+            // runtime waits or retries).
+            if rng.below(2) == 0 {
+                svc.inject(payload, &[Fault::DelayMs(20 + rng.below(60))]);
+                kill_delay_us = 100_000;
+            } else {
+                svc.inject(payload, &[Fault::DropAfter]);
+                kill_delay_us = 250_000; // inside the first wait (the timeout is 300 ms)
+            }
+        }
+        ("T1", _) => svc.inject(payload, &vec![Fault::DropBefore; 1 + rng.below(2) as usize]),
+        ("T2", _) => {
+            let mut f = vec![Fault::DropAfter];
+            if rng.below(2) == 0 {
+                f.insert(rng.below(2) as usize, Fault::DropBefore);
+            }
+            svc.inject(payload, &f);
+        }
+        ("T3", _) => {
+            // Three attempts, all unanswered; half the time the first
+            // recovery finds the service still down as well.
+            let rounds = 3 * (1 + rng.below(2) as usize);
+            let f: Vec<Fault> = (0..rounds).map(|_| lost(&mut rng)).collect();
+            svc.inject(payload, &f);
+        }
+        _ => match rng.below(3) {
+            0 => {}
+            1 => svc.inject(payload, &[Fault::DelayMs(rng.below(40))]),
+            _ => svc.inject(payload, &[Fault::DropAfter]),
+        },
+    }
+
+    let mut cmd = t.cmd(&["run", "--quiet", "--repo", repo.to_str().unwrap(), "--policy", t.policy.to_str().unwrap(), "--script", script.to_str().unwrap()]);
+    if let Some(point) = first_point {
+        cmd.env("AGENTOS_CRASH_AT", point).env("AGENTOS_CRASH_CALL", call.to_string()).env("AGENTOS_CRASH_DELAY_US", kill_delay_us.to_string());
+    }
+    let first = cmd.output().unwrap();
+    out.crashed = first.status.signal() == Some(9);
+    let finished_first_time = first.status.success();
+    if !out.crashed && !finished_first_time {
+        if says_uncertain(&first) {
+            out.uncertain_stops += 1;
+        } else {
+            out.violations.push(format!("run failed without being killed: {}", String::from_utf8_lossy(&first.stderr)));
+            return out;
+        }
+    }
+    out.as_intended = match cell {
+        "T1" | "T2" => finished_first_time,
+        "T3" => out.uncertain_stops == 1,
+        _ => out.crashed,
+    };
+    let id = std::fs::read_dir(t.state.join("executions")).unwrap().next().unwrap().unwrap().file_name().to_string_lossy().into_owned();
+    let dir = t.exec_dir(&id);
+    let work = dir.join("work");
+    let key_of = |cid: u64| format!("agentos-{id}-c{cid}");
+    let applied_at_service = |key: &str| svc.applied().iter().any(|a| a.key == key);
+
+    // --- Before recovery ---
+    let before = events_of(&t, &id);
+    // I1: no effect without a durable intent before it. Every request the
+    // service has received carries a key that an intent in the log names.
+    let keys = intent_keys(&before);
+    for s in svc.seen() {
+        if !keys.contains(&s.key) {
+            out.violations.push(format!("I1: the service received key {} but the log has no intent for it", s.key));
+        }
+    }
+    let (_, all_open) = pending(&before);
+    let cut_off = all_open.first().copied();
+    let requested = |events: &[Value]| events.iter().filter(|e| e["type"] == "tool.requested").count();
+
+    // --- Recover and resume until the run is finished. A recovery that gets
+    //     no answer stops and is simply tried again, as a person would. ---
+    let mut done = finished_first_time;
+    let mut first_recovery = true;
+    for _round in 0..8 {
+        if done {
+            break;
+        }
+        if cell == "P8" && first_recovery {
+            let st = t.cmd(&["recover", "--quiet", &id]).env("AGENTOS_CRASH_AT", "P8").env("AGENTOS_CRASH_HIT", (1 + rng.below(3)).to_string()).output().unwrap();
+            out.recovery_crashed = st.status.signal() == Some(9);
+        }
+        let calls_before = requested(&events_of(&t, &id));
+        let started = Instant::now();
+        let st = t.output(&["recover", "--quiet", &id]);
+        let ms = started.elapsed().as_secs_f64() * 1000.0;
+        if !st.status.success() {
+            if !says_uncertain(&st) {
+                out.violations.push(format!("recover failed: {}", String::from_utf8_lossy(&st.stderr)));
+                return out;
+            }
+            // Stopped without an answer: it must not have decided anything.
+            out.uncertain_stops += 1;
+            let now = events_of(&t, &id);
+            let (_, open_now) = pending(&now);
+            if open_now.is_empty() {
+                out.violations.push("recovery said a call was still uncertain, but every call in the log has an ending".into());
+            }
+            if requested(&now) != calls_before {
+                out.violations.push("I4: a new call was made while one was still uncertain".into());
+            }
+            continue;
+        }
+        if first_recovery {
+            out.recover_ms = Some(ms);
+            first_recovery = false;
+            let after = events_of(&t, &id);
+            check_invariants(&t, &id, &after, &mut out.violations, "after recovery");
+            // A P3 timer can fire after the chosen call has ended, inside a
+            // later file or command call; those have their own oracle above.
+            if let Some(cid) = cut_off.filter(|c| call_of(&after, *c)["tool"] == "ext.call") {
+                // The verdict against the service's own record.
+                let got = after.iter().find(|e| e["type"] == "tool.reconciled" && e["call_id"] == cid).map(|e| e["applied"] == true);
+                let truth = applied_at_service(&key_of(cid));
+                out.classified = Some(got == Some(truth));
+                if got != Some(truth) {
+                    out.violations.push(format!("call {cid}: the service says applied={truth}, recovery said {got:?}"));
+                }
+            }
+        }
+        let st = t.output(&["run", "--quiet", "--resume", &id]);
+        if st.status.success() {
+            done = true;
+        } else if says_uncertain(&st) {
+            out.uncertain_stops += 1; // a later call got no answer; go round again
+        } else {
+            out.violations.push(format!("resume failed: {}", String::from_utf8_lossy(&st.stderr)));
+            return out;
+        }
+    }
+    if !done {
+        out.violations.push("the run did not finish within 8 rounds of recover and resume".into());
+        return out;
+    }
+
+    // --- The end state. Wait first, so that a request that was still in
+    //     flight when its sender was killed has landed. ---
+    std::thread::sleep(Duration::from_millis(150));
+    let end = events_of(&t, &id);
+    check_invariants(&t, &id, &end, &mut out.violations, "at the end");
+    if !end.iter().any(|e| e["type"] == "execution.finished" && e["status"] == "completed") {
+        out.violations.push("the run did not complete".into());
+    }
+    let applied = svc.applied();
+    for (order, _) in ORDERS {
+        let count = applied.iter().filter(|a| a.payload == order).count() as u64;
+        if count == 0 {
+            out.violations.push(format!("final: {order} was never applied at the service (lost effect)"));
+        }
+        out.duplicates += count.saturating_sub(1);
+    }
+    let keys = intent_keys(&end);
+    for s in svc.seen() {
+        if !keys.contains(&s.key) {
+            out.violations.push(format!("I1 at the end: the service received key {} with no intent in the log", s.key));
+        }
+    }
+    // Every ending the log gives an ext.call must agree with the service.
+    for e in &end {
+        let says_applied = match e["type"].as_str().unwrap() {
+            "tool.completed" => true,
+            "tool.reconciled" => e["applied"] == true,
+            "tool.failed" | "tool.denied" => false,
+            _ => continue,
+        };
+        let cid = e["call_id"].as_u64().unwrap();
+        if call_of(&end, cid)["tool"] != "ext.call" {
+            continue;
+        }
+        if says_applied != applied_at_service(&key_of(cid)) {
+            out.violations.push(format!("call {cid}: the log says applied={says_applied}, the service disagrees"));
+        }
+    }
+    let (counter, side) = (lines(&work.join("src/counter.txt")), lines(&work.join("src/side.txt")));
+    if counter != 1 || side != 1 {
+        out.violations.push(format!("final: counter={counter} side={side}, expected 1 and 1"));
+    }
+    out.duplicates += counter.saturating_sub(1) + side.saturating_sub(1);
+    for (p, h) in [("src/a.txt", content_hash(b"A1\n")), ("src/new.txt", content_hash(b"new\n"))] {
+        if file_hash(&work.join(p)).as_deref() != Some(h.as_str()) {
+            out.violations.push(format!("final: {p} is not what an uninterrupted run writes"));
+        }
+    }
+    if out.violations.is_empty() {
+        let _ = std::fs::remove_dir_all(&t.root);
+    }
+    out
+}
+
+#[test]
+fn external_calls_hold_under_kills_and_timeouts() {
+    let runs: usize = std::env::var("AGENTOS_RECOVERY_RUNS").ok().and_then(|v| v.parse().ok()).unwrap_or(3);
+    let workers: usize = std::env::var("AGENTOS_RECOVERY_JOBS").ok().and_then(|v| v.parse().ok()).unwrap_or(8);
+    let jobs: Vec<(&'static str, usize)> = EXT_CELLS.iter().flat_map(|(cell, _)| (0..runs).map(move |n| (*cell, n))).collect();
+    let seed0 = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() as u64;
+    let next = AtomicUsize::new(0);
+    let results: Mutex<Vec<(&'static str, usize, ExtOutcome)>> = Mutex::new(Vec::new());
+    let started = Instant::now();
+    std::thread::scope(|s| {
+        for _ in 0..workers {
+            s.spawn(|| loop {
+                let i = next.fetch_add(1, Ordering::SeqCst);
+                let Some((cell, n)) = jobs.get(i) else { break };
+                let outcome = run_ext_trial(cell, *n, seed0.wrapping_add(i as u64 * 7919));
+                results.lock().unwrap().push((cell, *n, outcome));
+            });
+        }
+    });
+    let elapsed = started.elapsed();
+    let results = results.into_inner().unwrap();
+
+    let mut rows = Vec::new();
+    let mut times = Vec::new();
+    let mut not_as_intended = Vec::new();
+    let (mut t_viol, mut t_dup, mut t_runs, mut t_cls, mut t_cls_ok, mut t_stops) = (0, 0, 0, 0, 0, 0);
+    println!("\n| cell | what happens | runs | as intended | killed | recovery killed | stopped uncertain | violations | duplicated effects | cut-off calls classified correctly |");
+    println!("|---|---|---|---|---|---|---|---|---|---|");
+    for (cell, what) in EXT_CELLS {
+        let rs: Vec<&ExtOutcome> = results.iter().filter(|(c, _, _)| *c == cell).map(|(_, _, o)| o).collect();
+        let intended = rs.iter().filter(|o| o.as_intended).count();
+        let crashed = rs.iter().filter(|o| o.crashed).count();
+        let rcrashed = rs.iter().filter(|o| o.recovery_crashed).count();
+        let stops: u32 = rs.iter().map(|o| o.uncertain_stops).sum();
+        let viol: usize = rs.iter().map(|o| o.violations.len()).sum();
+        let dup: u64 = rs.iter().map(|o| o.duplicates).sum();
+        let cls = rs.iter().filter(|o| o.classified.is_some()).count();
+        let cls_ok = rs.iter().filter(|o| o.classified == Some(true)).count();
+        times.extend(rs.iter().filter_map(|o| o.recover_ms));
+        println!("| {cell} | {what} | {} | {intended} | {crashed} | {} | {stops} | {viol} | {dup} | {cls_ok}/{cls} |", rs.len(), if cell == "P8" { rcrashed.to_string() } else { "-".into() });
+        rows.push(json!({"cell": cell, "what": what, "runs": rs.len(), "as_intended": intended, "killed": crashed, "recovery_killed": rcrashed,
+            "stopped_uncertain": stops, "violations": viol, "duplicated_effects": dup, "classified": cls, "classified_correctly": cls_ok}));
+        if intended * 2 <= rs.len() {
+            not_as_intended.push(format!("{cell}: {intended} of {}", rs.len()));
+        }
+        t_viol += viol;
+        t_dup += dup;
+        t_runs += rs.len();
+        t_cls += cls;
+        t_cls_ok += cls_ok;
+        t_stops += stops;
+    }
+    times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let (p50, p99) = (percentile(&times, 0.50), percentile(&times, 0.99));
+    println!(
+        "\nexternal total: {t_runs} runs, {t_viol} invariant violations, {t_dup} duplicated effects, {t_cls_ok}/{t_cls} cut-off calls classified correctly, \
+         {t_stops} stops with the call left uncertain; successful `agentos recover` wall time (includes waiting for the service) p50 {p50:.1} ms, p99 {p99:.1} ms; \
+         harness took {:.0} s with {workers} workers",
+        elapsed.as_secs_f64()
+    );
+    for (cell, n, o) in results.iter().filter(|(_, _, o)| !o.violations.is_empty()).take(20) {
+        println!("VIOLATION {cell} #{n}: {:?}", o.violations);
+    }
+    let report = json!({
+        "runs_per_cell": runs, "preset": preset(), "rows": rows,
+        "total": {"runs": t_runs, "violations": t_viol, "duplicated_effects": t_dup, "classified": t_cls, "classified_correctly": t_cls_ok, "stopped_uncertain": t_stops},
+        "recover_ms": {"p50": p50, "p99": p99, "samples": times.len()},
+        "harness_seconds": elapsed.as_secs_f64(),
+    });
+    let path = repo_root().join("target/recovery-ext-report.json");
+    std::fs::write(&path, serde_json::to_string_pretty(&report).unwrap()).unwrap();
+    println!("report written to {}", path.display());
+
+    assert_eq!(t_viol, 0, "invariant violations");
+    assert_eq!(t_dup, 0, "duplicated side effects");
+    assert_eq!(t_cls_ok, t_cls, "misclassified cut-off calls");
+    // Each cell must really have produced its situation, or it proves nothing.
+    assert!(not_as_intended.is_empty(), "cells that mostly did not go as intended: {not_as_intended:?}");
 }

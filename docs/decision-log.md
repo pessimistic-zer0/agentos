@@ -1901,6 +1901,55 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 **Concepts to learn.** Fail-stop behaviour; why adding a state is more expensive than reusing one.
 
+### D-080 — Fault-injection cells for `ext.call`: five kill points, three service faults, the service as oracle
+- **Date:** 2026-11-13
+- **Status:** Taken (adds to D-057; the 24 original cells are unchanged)
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** The harness gets eight new cells for the external tool. In five of them the runtime is killed: before the intent, after the intent but before the request, while the request is in flight, after the call was recorded as done, and during recovery itself. In three nothing is killed and the *service* misbehaves instead: it loses a request, it loses an answer, or it answers nothing at all for a while. After each trial the harness looks at the fake service's own list of what it applied. Each of the two orders in the script must be on that list exactly once.
+
+**The problem.** D-057's oracle reads files in the workspace. An external effect is not in the workspace. And the bonus asks for "injectable timeouts", which are a kind of fault the P1–P8 list does not have: nothing dies, yet a call becomes uncertain.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| A second test in the same harness file, with its own workload (two `ext.call` steps between file and command steps), its own report, and the service's record as ground truth | Taken | The 24 original cells and their headline numbers stay exactly as they were; the service runs inside the test program, so it survives every kill and can be read directly |
+| Add `ext.call` as a fifth tool to the existing matrix | Discarded | Would change the 4,800-run result of record, and P4–P6 (around the checkpoint) do not exist for a call that takes no checkpoint |
+| Count duplicates by idempotency key | Discarded | The service never applies a key twice, so that count is always zero. A doubled effect shows up as the same *payload* under two keys; duplicates are counted by payload |
+| Treat a run or recovery that stops "uncertain" as a failure of the trial | Discarded | Stopping is the designed behaviour when no answer comes. The trial tries `recover` again, as a person would, and checks that the stopped attempt wrote no verdict and made no new call |
+| Only kill cells | Discarded | Would leave the "injectable timeouts" half of the bonus untested |
+
+**What this means for the code.** `tests/recovery/main.rs::external_calls_hold_under_kills_and_timeouts`, cells P1, P2, P3, P7, P8, T1 (request lost), T2 (answer lost), T3 (no answer to any attempt; half the time the first recovery gets none either). Checks per trial: every request the service ever received carries a key that an intent in the log names (invariant 1 for an outside effect); recovery's verdict equals the service's record; every ending the log gives an `ext.call` agrees with the service; each order applied exactly once at the end; plus the workspace invariants I2–I5 from D-057, since the workload also writes files and runs a command. Each cell also asserts that its situation really occurred in more than half its runs ("as intended"), so a cell cannot pass by not happening. The mid-flight cell uses a slow or answer-losing service so the kill lands inside the request. `make eval-recovery` runs both tests; the report is `target/recovery-ext-report.json`. Recovery times in these cells include waiting for the service and are reported separately from the v0.1 numbers.
+
+**Evidence.** Mutation check, 20 runs per cell (`docs/results/recovery-ext-mutations.md`): the real code gave 0 violations and 0 duplicated effects in 160 runs; "recovery says NOT APPLIED without asking" gave 48 duplicated effects; "a new key for every attempt" gave 70. The full-size run is recorded in the Findings row for it and in `docs/results/recovery-ext-200-nix.md`.
+
+**Concepts to learn.** Test oracles outside the system under test; mutation testing; why duplicates must be counted by meaning (payload), not by identifier (key).
+
+### D-081 — `make eval-recovery` runs its tests one at a time
+- **Date:** 2026-11-13
+- **Status:** Taken
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** The fault-injection test file now holds two big tests: the original 24 cells and the 8 external cells. Rust's test runner starts all tests of a file at the same moment. Each big test starts 8 worker threads of its own, so together they put 16 workers on the machine. The full-size command now tells the runner to run one test after the other.
+
+**The problem.** The recovery times of the v0.1 cells (p50, p99) are quoted in the README and compared between runs. With a second test loading the machine at the same time, a new run would not be comparable with the old ones. B-008 had just shown how much load changes timing.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| `--test-threads=1` for `make eval-recovery` | Taken | One flag; the same load per test as before the bonus |
+| Leave them running together | Discarded | Both passed that way (see Evidence), but the timing numbers would quietly change meaning |
+| Put the external cells in a separate test file and a separate make target | Discarded | They share the workload helpers and the invariant checks with the original cells; `make eval-recovery` should stay the one command for "does recovery hold" |
+| Also serialise plain `cargo test` | Discarded | With 3 runs per cell the overlap lasts seconds, and `make test` is about pass or fail, not timing |
+
+**What this means for the code.** One line in the `Makefile`. `make test` is unchanged. CI calls `make eval-recovery`, so it gets the same thing. Tests run in name order, so the external cells run before the 24 original cells.
+
+**Evidence.** The first full-size run after the bonus ran both tests together: external cells 1,600 runs, 0 violations, 0 duplicated effects; original cells 4,800 runs, 0 violations, 0 duplicated effects. Those reports are kept as `docs/results/recovery-ext-200-nix-concurrent.json` and `recovery-200-nix-m7-concurrent.json` and are not the result of record; the results of record are from the sequential run (`docs/results/recovery-ext-200-nix.md`, `docs/results/recovery-200-nix-m7.md`).
+
+**Concepts to learn.** How `cargo test` runs tests in parallel threads; why a measurement needs the same conditions each time.
+
 ---
 
 ## Still open
@@ -1963,6 +2012,9 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-13 | To reproduce a CI-only race locally, the harness was run with 64 workers on 12 CPUs. It showed the error within two minutes | Overloading the machine is a cheap way to widen scheduling windows; a quiet laptop hides them |
 | 2026-11-13 | After the B-008 fix, on the development machine (`nix`): lint clean, `make test` passes, full suite 4,800 runs, 4,799 killed, 0 violations, 0 duplicated effects, 3,932/3,932 verdicts correct, recovery p50 21.4 ms / p99 56.7 ms (`docs/results/recovery-200-nix-after-b008.json`) | Clean locally at normal load, as it also was after B-007; the 64-worker stress and the next CI run are the checks that count here |
 | 2026-11-13 | Third CI run, <https://github.com/pessimistic-zer0/agentos/actions/runs/43385661105> (commit `c3c9502`, Ubuntu 24.04, `fhs`): green. 4,800 kills, 0 violations, 0 duplicated effects, 3,756/3,756 verdicts correct; 32 security cases, 0 escapes; benign suite passes (`docs/results/recovery-200-fhs.md`, `security-fhs.md`). `agentos recover` p99 was 315.3 ms, against 97.1 and 108.3 ms in the two failed runs; the cause was not looked into | The second machine was worth more than more runs on the first: 14,400 kills at normal load on the laptop found neither bug, 9,600 on the runner found both. Portability testing is also a way of finding timing bugs |
+| 2026-11-13 | External-call harness, mutation check (20 runs per cell): with recovery answering "not applied" without asking the service, 48 duplicated effects and 37 of 90 verdicts wrong; with a fresh key per attempt, 70 duplicated effects, all 20 answer-lost runs doubled. Real code: 0 and 0 (`docs/results/recovery-ext-mutations.md`) | The two "obvious" designs (tell the agent it failed; retry on timeout) are exactly the ones that double an irreversible effect. In both, the cells where no request had left stayed clean, which is why such bugs survive light testing |
+| 2026-11-13 | First version of the external cells compared recovery's verdict with the service even when the kill timer had fired late, inside a later file write. No failure was seen, but an applied `fs.write` would have been reported as a wrong verdict | A timer-based kill can land in a different call than the one aimed at; check which call was actually cut off before judging it |
+| 2026-11-13 | Full-size run with the bonus, `nix` preset, tests one at a time: external cells 1,600 runs, 0 invariant violations, 0 duplicated effects, 932 of 932 verdicts matching the service's record; the 24 original cells 4,800 runs, 4,791 killed, 0 violations, 0 duplicated effects, 3,895/3,895 verdicts correct, recovery p50 19.8 ms / p99 55.9 ms (`docs/results/recovery-ext-200-nix.md`, `recovery-200-nix-m7.md`) | Sending the same request again with the same key held at every kill point and for every kind of silence the fake service can produce. It says nothing about a service that ignores keys, and nothing yet about Ubuntu |
 
 ---
 

@@ -32,12 +32,14 @@ jobs:
           sleep 3
       - name: Lint
         run: cargo clippy --all-targets -- -D warnings
-      - name: Tests (unit, vertical slice, security, benign, LLM mock, quick recovery)
+      - name: Tests (unit, vertical slice, security, benign, LLM mock, external tool, quick recovery)
         run: make test
-      - name: Fault injection, 200 kills per cell
+      - name: Fault injection, 200 runs per cell (24 v0.1 cells, 8 external-call cells)
         run: make eval-recovery
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: recovery-report-fhs
-          path: target/recovery-report.json
+          path: |
+            target/recovery-report.json
+            target/recovery-ext-report.json

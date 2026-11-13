@@ -1,0 +1,124 @@
+{
+  "harness_seconds": 151.837473125,
+  "preset": "nix",
+  "recover_ms": {
+    "p50": 19.279078000000002,
+    "p99": 328.306625,
+    "samples": 1187
+  },
+  "rows": [
+    {
+      "as_intended": 200,
+      "cell": "P1",
+      "classified": 200,
+      "classified_correctly": 200,
+      "duplicated_effects": 0,
+      "killed": 200,
+      "recovery_killed": 0,
+      "runs": 200,
+      "stopped_uncertain": 0,
+      "violations": 0,
+      "what": "killed before the intent"
+    },
+    {
+      "as_intended": 200,
+      "cell": "P2",
+      "classified": 200,
+      "classified_correctly": 200,
+      "duplicated_effects": 0,
+      "killed": 200,
+      "recovery_killed": 0,
+      "runs": 200,
+      "stopped_uncertain": 0,
+      "violations": 0,
+      "what": "killed after the intent, before the request"
+    },
+    {
+      "as_intended": 192,
+      "cell": "P3",
+      "classified": 152,
+      "classified_correctly": 152,
+      "duplicated_effects": 0,
+      "killed": 192,
+      "recovery_killed": 0,
+      "runs": 200,
+      "stopped_uncertain": 0,
+      "violations": 0,
+      "what": "killed while the request is in flight"
+    },
+    {
+      "as_intended": 200,
+      "cell": "P7",
+      "classified": 0,
+      "classified_correctly": 0,
+      "duplicated_effects": 0,
+      "killed": 200,
+      "recovery_killed": 0,
+      "runs": 200,
+      "stopped_uncertain": 0,
+      "violations": 0,
+      "what": "killed after the completion record"
+    },
+    {
+      "as_intended": 195,
+      "cell": "P8",
+      "classified": 180,
+      "classified_correctly": 180,
+      "duplicated_effects": 0,
+      "killed": 195,
+      "recovery_killed": 192,
+      "runs": 200,
+      "stopped_uncertain": 0,
+      "violations": 0,
+      "what": "killed at P2 or P3, then recovery killed too"
+    },
+    {
+      "as_intended": 200,
+      "cell": "T1",
+      "classified": 0,
+      "classified_correctly": 0,
+      "duplicated_effects": 0,
+      "killed": 0,
+      "recovery_killed": 0,
+      "runs": 200,
+      "stopped_uncertain": 0,
+      "violations": 0,
+      "what": "request lost (no kill)"
+    },
+    {
+      "as_intended": 200,
+      "cell": "T2",
+      "classified": 0,
+      "classified_correctly": 0,
+      "duplicated_effects": 0,
+      "killed": 0,
+      "recovery_killed": 0,
+      "runs": 200,
+      "stopped_uncertain": 0,
+      "violations": 0,
+      "what": "answer lost (no kill)"
+    },
+    {
+      "as_intended": 200,
+      "cell": "T3",
+      "classified": 200,
+      "classified_correctly": 200,
+      "duplicated_effects": 0,
+      "killed": 0,
+      "recovery_killed": 0,
+      "runs": 200,
+      "stopped_uncertain": 288,
+      "violations": 0,
+      "what": "no answer to any attempt (no kill)"
+    }
+  ],
+  "runs_per_cell": 200,
+  "total": {
+    "classified": 932,
+    "classified_correctly": 932,
+    "duplicated_effects": 0,
+    "runs": 1600,
+    "stopped_uncertain": 288,
+    "violations": 0
+  }
+}
