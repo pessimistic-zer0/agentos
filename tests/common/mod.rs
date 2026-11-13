@@ -2,6 +2,8 @@
 //! folder and drives the real `agentos` binary.
 #![allow(dead_code)] // each test file uses a different subset
 
+pub mod fake_service;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 

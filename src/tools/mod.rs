@@ -4,6 +4,7 @@
 //! to the gateway, and the gateway decides, logs and dispatches it.
 
 pub mod exec;
+pub mod ext;
 pub mod fs;
 
 use serde::{Deserialize, Serialize};

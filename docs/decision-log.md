@@ -1776,6 +1776,56 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 **Concepts to learn.** Loopback address; URL user-info (`user@host`); server-side request forgery (SSRF); why names need a lookup and numbers do not.
 
+### D-075 — The fake service: a std-only HTTP server with three faults
+- **Date:** 2026-11-13
+- **Status:** Taken
+- **Area:** tooling
+- **ADR:** none
+
+**In plain words.** The "outside service" is about 250 lines of plain Rust in `tests/common/fake_service.rs`. It listens on `127.0.0.1`, takes `POST /apply` with an `Idempotency-Key` header, remembers what it applied, and never applies the same key twice. It can be told to misbehave in three ways for chosen requests: answer late, lose the request (do nothing, never answer), or lose the answer (do it, never answer). The tests start it inside the test program; `examples/fake_service.rs` runs the same code as a program for trying things by hand.
+
+**The problem.** The bonus asks for "a small local service with injectable timeouts". It must outlive the runtime (it is "outside"), the tests must be able to read what it really did without asking the runtime, and it must not add a dependency.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Hand-written HTTP on `std::net`, state in memory, one file used by the tests and by an example program | Taken | No dependency; the test process owns the service, so killing `agentos` never kills it, and the tests read its record directly as ground truth |
+| A second binary in `src/bin/` | Discarded | It would ship as part of AgentOS; a test double belongs with the tests |
+| A web framework or `tiny_http` as a dev-dependency | Discarded | A new dependency for four routes |
+| A Python `http.server` script | Discarded | The harness could not read its state in-process, and CI timing would depend on Python start-up |
+| Persist the service's state to disk and kill the service too | Discarded | Whether a *service* survives its own crash is the service's problem, not AgentOS's; the bonus is about the caller |
+| Faults chosen by position ("the 2nd request fails") | Discarded | Faults are queued per payload instead, so a test can aim at one step of a script however many requests came before |
+
+**What this means for the code.** `FakeService::start(port, hold)`, `inject(payload, &[Fault])`, `applied()`, `seen()`. `Fault::{DelayMs, DropBefore, DropAfter}`. A dropped request keeps its connection open for `hold` and then closes it, so the caller sees a timeout, not an error page. The check "was this key applied?" and the apply are one step under one lock; that is the whole idempotency promise. Extra rules that make refusals testable: a body starting with `reject` gets 422, and a reused key with a different body gets 409; neither applies anything. `GET /state` shows what was applied.
+
+**Evidence.** `tests/external.rs`: `the_service_applies_each_key_once_and_replays_its_answer`, `refusals_are_definite_and_apply_nothing`, `a_lost_request_and_a_lost_answer_look_the_same_from_outside` pass.
+
+**Concepts to learn.** Test doubles (fakes); HTTP request and response format; idempotency keys as used by payment APIs; fault injection on the *other* side of a call.
+
+### D-076 — What an answer proves: 2xx applied, 4xx refused, everything else unknown
+- **Date:** 2026-11-13
+- **Status:** Taken
+- **Area:** durability
+- **ADR:** none
+
+**In plain words.** After sending a request, the runtime puts the result in one of three boxes. The service said yes (HTTP 200–299): it was done. The service said no (400–499): it was not done. Anything else, such as no answer in time, a broken connection, a server error, or nothing listening: the runtime does not know. "Does not know" is never recorded as "failed", because a request that timed out may still have been carried out.
+
+**The problem.** The log's FAILED record means "nothing was changed" (D-040). A timeout cannot honestly be written as FAILED. A lost request and a lost answer are indistinguishable to the caller.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Three outcomes: applied / refused / unknown; only an HTTP status from the service counts as definite | Taken | One rule with no special cases; every "unknown" is handled the same way (send again with the same key, D-078) |
+| Treat "connection refused" as definite failure, because nothing was sent | Discarded | True in theory, but it means reading error kinds out of the HTTP library, and a wrong guess turns "maybe done" into "not done". The cost of calling it unknown is only a retry |
+| Treat HTTP 5xx as failure | Discarded | A server can fail after doing the work |
+| Treat a timeout as failure and let the agent decide | Discarded | This is the bug the bonus exists to show: the agent retries, and the effect happens twice |
+
+**What this means for the code.** `tools/ext.rs`: `Answer::{Applied, Refused, Unknown}`, `send`, and `send_until_answered` (same key every time, at most `attempts` requests). Redirects are never followed and a proxy from the environment is never used, so a request allowed for `127.0.0.1` cannot end up anywhere else; a redirect counts as unknown. The answer body is cut at `limits.max_output_kb`.
+
+**Evidence.** `tests/external.rs`: `send_until_answered_retries_with_the_same_key_and_gives_up_as_unknown`, `nobody_listening_is_unknown_not_failed`, `a_redirect_is_not_followed` (a server that redirects to the fake service; the service sees no request), `long_answers_are_cut_at_the_limit` pass. The proxy setting is by reading ureq 3.5.1's `config.rs` (its default takes a proxy from the environment); it has no test.
+
+**Concepts to learn.** The two-generals problem in its everyday form (a lost request and a lost answer look the same); HTTP status classes; why "unknown" is a real third state.
+
 ---
 
 ## Still open
@@ -1902,3 +1952,5 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | WAL | Write-ahead log: changes go to a side file first, which makes crashes safe |
 | Loopback (`127.0.0.1`) | The address that always means "this same computer"; nothing sent to it leaves the machine |
 | SSRF | Server-side request forgery: tricking a trusted program into making a network request the attacker chose |
+| Test double (fake) | A simple stand-in for a real outside system, built so tests can control and inspect it |
+| HTTP status classes | 2xx: done. 4xx: the request was refused. 5xx: the server had a problem (the work may or may not have happened) |
