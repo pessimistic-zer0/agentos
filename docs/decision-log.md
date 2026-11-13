@@ -942,7 +942,7 @@ Which nixpkgs commit to pin was a second, smaller choice:
 | A PID file | Discarded | Stays behind after `kill -9`; PIDs are reused |
 | No lock | Discarded | Two writers on one log and one workspace |
 
-**What this means for the code.** `runtime::lock_execution` and `is_locked`. `File::try_lock` became stable in Rust 1.89, so `Cargo.toml` sets `rust-version = "1.89"`.
+**What this means for the code.** `runtime::lock_execution` and `is_locked` (since D-071, taking the lock retries for up to three seconds). `File::try_lock` became stable in Rust 1.89, so `Cargo.toml` sets `rust-version = "1.89"`.
 
 **Evidence.** None yet; the M3 harness relies on it.
 
@@ -1676,6 +1676,32 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 **Concepts to learn.** Orphan processes and re-parenting; `PR_SET_PDEATHSIG`; `fork`/`exec` and `pre_exec`; async-signal-safety.
 
+### D-071 — Taking the execution lock waits up to three seconds
+- **Date:** 2026-11-13
+- **Status:** Taken (adds to D-039, which stays)
+- **Area:** durability
+- **ADR:** none
+
+**In plain words.** Only one `agentos` process may work on an execution, and a lock file enforces that. After a kill, the lock should be free at once. It turned out that a child process of the dead runtime can hold a copy of the lock for a few thousandths of a second more. So when the lock is taken, "someone else has it" is now tried again for up to three seconds before it is reported as an error.
+
+**The problem.** Bug B-008, found by the second CI run: 3 of 4,800 recoveries were refused with "in use by another agentos process". The fix for B-007 (D-070) had made the gap between `fork` and `exec` longer, and in that gap a child holds a copy of every open file of its parent, the lock file included.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Retry the lock for a bounded time (3 s, every 5 ms) | Taken | Covers every child the runtime starts (`cp`, the sandbox helper, `systemctl`, `diff`), not just one; a few lines in one function; a runtime that is really running is still detected |
+| Take D-070 back | Discarded | Brings B-007 back |
+| Start `cp` through a small hidden helper mode of the `agentos` binary that sets the death signal and then runs `cp`, so the fast start path is kept | Discarded | Narrows the gap again but does not remove it, and needs the binary's path passed into checkpoint and recovery code |
+| A POSIX record lock (`fcntl`) instead of `flock`; those are not copied to children | Discarded | Removes the cause, but such a lock is dropped when the process closes *any* handle on the file, a well-known trap; a bigger change to D-039 than the problem needs |
+| Copy folders inside the runtime (no child process) | Discarded | Same reason as in D-070: a large change |
+| Have the harness wait before running `recover` | Discarded | That would hide the bug from the test, and a person running `agentos recover` right after a crash would still hit it |
+
+**What this means for the code.** `runtime::lock_execution`, used by `recover`, `run --resume` and new runs. Trying to recover an execution that is really still running now takes three seconds to fail instead of failing at once. `is_locked` (used by `status` to say "running" or "interrupted") does not wait, so `status` can say "running" for an instant after a kill. D-039's choice of `flock` is unchanged.
+
+**Evidence.** CI run 43375633929 (`docs/results/recovery-200-fhs-run2-failed.md`). Local stress with 64 workers: 4 violations in 1,440 runs before this change, 0 in 2,880 at tag `v0.1`, 0 in 2,880 after it (`docs/results/b008-stress.md`). Test `recovery_waits_for_a_lock_that_is_about_to_be_released`: a lock held throughout is still refused, after at least 2 s and without any recovery record being written; a lock released after 0.4 s is waited for.
+
+**Concepts to learn.** `fork` and inherited file descriptors; close-on-exec; `flock` versus `fcntl` locks; why Rust's `Command` has a fast path (`posix_spawn`) and when it cannot use it.
+
 ---
 
 ## Still open
@@ -1685,7 +1711,7 @@ Which nixpkgs commit to pin was a second, smaller choice:
 | Project name | See D-023. Still open at v0.1 (D-068) |
 | ~~License~~ | Answered by D-069: dual MIT OR Apache-2.0 |
 | ~~Public repo from day one, or after v0.1?~~ | Answered by events: Prince pushed `main` to GitHub on 2026-11-12, after v0.1 was tagged locally |
-| Does the `fhs` preset pass on Ubuntu? | Not yet. Prince pushed on 2026-11-12. The first CI run passed lint and `make test` with `fhs`, and failed the 200-kill suite with 1 violation (B-007, D-070). Still "not yet verified" until a run is green |
+| Does the `fhs` preset pass on Ubuntu? | Not yet. Prince pushed on 2026-11-12. The first CI run passed lint and `make test` with `fhs`, and failed the 200-kill suite with 1 violation (B-007, D-070). The second run (with the B-007 fix) failed with 3 violations of a new kind (B-008, D-071), brought in by that fix. Still "not yet verified" until a run is green |
 | ~~Which LLM for the demo: local llama.cpp server or a hosted API?~~ | Answered by D-058: local llama.cpp |
 
 ---
@@ -1733,6 +1759,9 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-12 | First CI run (Ubuntu 24.04, `fhs`, run 43274718767). The workflow's uncertain parts (systemd user session for cgroup delegation, the AppArmor user-namespace setting; D-065) worked unchanged. Lint and `make test` passed. The 200-kill suite failed: 1 violation in 4,800 runs, a `.tmp-cp-0002` folder left after recovery (`docs/results/recovery-200-fhs-run1-failed.md`) | The part expected to break did not; the part believed proven did. The `cp` child outlived the killed runtime (B-007, D-070) |
 | 2026-11-12 | B-007 could not be seen in 9,600 local kills, so it was made certain instead of likely: a `cp` wrapper that sleeps 0.4 s turned a sub-millisecond window into a test that failed every time before the fix and passes after | To reproduce a rare race, slow down one side of it on purpose |
 | 2026-11-12 | After the B-007 fix, on the development machine (`nix`): lint clean, `make test` passes, and the full suite gives 4,800 runs, 4,788 killed, 0 violations, 0 duplicated effects, 3,887/3,887 verdicts correct, recovery p50 19.5 ms / p99 48.7 ms (`docs/results/recovery-200-nix-after-b007.json`) | The fix did not disturb anything locally. It says nothing yet about Ubuntu: that needs a push and a new CI run |
+| 2026-11-13 | Second CI run (run 43375633929, with the B-007 fix): the B-007 leftover was gone, but 3 of 4,800 recoveries were refused with "in use by another agentos process" (`docs/results/recovery-200-fhs-run2-failed.md`). Reproduced locally with 64 workers; tag `v0.1` did not show it (`docs/results/b008-stress.md`) | The fix had created the next bug (B-008): `pre_exec` makes Rust use `fork`, and a forked child that has not run yet holds a copy of the parent's lock. Rerun the whole suite after every change to crash handling, on the machine that found the bug |
+| 2026-11-13 | To reproduce a CI-only race locally, the harness was run with 64 workers on 12 CPUs. It showed the error within two minutes | Overloading the machine is a cheap way to widen scheduling windows; a quiet laptop hides them |
+| 2026-11-13 | After the B-008 fix, on the development machine (`nix`): lint clean, `make test` passes, full suite 4,800 runs, 4,799 killed, 0 violations, 0 duplicated effects, 3,932/3,932 verdicts correct, recovery p50 21.4 ms / p99 56.7 ms (`docs/results/recovery-200-nix-after-b008.json`) | Clean locally at normal load, as it also was after B-007; the 64-worker stress and the next CI run are the checks that count here |
 
 ---
 
@@ -1776,6 +1805,7 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | `openat2` | A way to open a file that lets the kernel refuse any path leaving a given folder |
 | Oracle (testing) | The part of a test that knows the right answer, ideally worked out without the code under test |
 | Orphan checkpoint | A checkpoint folder on disk that no log record names; left by a crash, deleted by recovery |
+| `fork` / `exec` | `fork` makes a copy of the running process; `exec` turns a process into another program. Starting a program is the two together, and the copy exists for a moment in between |
 | Orphan process | A process whose parent has died; it keeps running under a new parent unless something stops it |
 | p50 / p95 / p99 | The time that 50%, 95%, 99% of samples stayed under; p99 shows the slow cases the average hides |
 | Page cache | Memory where the kernel holds file data before writing it to disk |

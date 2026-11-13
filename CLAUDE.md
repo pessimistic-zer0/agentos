@@ -124,7 +124,7 @@ v0.1 tagged locally (tags `m0`–`m6`, `v0.1`). All seven milestones are done on
 
 Open, and only Prince can close them:
 
-- Push. `main` is on GitHub (`pessimistic-zer0/agentos`); the tags are not. The `fhs` preset is still not yet verified: the first CI run (43274718767) failed the 200-kill suite with 1 violation, bug B-007, fixed in D-070. The fix needs a push and a green run. Only then update the documents that say "not yet verified".
+- Push. `main` is on GitHub (`pessimistic-zer0/agentos`); the tags are not. The `fhs` preset is still not yet verified: two CI runs failed the 200-kill suite (43274718767: B-007, fixed in D-070; 43375633929: B-008, brought in by that fix, fixed in D-071). The B-008 fix needs a push and a green run. Only then update the documents that say "not yet verified".
 - Decide the project name (D-023, D-068). The license is settled: dual MIT OR Apache-2.0 (D-069).
 - The "Bonus" section of the v1 document has not been started. It may start now that v0.1 is tagged, but only if Prince asks for it.
 

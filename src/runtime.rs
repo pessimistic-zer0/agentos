@@ -32,15 +32,32 @@ pub struct RunSummary {
     pub patch: PathBuf,
 }
 
+/// How long to wait for the lock when someone else holds it (see below).
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+
 /// Hold an exclusive lock on the execution, so two runtimes never work on the
 /// same one at once. The kernel drops the lock when the process dies, even on
 /// `kill -9`, so a crashed run never leaves a stale lock behind.
+///
+/// One catch (bug B-008): the lock belongs to the open file, and a child
+/// process gets a copy of every open file at `fork`. The copy is closed when
+/// the child becomes another program (`exec`), but for the moment in between
+/// the child holds the lock too. If the runtime is killed in that moment, the
+/// lock outlives it until the child is next given CPU time and exits or
+/// execs. So "held by someone else" is retried for a short while before it is
+/// reported. A runtime that is really alive still holds the lock afterwards.
 pub fn lock_execution(dir: &ExecDir) -> Result<File> {
     let f = File::options().create(true).truncate(false).write(true).open(dir.lock())?;
-    match f.try_lock() {
-        Ok(()) => Ok(f),
-        Err(std::fs::TryLockError::WouldBlock) => bail!("execution {} is in use by another agentos process", dir.id),
-        Err(std::fs::TryLockError::Error(e)) => Err(e.into()),
+    let deadline = std::time::Instant::now() + LOCK_WAIT;
+    loop {
+        match f.try_lock() {
+            Ok(()) => return Ok(f),
+            Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(std::fs::TryLockError::WouldBlock) => bail!("execution {} is in use by another agentos process", dir.id),
+            Err(std::fs::TryLockError::Error(e)) => return Err(e.into()),
+        }
     }
 }
 

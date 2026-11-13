@@ -1,0 +1,284 @@
+{
+  "harness_seconds": 1458.094944586,
+  "preset": "fhs",
+  "recover_ms": {
+    "p50": 34.672286,
+    "p99": 108.31939,
+    "samples": 4800
+  },
+  "rows": [
+    {
+      "classified": 200,
+      "classified_correctly": 200,
+      "duplicated_effects": 0,
+      "killed": 200,
+      "point": "P1",
+      "recovery_killed": 0,
+      "runs": 200,
+      "tool": "fs.read",
+      "violations": 0
+    },
+    {
+      "classified": 200,
+      "classified_correctly": 200,
+      "duplicated_effects": 0,
+      "killed": 200,
+      "point": "P1",
+      "recovery_killed": 0,
+      "runs": 200,
+      "tool": "fs.list",
+      "violations": 0
+    },
+    {
+      "classified": 200,
+      "classified_correctly": 200,
+      "duplicated_effects": 0,
+      "killed": 200,
+      "point": "P1",
+      "recovery_killed": 0,
+      "runs": 200,
+      "tool": "fs.write",
+      "violations": 0
+    },
+    {
+      "classified": 200,
+      "classified_correctly": 200,
+      "duplicated_effects": 0,
+      "killed": 200,
+      "point": "P1",
+      "recovery_killed": 0,
+      "runs": 200,
+      "tool": "exec",
+      "violations": 0
+    },
+    {
+      "classified": 200,
+      "classified_correctly": 200,
+      "duplicated_effects": 0,
+      "killed": 200,
+      "point": "P2",
+      "recovery_killed": 0,
+      "runs": 200,
+      "tool": "fs.read",
+      "violations": 0
+    },
+    {
+      "classified": 200,
+      "classified_correctly": 200,
+      "duplicated_effects": 0,
+      "killed": 200,
+      "point": "P2",
+      "recovery_killed": 0,
+      "runs": 200,
+      "tool": "fs.list",
+      "violations": 0
+    },
+    {
+      "classified": 200,
+      "classified_correctly": 200,
+      "duplicated_effects": 0,
+      "killed": 200,
+      "point": "P2",
+      "recovery_killed": 0,
+      "runs": 200,
+      "tool": "fs.write",
+      "violations": 0
+    },
+    {
+      "classified": 200,
+      "classified_correctly": 200,
+      "duplicated_effects": 0,
+      "killed": 200,
+      "point": "P2",
+      "recovery_killed": 0,
+      "runs": 200,
+      "tool": "exec",
+      "violations": 0
+    },
+    {
+      "classified": 46,
+      "classified_correctly": 46,
+      "duplicated_effects": 0,
+      "killed": 200,
+      "point": "P3",
+      "recovery_killed": 0,
+      "runs": 200,
+      "tool": "fs.read",
+      "violations": 0
+    },
+    {
+      "classified": 55,
+      "classified_correctly": 55,
+      "duplicated_effects": 0,
+      "killed": 200,
+      "point": "P3",
+      "recovery_killed": 0,
+      "runs": 200,
+      "tool": "fs.list",
+      "violations": 0
+    },
+    {
+      "classified": 198,
+      "classified_correctly": 198,
+      "duplicated_effects": 0,
+      "killed": 200,
+      "point": "P3",
+      "recovery_killed": 0,
+      "runs": 200,
+      "tool": "fs.write",
+      "violations": 2
+    },
+    {
+      "classified": 195,
+      "classified_correctly": 195,
+      "duplicated_effects": 0,
+      "killed": 200,
+      "point": "P3",
+      "recovery_killed": 0,
+      "runs": 200,
+      "tool": "exec",
+      "violations": 0
+    },
+    {
+      "classified": 200,
+      "classified_correctly": 200,
+      "duplicated_effects": 0,
+      "killed": 200,
+      "point": "P4",
+      "recovery_killed": 0,
+      "runs": 200,
+      "tool": "fs.write",
+      "violations": 0
+    },
+    {
+      "classified": 200,
+      "classified_correctly": 200,
+      "duplicated_effects": 0,
+      "killed": 200,
+      "point": "P4",
+      "recovery_killed": 0,
+      "runs": 200,
+      "tool": "exec",
+      "violations": 0
+    },
+    {
+      "classified": 199,
+      "classified_correctly": 199,
+      "duplicated_effects": 0,
+      "killed": 200,
+      "point": "P5",
+      "recovery_killed": 0,
+      "runs": 200,
+      "tool": "fs.write",
+      "violations": 1
+    },
+    {
+      "classified": 200,
+      "classified_correctly": 200,
+      "duplicated_effects": 0,
+      "killed": 200,
+      "point": "P5",
+      "recovery_killed": 0,
+      "runs": 200,
+      "tool": "exec",
+      "violations": 0
+    },
+    {
+      "classified": 200,
+      "classified_correctly": 200,
+      "duplicated_effects": 0,
+      "killed": 200,
+      "point": "P6",
+      "recovery_killed": 0,
+      "runs": 200,
+      "tool": "fs.write",
+      "violations": 0
+    },
+    {
+      "classified": 200,
+      "classified_correctly": 200,
+      "duplicated_effects": 0,
+      "killed": 200,
+      "point": "P6",
+      "recovery_killed": 0,
+      "runs": 200,
+      "tool": "exec",
+      "violations": 0
+    },
+    {
+      "classified": 0,
+      "classified_correctly": 0,
+      "duplicated_effects": 0,
+      "killed": 200,
+      "point": "P7",
+      "recovery_killed": 0,
+      "runs": 200,
+      "tool": "fs.read",
+      "violations": 0
+    },
+    {
+      "classified": 0,
+      "classified_correctly": 0,
+      "duplicated_effects": 0,
+      "killed": 200,
+      "point": "P7",
+      "recovery_killed": 0,
+      "runs": 200,
+      "tool": "fs.list",
+      "violations": 0
+    },
+    {
+      "classified": 0,
+      "classified_correctly": 0,
+      "duplicated_effects": 0,
+      "killed": 200,
+      "point": "P7",
+      "recovery_killed": 0,
+      "runs": 200,
+      "tool": "fs.write",
+      "violations": 0
+    },
+    {
+      "classified": 0,
+      "classified_correctly": 0,
+      "duplicated_effects": 0,
+      "killed": 200,
+      "point": "P7",
+      "recovery_killed": 0,
+      "runs": 200,
+      "tool": "exec",
+      "violations": 0
+    },
+    {
+      "classified": 200,
+      "classified_correctly": 200,
+      "duplicated_effects": 0,
+      "killed": 200,
+      "point": "P8",
+      "recovery_killed": 117,
+      "runs": 200,
+      "tool": "fs.write",
+      "violations": 0
+    },
+    {
+      "classified": 200,
+      "classified_correctly": 200,
+      "duplicated_effects": 0,
+      "killed": 200,
+      "point": "P8",
+      "recovery_killed": 200,
+      "runs": 200,
+      "tool": "exec",
+      "violations": 0
+    }
+  ],
+  "runs_per_cell": 200,
+  "total": {
+    "classified": 3693,
+    "classified_correctly": 3693,
+    "duplicated_effects": 0,
+    "killed": 4800,
+    "runs": 4800,
+    "violations": 3
+  }
+}

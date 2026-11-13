@@ -454,6 +454,49 @@ fn checkpoint_copy_dies_with_the_runtime() {
     assert!(v.is_empty(), "{v:?}");
 }
 
+/// Regression test for B-008. Right after a kill, the execution's lock can
+/// still be held for a moment by a child of the dead runtime that was caught
+/// between `fork` and `exec`. Recovery must wait for it instead of failing.
+/// The test plays that child: it holds the lock itself and lets go after
+/// 0.4 s. A lock that is never released must still be reported.
+#[test]
+fn recovery_waits_for_a_lock_that_is_about_to_be_released() {
+    let t = TestEnv::new("rec-lock-wait").with_policy_text(&policy_text());
+    let repo = t.root.join("repo");
+    make_repo(&repo);
+    let script = t.write_script("workload.toml", &script_text());
+    let st = t
+        .cmd(&["run", "--quiet", "--repo", repo.to_str().unwrap(), "--policy", t.policy.to_str().unwrap(), "--script", script.to_str().unwrap()])
+        .env("AGENTOS_CRASH_AT", "P4")
+        .env("AGENTOS_CRASH_CALL", "2")
+        .output()
+        .unwrap();
+    assert_eq!(st.status.signal(), Some(9));
+    let id = std::fs::read_dir(t.state.join("executions")).unwrap().next().unwrap().unwrap().file_name().to_string_lossy().into_owned();
+    let lock_path = t.exec_dir(&id).join("lock");
+
+    // Held for the whole wait: recovery must refuse, and must not have touched anything.
+    let held = std::fs::File::options().write(true).open(&lock_path).unwrap();
+    held.lock().unwrap();
+    let started = Instant::now();
+    let out = t.output(&["recover", "--quiet", &id]);
+    assert!(!out.status.success(), "recover must not run while the lock is held");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("in use by another agentos process"));
+    assert!(started.elapsed() >= Duration::from_secs(2), "it should have waited before giving up");
+    assert!(!events_of(&t, &id).iter().any(|e| e["type"] == "recovery.started"));
+
+    // Released after 0.4 s: recovery waits, then does its work.
+    let releaser = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(400));
+        drop(held);
+    });
+    t.agentos(&["recover", "--quiet", &id]);
+    releaser.join().unwrap();
+    let mut v = Vec::new();
+    check_invariants(&t, &id, &events_of(&t, &id), &mut v, "after recovery");
+    assert!(v.is_empty(), "{v:?}");
+}
+
 fn percentile(sorted: &[f64], p: f64) -> f64 {
     if sorted.is_empty() {
         return 0.0;
