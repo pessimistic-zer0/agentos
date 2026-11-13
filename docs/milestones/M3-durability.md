@@ -329,3 +329,9 @@ The recovery times in §2 are the wall time of the whole `agentos recover` proce
 10. The harness decides "was the write applied?" itself, before running recovery. Why not just read recovery's verdict?
 11. What did seeding a bug into recovery prove that 4,800 passing runs could not?
 12. A reviewer asks: "So your runtime is durable against power failure?" What is the honest answer, and which design decisions does it rest on?
+
+## Notes added after the milestone
+
+The text above is left as it was written. Later changes are listed here.
+
+- **2026-11-13, `fhs` preset.** Every "not yet verified" about the `fhs` preset above describes the state when this document was written. Prince pushed on 2026-11-12. The first two CI runs failed the 200-kill suite and found bugs B-007 and B-008 (`docs/bugs.md`, D-070, D-071). The third, <https://github.com/pessimistic-zer0/agentos/actions/runs/43385661105> on commit `c3c9502` (Ubuntu 24.04), is green: lint, all test suites (32 security cases, the benign suite) and 4,800 kills with 0 violations. Results of record: `docs/results/recovery-200-fhs.md`, `docs/results/security-fhs.md`. See D-072. Still not run on Ubuntu: the benchmarks and `make demo`.

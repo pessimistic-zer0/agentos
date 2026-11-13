@@ -106,6 +106,20 @@ Result of record (`nix` preset, 2026-11-12, `docs/results/recovery-200-nix.md`):
 | Runs in which recovery itself was killed (P8 cells, 400 runs) | 311 |
 | `agentos recover` wall time (whole process, debug build, 8 trials in parallel) | p50 20.4 ms, p99 55.1 ms |
 
+Result of record (`fhs` preset, Ubuntu 24.04 in CI, 2026-11-13, <https://github.com/pessimistic-zer0/agentos/actions/runs/43385661105>, `docs/results/recovery-200-fhs.md`):
+
+| | |
+|---|---|
+| Runs (24 cells × 200) | 4,800 |
+| Runs in which the runtime was actually killed | 4,800 |
+| Invariant violations | **0** |
+| Duplicated side effects | **0** |
+| Cut-off calls whose verdict matched the files | 3,756 of 3,756 |
+| Runs in which recovery itself was killed (P8 cells, 400 runs) | 306 |
+| `agentos recover` wall time (shared CI runner, debug build, 8 trials in parallel) | p50 33.5 ms, p99 315.3 ms |
+
+That green run was the third. The first two CI runs failed this suite, 1 and then 3 violations in 4,800 runs, and each found a real bug that the kills on the laptop had not: a checkpoint copy that outlived the killed runtime (B-007), and a lock that outlived it for a few milliseconds (B-008, brought in by the first fix). Both are in `docs/bugs.md`. Two things changed in the semantics as a result: the `cp` child that copies a folder is killed by the kernel when the runtime dies, and taking the execution's lock waits up to three seconds before reporting "in use".
+
 The harness was also shown able to fail: with the rollback of an uncertain `exec` removed, it reported doubled effects; with the deletion of unnamed checkpoints removed, it reported leftovers and failed recoveries (M3 document, §2).
 
 ## 7. What is not promised
@@ -116,7 +130,7 @@ The harness was also shown able to fail: with the rollback of an uncertain `exec
 - **A crash during setup.** If the runtime dies before the workspace and its first checkpoint exist, `recover` says so and a new run must be started.
 - **Changes made to the execution folder by anyone else.** Recovery assumes only AgentOS writes there. A lock file (`flock`) keeps two `agentos` processes off the same execution; it does not stop other programs.
 - **Disk full.** If a checkpoint or a log write fails for lack of space, the runtime stops with an error; the call in flight is then uncertain and is settled by the rules above, if recovery itself has room to work.
-- **Other machines.** Measured on one laptop (NixOS 26.05, kernel 7.1.8, btrfs). The `fhs` preset on Ubuntu has not been run.
+- **Other machines.** Run on one laptop (NixOS 26.05, kernel 7.1.8, btrfs) and on one kind of CI runner (Ubuntu 24.04, `fhs` preset). Nothing else has been run.
 
 ## 8. Trying it
 

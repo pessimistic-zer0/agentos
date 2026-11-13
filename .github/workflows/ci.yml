@@ -1,9 +1,9 @@
 # Runs the test suites with the `fhs` policy preset on Ubuntu.
 #
-# NOT YET VERIFIED: this file was written on the NixOS development machine and
-# has never run, because the agent that wrote it does not push (D-027). Until
-# a run is green, the `fhs` preset is recorded as "not yet verified" in the
-# milestone documents. Expect to adjust the user-session setup below.
+# First green run: https://github.com/pessimistic-zer0/agentos/actions/runs/43385661105 (2026-11-13), the third
+# run. The workflow itself never needed a change; the first two runs failed in
+# the 200-kill step and found bugs B-007 and B-008 (docs/bugs.md). A commit is
+# "not yet verified" on `fhs` until a run on it is green (D-027, D-072).
 name: ci
 
 on:

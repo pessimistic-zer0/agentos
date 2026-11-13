@@ -172,7 +172,7 @@ The runtime resolves each allowed command to its real path on the host before th
 
 **Atomic writes.** `fs.write` writes a temp file beneath the workspace, fsyncs it, then `renameat` over the target, so a crash never leaves a half-written file.
 
-**Rootless cgroups.** Run the runtime under a delegated cgroup subtree (`systemd-run --user --scope -p Delegate=yes`) so no root is needed. A cgroup cannot hold both processes and child groups with limits, so the runtime first moves every process of the delegated group (itself and, for example, the shell that started it) into a leaf group, then creates one child group per `exec` (D-049). Checked working on NixOS (kernel 7.1); Ubuntu 24.04 restricts unprivileged user namespaces by default and needs a documented one-line setting.
+**Rootless cgroups.** Run the runtime under a delegated cgroup subtree (`systemd-run --user --scope -p Delegate=yes`) so no root is needed. A cgroup cannot hold both processes and child groups with limits, so the runtime first moves every process of the delegated group (itself and, for example, the shell that started it) into a leaf group, then creates one child group per `exec` (D-049). Checked working on NixOS (kernel 7.1) and, in CI, on Ubuntu 24.04, which restricts unprivileged user namespaces by default and needs a documented one-line setting.
 
 **Startup checks.** On start, the runtime checks for user namespaces, Landlock, `openat2` and cgroup delegation, and stops with a clear message naming what is missing.
 
@@ -278,16 +278,16 @@ agentos/
 
 AgentOS replaces Drishti on the resume only when all of these are true:
 
-Status at tag `v0.1` (2026-11-12; evidence in `docs/results/` and `docs/milestones/M6-release.md`):
+Status (boxes as of 2026-11-13; at tag `v0.1` on 2026-11-12 the third box was open; evidence in `docs/results/` and `docs/milestones/M6-release.md`):
 
 - [x] P1–P8 fault-injection suite passes with 0 invariant violations. *(`nix` preset: 4,800 runs.)*
 - [x] Security suite: 30+ cases, 0 escapes, 0 false denials on the benign suite. *(`nix` preset: 32 cases, 23 benign operations.)*
-- [ ] Both suites pass with the `fhs` and the `nix` preset. ***Open:** `nix` passes; `fhs` has never been run. It needs the Ubuntu CI job, which runs after a push.*
+- [x] Both suites pass with the `fhs` and the `nix` preset. *(`fhs`: CI run <https://github.com/pessimistic-zer0/agentos/actions/runs/43385661105> on 2026-11-13, commit `c3c9502`, Ubuntu 24.04: 4,800 runs, 0 violations; 32 cases, 0 escapes; 0 false denials. It was the third run; the first two failed and found bugs B-007 and B-008. D-072.)*
 - [x] Three benchmarks published with scripts, raw data and hardware details.
 - [x] Demo runs from a fresh clone in under 10 minutes. *(NixOS: 23 s with dependencies already downloaded. Ubuntu: not run.)*
 - [x] Threat model, recovery semantics and at least 3 ADRs written. *(11 ADRs.)*
 
-One box is open, so by this document's own rule AgentOS does not replace Drishti on the resume yet.
+All six boxes are ticked as of 2026-11-13. Two things were not run on Ubuntu and are not part of any box as written: the benchmarks, and `make demo`.
 
 **Resume bullet templates.** Replace each bracketed placeholder only with numbers you measured.
 

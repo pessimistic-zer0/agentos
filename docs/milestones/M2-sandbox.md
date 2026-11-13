@@ -349,3 +349,9 @@ On Ubuntu (not yet verified): use `policies/fhs.toml`; Ubuntu 23.10+ also needs 
 10. Why must `revert_outside` never use plain path operations? Describe the attack the symlink test performs.
 11. Why does the watchdog write to `cgroup.kill` instead of sending SIGKILL to a pid?
 12. The startup check once passed on a non-delegated scope. What did it test, what should it have tested, and what general rule follows?
+
+## Notes added after the milestone
+
+The text above is left as it was written. Later changes are listed here.
+
+- **2026-11-13, `fhs` preset.** Every "not yet verified" about the `fhs` preset above describes the state when this document was written. Prince pushed on 2026-11-12. The first two CI runs failed the 200-kill suite and found bugs B-007 and B-008 (`docs/bugs.md`, D-070, D-071). The third, <https://github.com/pessimistic-zer0/agentos/actions/runs/43385661105> on commit `c3c9502` (Ubuntu 24.04), is green: lint, all test suites (32 security cases, the benign suite) and 4,800 kills with 0 violations. Results of record: `docs/results/recovery-200-fhs.md`, `docs/results/security-fhs.md`. See D-072. Still not run on Ubuntu: the benchmarks and `make demo`.

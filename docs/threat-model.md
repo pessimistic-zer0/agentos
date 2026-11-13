@@ -27,7 +27,7 @@ The agent may be hostile from the start or become so by reading a file ("prompt 
 
 ## 3. Attacks in scope, the defence, and the test
 
-All tests are in `tests/security/main.rs` unless another file is named. Results: `docs/results/security-nix.md` (32 passed, 0 escapes, `nix` preset).
+All tests are in `tests/security/main.rs` unless another file is named. Results: `docs/results/security-nix.md` and `docs/results/security-fhs.md` (32 passed, 0 escapes, on each preset).
 
 | # | Attack | Defence | Test |
 |---|---|---|---|
@@ -92,10 +92,10 @@ Stated so nobody has to find them.
 - **The post-`exec` revert walks the whole workspace** and compares file contents. A command can make that slow by creating many or large files. It is bounded by the disk, not by a limit.
 - **Checkpoints are never pruned**, and each mutating call makes one.
 - **An interpreter in the allowlist means arbitrary code.** The shipped policies allow `pytest` and `python3 -m pytest`, which grant the same thing: the repository's own code runs, inside the sandbox. A policy that allows `["python3"]` or `["sh"]` lets the agent run any code directly. That is still confined by the sandbox, but the allowlist then limits nothing.
-- **The `fhs` preset has not been run.** Everything above was tested with the `nix` preset on NixOS 26.05, kernel 7.1.8. The Ubuntu job in `.github/workflows/ci.yml` has never executed.
+- **Two systems were tested, no others.** The `nix` preset on NixOS 26.05, kernel 7.1.8, and the `fhs` preset on Ubuntu 24.04 in CI (<https://github.com/pessimistic-zer0/agentos/actions/runs/43385661105>, 2026-11-13; `docs/results/security-fhs.md`). Other distributions that use the `fhs` preset (Debian, Fedora, Arch) have not been run. The CI log does not record the runner's kernel version.
 
 ## 6. What is and is not claimed
 
-Claimed, with tests: on the tested system, none of the 32 attacks above got out of the sandbox or past the file tools, and none of 23 ordinary operations was refused.
+Claimed, with tests: on the two tested systems, none of the 32 attacks above got out of the sandbox or past the file tools, and none of 23 ordinary operations was refused.
 
 Not claimed: perfect isolation, safety against kernel bugs, safety on systems that were not tested, or that the list of attacks is complete. A passing suite shows the attacks someone thought of.

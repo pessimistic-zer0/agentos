@@ -85,7 +85,7 @@ At the end of each milestone, write `docs/milestones/M<n>-<name>.md` from `docs/
 
 - Linux only. Development is on NixOS, but nothing in `src/` may assume NixOS.
 - Distro differences live in policy presets (`fhs`, `nix`), not in code.
-- Both test suites must pass on both presets. The `nix` preset is tested on the development machine. The `fhs` preset is tested in CI on an Ubuntu runner, which only runs after Prince pushes; until then, record it in the milestone document as "not yet verified", never as passing.
+- Both test suites must pass on both presets. The `nix` preset is tested on the development machine. The `fhs` preset is tested in CI on an Ubuntu runner, which only runs after Prince pushes. A change is "not yet verified" on `fhs` until a CI run on that commit is green; never record it as passing before that.
 - The runtime checks for user namespaces, Landlock, `openat2` and cgroup delegation at startup and fails with a clear message.
 
 ## Claims and tests
@@ -120,11 +120,11 @@ Run everything inside the dev shell (`flake.nix`): `nix develop -c <command>`, o
 
 ## Current status
 
-v0.1 tagged locally (tags `m0`–`m6`, `v0.1`). All seven milestones are done on the `nix` preset.
+v0.1 tagged locally (tags `m0`–`m6`, `v0.1`). All seven milestones are done on the `nix` preset. The `fhs` preset is verified by CI run 43385661105 (2026-11-13, commit `c3c9502`, Ubuntu 24.04; D-072): lint, all test suites and the 200-kill suite pass. Two earlier runs failed and found B-007 and B-008. Results of record: `docs/results/recovery-200-fhs.md`, `security-fhs.md`. Not run on Ubuntu: benchmarks, `make demo`.
 
 Open, and only Prince can close them:
 
-- Push. `main` is on GitHub (`pessimistic-zer0/agentos`); the tags are not. The `fhs` preset is still not yet verified: two CI runs failed the 200-kill suite (43274718767: B-007, fixed in D-070; 43375633929: B-008, brought in by that fix, fixed in D-071). The B-008 fix needs a push and a green run. Only then update the documents that say "not yet verified".
+- Push the tags (`m0`–`m6`, `v0.1`); `main` is on GitHub (`pessimistic-zer0/agentos`), the tags are not.
 - Decide the project name (D-023, D-068). The license is settled: dual MIT OR Apache-2.0 (D-069).
 - The "Bonus" section of the v1 document has not been started. It may start now that v0.1 is tagged, but only if Prince asks for it.
 

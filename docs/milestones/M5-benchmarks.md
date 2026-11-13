@@ -219,3 +219,9 @@ make eval              # all three suites (adds 200 kills per cell: about 8 more
 10. Why is a benign suite part of a *security* evaluation?
 11. The CI file is in the repository but the `fhs` row says "not yet verified". What would change that, and who can do it?
 12. Someone runs `make bench` on ext4 and gets 40 ms per write. Which part of the design explains the difference?
+
+## Notes added after the milestone
+
+The text above is left as it was written. Later changes are listed here.
+
+- **2026-11-13, `fhs` preset.** Every "not yet verified" about the `fhs` preset above describes the state when this document was written. Prince pushed on 2026-11-12. The first two CI runs failed the 200-kill suite and found bugs B-007 and B-008 (`docs/bugs.md`, D-070, D-071). The third, <https://github.com/pessimistic-zer0/agentos/actions/runs/43385661105> on commit `c3c9502` (Ubuntu 24.04), is green: lint, all test suites (32 security cases, the benign suite) and 4,800 kills with 0 violations. Results of record: `docs/results/recovery-200-fhs.md`, `docs/results/security-fhs.md`. See D-072. Still not run on Ubuntu: the benchmarks and `make demo`.

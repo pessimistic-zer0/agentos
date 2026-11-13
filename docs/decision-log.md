@@ -1702,6 +1702,31 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 **Concepts to learn.** `fork` and inherited file descriptors; close-on-exec; `flock` versus `fcntl` locks; why Rust's `Command` has a fast path (`posix_spawn`) and when it cannot use it.
 
+### D-072 — The `fhs` box is closed by one green CI run, and what that run covers
+- **Date:** 2026-11-13
+- **Status:** Taken (answers the open question "Does the `fhs` preset pass on Ubuntu?")
+- **Area:** process
+- **ADR:** 0011
+
+**In plain words.** The last open item of the "definition of done" was: do the test suites also pass on an ordinary Linux (Ubuntu), not only on NixOS? They now do, in GitHub's CI. It took three runs. The first two failed, and each failure was a real bug in AgentOS, not a problem with the CI setup. The documents now say "verified on Ubuntu 24.04", name the exact run, and list what that run did not cover.
+
+**The problem.** After two red runs and one green one, what may the documents claim? And which numbers go where?
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Tick the box on the first green run, cite its URL and commit everywhere, keep both failed reports next to it, and list what was not run | Taken | It is what CLAUDE.md and the v1 document ask for ("a run is green"); the failed runs stay visible so nobody reads one green run as more than it is |
+| Require several green runs in a row before ticking | Discarded | A sensible extra, but not the written rule, and each run needs a push from Prince. Later pushes will add runs anyway |
+| Say "works on Ubuntu, Debian, Fedora, Arch" because they share the preset | Discarded | Only Ubuntu 24.04 was run |
+| Put the CI recovery times in the README's headline numbers | Discarded | A shared runner under load is not a benchmark; they are listed and labelled as such |
+| Run the benchmarks and the demo in CI too | Discarded for now | Not part of the box as written; benchmark numbers from a shared runner would mislead. Noted as "not run on Ubuntu" |
+
+**What this means for the code.** No code change. `docs/results/recovery-200-fhs.{md,json}` and `docs/results/security-fhs.md` are the `fhs` results of record. README (Status, results table), CLAUDE.md, the threat model, the recovery-semantics document, ADR 0011, the v1 definition of done and the comment at the top of `ci.yml` are updated. The old milestone documents keep their text and get a dated note. From now on a commit counts as verified on `fhs` only when a CI run on that commit is green.
+
+**Evidence.** <https://github.com/pessimistic-zer0/agentos/actions/runs/43385661105>, commit `c3c9502`, conclusion `success`: lint; `make test` (22 unit, 4 vertical slice, 32 security, 1 benign test of 23 operations, 2 LLM mock, 3 recovery); `make eval-recovery`: 4,800 runs, 4,800 killed, 0 violations, 0 duplicated effects, 3,756/3,756 verdicts correct. The two failed runs: `docs/results/recovery-200-fhs-run1-failed.md`, `docs/results/recovery-200-fhs-run2-failed.md`. Not run on Ubuntu: `make bench`, `make demo`. The runner's kernel version and filesystem are not in the log.
+
+**Concepts to learn.** Continuous integration; why one passing run of a randomized test is weaker evidence than it looks; flaky tests versus rare real bugs.
+
 ---
 
 ## Still open
@@ -1711,7 +1736,8 @@ Which nixpkgs commit to pin was a second, smaller choice:
 | Project name | See D-023. Still open at v0.1 (D-068) |
 | ~~License~~ | Answered by D-069: dual MIT OR Apache-2.0 |
 | ~~Public repo from day one, or after v0.1?~~ | Answered by events: Prince pushed `main` to GitHub on 2026-11-12, after v0.1 was tagged locally |
-| Does the `fhs` preset pass on Ubuntu? | Not yet. Prince pushed on 2026-11-12. The first CI run passed lint and `make test` with `fhs`, and failed the 200-kill suite with 1 violation (B-007, D-070). The second run (with the B-007 fix) failed with 3 violations of a new kind (B-008, D-071), brought in by that fix. Still "not yet verified" until a run is green |
+| ~~Does the `fhs` preset pass on Ubuntu?~~ | Answered by D-072: yes on Ubuntu 24.04, CI run 43385661105 (third run; the first two found B-007 and B-008) |
+| Do the benchmarks and `make demo` work on Ubuntu? | Not run. CI runs the test suites only (D-072) |
 | ~~Which LLM for the demo: local llama.cpp server or a hosted API?~~ | Answered by D-058: local llama.cpp |
 
 ---
@@ -1762,6 +1788,7 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-13 | Second CI run (run 43375633929, with the B-007 fix): the B-007 leftover was gone, but 3 of 4,800 recoveries were refused with "in use by another agentos process" (`docs/results/recovery-200-fhs-run2-failed.md`). Reproduced locally with 64 workers; tag `v0.1` did not show it (`docs/results/b008-stress.md`) | The fix had created the next bug (B-008): `pre_exec` makes Rust use `fork`, and a forked child that has not run yet holds a copy of the parent's lock. Rerun the whole suite after every change to crash handling, on the machine that found the bug |
 | 2026-11-13 | To reproduce a CI-only race locally, the harness was run with 64 workers on 12 CPUs. It showed the error within two minutes | Overloading the machine is a cheap way to widen scheduling windows; a quiet laptop hides them |
 | 2026-11-13 | After the B-008 fix, on the development machine (`nix`): lint clean, `make test` passes, full suite 4,800 runs, 4,799 killed, 0 violations, 0 duplicated effects, 3,932/3,932 verdicts correct, recovery p50 21.4 ms / p99 56.7 ms (`docs/results/recovery-200-nix-after-b008.json`) | Clean locally at normal load, as it also was after B-007; the 64-worker stress and the next CI run are the checks that count here |
+| 2026-11-13 | Third CI run, <https://github.com/pessimistic-zer0/agentos/actions/runs/43385661105> (commit `c3c9502`, Ubuntu 24.04, `fhs`): green. 4,800 kills, 0 violations, 0 duplicated effects, 3,756/3,756 verdicts correct; 32 security cases, 0 escapes; benign suite passes (`docs/results/recovery-200-fhs.md`, `security-fhs.md`). `agentos recover` p99 was 315.3 ms, against 97.1 and 108.3 ms in the two failed runs; the cause was not looked into | The second machine was worth more than more runs on the first: 14,400 kills at normal load on the laptop found neither bug, 9,600 on the runner found both. Portability testing is also a way of finding timing bugs |
 
 ---
 

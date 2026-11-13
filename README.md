@@ -8,9 +8,9 @@ It is a learning and portfolio project, not a product. It does one thing: one ag
 
 ## Status
 
-**v0.1.** Everything below was built and tested on one machine: NixOS 26.05, Linux 7.1.8, btrfs, with the `nix` policy preset.
+**v0.1.** Built on one machine (NixOS 26.05, Linux 7.1.8, btrfs, `nix` policy preset). The test suites also pass in CI on Ubuntu 24.04 with the `fhs` preset.
 
-- **Not yet verified: any other Linux distribution.** The `fhs` preset (Ubuntu, Debian, Fedora, Arch) has run twice in CI on Ubuntu 24.04. Both times lint and the test suites passed and the 200-kill fault-injection suite failed: 1 violation in 4,800 runs, then 3. Both were real bugs (B-007 and B-008 in [`docs/bugs.md`](docs/bugs.md)), since fixed; no CI run has been green yet. Treat the Ubuntu instructions as unverified until one is.
+- **Verified on two systems, no more.** NixOS on the development machine, and Ubuntu 24.04 in CI ([run 43385661105](https://github.com/pessimistic-zer0/agentos/actions/runs/43385661105), 2026-11-13: lint, all test suites, and 4,800 kills with 0 violations). The first two CI runs failed and found two real bugs (B-007, B-008 in [`docs/bugs.md`](docs/bugs.md)). Debian, Fedora and Arch use the same `fhs` preset and have not been run. On Ubuntu the benchmarks and `make demo` have not been run either.
 - Licensed under MIT or Apache-2.0, at your option (see [License](#license)).
 - Read [what it does not do](#what-it-does-not-do) before trusting it with anything.
 
@@ -45,7 +45,7 @@ What you will see:
 
 A full transcript is in [`docs/demo-transcript.md`](docs/demo-transcript.md).
 
-### Without Nix (untested)
+### Without Nix (the suites pass in CI on Ubuntu 24.04; the demo script itself was not run there)
 
 You need: Linux 5.14 or newer with cgroup v2, Landlock and unprivileged user namespaces; a systemd user session; Rust 1.89+; Python 3 with pytest; GNU `cp` and `diff`.
 
@@ -60,14 +60,14 @@ If something is missing, `agentos` stops at startup and says what (for example, 
 
 ## What it shows
 
-Three suites, one command (`nix develop -c make eval`). Results of record, with raw data, are in [`docs/results/`](docs/results/).
+Three suites, one command (`nix develop -c make eval`). Results of record, with raw data, are in [`docs/results/`](docs/results/). The `fhs` column is from one CI run, after two that failed.
 
-| Suite | Result (`nix` preset) |
-|---|---|
-| **Fault injection.** The runtime is killed at 8 points (before the intent, after it, during the effect, before, during and after the checkpoint, after completion, and during recovery itself) for each tool, 200 times each. After recovery, 5 invariants are checked against an independent oracle, then the run is resumed to the end. | 4,800 runs, 4,797 killed, **0 invariant violations**, 0 duplicated effects, 3,918 of 3,918 cut-off calls classified correctly. `agentos recover`: p50 20 ms, p99 55 ms |
-| **Adversarial security.** 32 attacks: path traversal, symlinks, a symlink flipped ~6,000 times during 300 file calls (TOCTOU), reading denied and host files from code run by an allowed command, writing outside the allowed paths, network, fork bomb, memory hog, infinite loop, privilege tricks, the event log, the output patch. | 32 passed, **0 escapes** |
-| **Benign.** 23 ordinary operations under the shipped policy. | **0 false denials** |
-| **Overhead** (release build, i5-13420H, btrfs). | Sandboxed `true`: p50 7.8 ms, p99 24.6 ms (direct: 1.3 / 2.8 ms). `fs.write` 4 KB with fsynced log and checkpoint: p50 13.7 ms, p99 23.8 ms (durable direct write: 1.9 / 2.8 ms). Demo task end to end: p50 507 ms vs 376 ms direct (+35%) |
+| Suite | Result (`nix` preset, development machine) | Result (`fhs` preset, Ubuntu 24.04 in CI) |
+|---|---|---|
+| **Fault injection.** The runtime is killed at 8 points (before the intent, after it, during the effect, before, during and after the checkpoint, after completion, and during recovery itself) for each tool, 200 times each. After recovery, 5 invariants are checked against an independent oracle, then the run is resumed to the end. | 4,800 runs, 4,797 killed, **0 invariant violations**, 0 duplicated effects, 3,918 of 3,918 cut-off calls classified correctly. `agentos recover`: p50 20 ms, p99 55 ms | 4,800 runs, 4,800 killed, **0 invariant violations**, 0 duplicated effects, 3,756 of 3,756 classified correctly. `agentos recover` on a shared runner: p50 34 ms, p99 315 ms |
+| **Adversarial security.** 32 attacks: path traversal, symlinks, a symlink flipped ~6,000 times during 300 file calls (TOCTOU), reading denied and host files from code run by an allowed command, writing outside the allowed paths, network, fork bomb, memory hog, infinite loop, privilege tricks, the event log, the output patch. | 32 passed, **0 escapes** | 32 passed, **0 escapes** |
+| **Benign.** 23 ordinary operations under the shipped policy. | **0 false denials** | **0 false denials** |
+| **Overhead** (release build, i5-13420H, btrfs). | Sandboxed `true`: p50 7.8 ms, p99 24.6 ms (direct: 1.3 / 2.8 ms). `fs.write` 4 KB with fsynced log and checkpoint: p50 13.7 ms, p99 23.8 ms (durable direct write: 1.9 / 2.8 ms). Demo task end to end: p50 507 ms vs 376 ms direct (+35%) | Not run |
 
 A real LLM also completed the demo task (a local 4B model under llama.cpp), including after being killed mid-run. Three earlier attempts failed; both the failures and the successful run are in `docs/results/`. This shows the loop works end to end with a real model, not that the agent is good.
 
