@@ -409,6 +409,51 @@ fn run_trial(job: &Job, seed: u64) -> Outcome {
     out
 }
 
+/// Regression test for B-007. The checkpoint copy is a `cp` child process.
+/// When the runtime is killed during the copy, that child must die with it.
+/// If it lives on, it creates its `.tmp-cp-…` folder *after* recovery has
+/// cleaned up. The window is normally well under a millisecond, so a slow
+/// `cp` (a wrapper script first in PATH that sleeps, then runs the real one)
+/// makes it wide enough to hit every time.
+#[test]
+fn checkpoint_copy_dies_with_the_runtime() {
+    let t = TestEnv::new("rec-orphan-cp").with_policy_text(&policy_text());
+    let repo = t.root.join("repo");
+    make_repo(&repo);
+    let script = t.write_script("workload.toml", &script_text());
+    let host_path = std::env::var("PATH").unwrap();
+    let real_cp = host_path.split(':').map(|d| Path::new(d).join("cp")).find(|p| p.is_file()).expect("cp on PATH");
+    let shim_dir = t.root.join("shim");
+    std::fs::create_dir_all(&shim_dir).unwrap();
+    let shim = shim_dir.join("cp");
+    std::fs::write(&shim, format!("#!/bin/sh\nsleep 0.4\nexec {} \"$@\"\n", real_cp.display())).unwrap();
+    std::fs::set_permissions(&shim, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let slow_path = format!("{}:{host_path}", shim_dir.display());
+
+    // Call 2 is the first fs.write; kill within 1 ms of starting its checkpoint copy.
+    let st = t
+        .cmd(&["run", "--quiet", "--repo", repo.to_str().unwrap(), "--policy", t.policy.to_str().unwrap(), "--script", script.to_str().unwrap()])
+        .env("PATH", &slow_path)
+        .env("AGENTOS_CRASH_AT", "P5")
+        .env("AGENTOS_CRASH_CALL", "2")
+        .env("AGENTOS_CRASH_DELAY_US", "1000")
+        .output()
+        .unwrap();
+    assert_eq!(st.status.signal(), Some(9), "the run must be killed during the copy: {}", String::from_utf8_lossy(&st.stderr));
+    let id = std::fs::read_dir(t.state.join("executions")).unwrap().next().unwrap().unwrap().file_name().to_string_lossy().into_owned();
+
+    // Recovery uses the normal cp, straight away, as a person or script would.
+    t.agentos(&["recover", "--quiet", &id]);
+    // Longer than the wrapper's sleep: a copy that survived would be done by now.
+    std::thread::sleep(Duration::from_millis(900));
+    let mut v = Vec::new();
+    check_invariants(&t, &id, &events_of(&t, &id), &mut v, "after recovery and a pause");
+    assert!(v.is_empty(), "{v:?}");
+    t.agentos(&["run", "--quiet", "--resume", &id]);
+    check_invariants(&t, &id, &events_of(&t, &id), &mut v, "after resume");
+    assert!(v.is_empty(), "{v:?}");
+}
+
 fn percentile(sorted: &[f64], p: f64) -> f64 {
     if sorted.is_empty() {
         return 0.0;

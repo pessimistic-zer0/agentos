@@ -116,6 +116,7 @@ Run everything inside the dev shell (`flake.nix`): `nix develop -c <command>`, o
 - Demo: `nix develop -c make demo` (the fix, then a deliberate kill, recover and resume). By hand: `systemd-run --user --scope -p Delegate=yes cargo run -- run --repo examples/demo-repo --policy policies/nix.toml --agent scripted --script examples/scripts/fix-demo.toml`, then `cargo run -- trace`.
 - M0 practice program: `cd experiments/m0-ramp && cargo test`. Other experiments: see each `experiments/*/NOTES.md`.
 - Bugs the suites find in the runtime get a note in `docs/bugs.md`.
+- CI: `gh run list --limit 5`, `gh run view <id> --log-failed`, `gh run download <id> -n recovery-report-fhs`.
 
 ## Current status
 
@@ -123,7 +124,7 @@ v0.1 tagged locally (tags `m0`–`m6`, `v0.1`). All seven milestones are done on
 
 Open, and only Prince can close them:
 
-- Push. Nothing has been pushed. The `fhs` preset is not yet verified; `.github/workflows/ci.yml` has never run and may need fixing on its first run.
+- Push. `main` is on GitHub (`pessimistic-zer0/agentos`); the tags are not. The `fhs` preset is still not yet verified: the first CI run (43274718767) failed the 200-kill suite with 1 violation, bug B-007, fixed in D-070. The fix needs a push and a green run. Only then update the documents that say "not yet verified".
 - Decide the project name (D-023, D-068). The license is settled: dual MIT OR Apache-2.0 (D-069).
 - The "Bonus" section of the v1 document has not been started. It may start now that v0.1 is tagged, but only if Prince asks for it.
 

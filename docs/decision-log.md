@@ -1651,6 +1651,31 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 **Concepts to learn.** Software licenses; permissive versus copyleft; patent grant; SPDX license expressions; dual licensing.
 
+### D-070 — The checkpoint copy dies with the runtime
+- **Date:** 2026-11-12
+- **Status:** Taken
+- **Area:** durability
+- **ADR:** none
+
+**In plain words.** A checkpoint is copied by a helper program, `cp`. When the runtime was killed, that helper kept running by itself for a moment and could create a half-made checkpoint folder after recovery had already tidied up. Now the helper asks the kernel: "if the program that started me dies, kill me too." This is the same request the sandbox helper has made since M2.
+
+**The problem.** Bug B-007, found by the first CI run on Ubuntu: 1 leftover folder in 4,800 kills. Recovery assumes that once the runtime is dead, nothing of it is still writing. That was true for sandboxed commands (D-055) but not for the `cp` child.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| `PR_SET_PDEATHSIG(SIGKILL)` in the `cp` child, plus a check that the parent is still the runtime | Taken | Smallest change (one function); the kernel queues the kill while the runtime is exiting, before anyone can see that it died |
+| Copy the folder inside the runtime instead of starting `cp` | Discarded | No child, so no orphan, but it means writing a recursive copy with reflink support by hand: a large change to fix a small window. The v1 stack table says to shell out to `cp` |
+| Let `cp` inherit the execution's lock file, so recovery refuses to start while a copy lives | Discarded | A hard guarantee, but recovery would then fail with "in use" in exactly the moment after a crash, and would need a wait-and-retry loop |
+| Make recovery wait a little, or delete leftovers twice | Discarded | Guessing at a delay; the orphan could still write later |
+| Loosen the harness's "no leftovers" check | Discarded | The check was right; weakening a test to pass is not allowed |
+
+**What this means for the code.** `checkpoint::run_cp` uses `pre_exec` (code that runs in the child between `fork` and `exec`) to call `prctl` and `getppid`. It is an `unsafe` block with a comment on what it relies on. One detail worth knowing: the kernel ties the death signal to the *thread* that started the child, not the process; checkpoints are made on the main thread. What remains: a child that is in the middle of one system call when the kill arrives finishes that call first. That is one `mkdir` or one write, not a copy.
+
+**Evidence.** Before the fix, `checkpoint_copy_dies_with_the_runtime` (a `cp` wrapper that sleeps 0.4 s) failed with `leftover …: checkpoints on disk [".tmp-cp-0001", "cp-0000", "cp-0001"]`, the same shape as the CI failure. After the fix it passes. CI evidence: `docs/results/recovery-200-fhs-run1-failed.md`. The full local runs after the fix are recorded in the Findings row of 2026-11-12.
+
+**Concepts to learn.** Orphan processes and re-parenting; `PR_SET_PDEATHSIG`; `fork`/`exec` and `pre_exec`; async-signal-safety.
+
 ---
 
 ## Still open
@@ -1659,8 +1684,8 @@ Which nixpkgs commit to pin was a second, smaller choice:
 |---|---|
 | Project name | See D-023. Still open at v0.1 (D-068) |
 | ~~License~~ | Answered by D-069: dual MIT OR Apache-2.0 |
-| Public repo from day one, or after v0.1? | Not discussed yet. Nothing has been pushed (D-027) |
-| Does the `fhs` preset pass on Ubuntu? | Unknown until Prince pushes and `.github/workflows/ci.yml` runs (D-065) |
+| ~~Public repo from day one, or after v0.1?~~ | Answered by events: Prince pushed `main` to GitHub on 2026-11-12, after v0.1 was tagged locally |
+| Does the `fhs` preset pass on Ubuntu? | Not yet. Prince pushed on 2026-11-12. The first CI run passed lint and `make test` with `fhs`, and failed the 200-kill suite with 1 violation (B-007, D-070). Still "not yet verified" until a run is green |
 | ~~Which LLM for the demo: local llama.cpp server or a hosted API?~~ | Answered by D-058: local llama.cpp |
 
 ---
@@ -1705,6 +1730,9 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-12 | First full run of the demo script: the recover and resume steps acted on the wrong execution. Two runs started in the same second, and ids had one-second resolution, so "latest" was picked by the random suffix (B-006, D-067) | Run the thing a stranger will run, end to end, before calling it done; an ordering claim ("ids sort by time") needs a test with two close ids |
 | 2026-11-12 | Final fault-injection run on the release code: 4,800 runs, 4,797 killed, 0 violations, 0 duplicated effects, 3,918/3,918 verdicts correct, recovery p50 20.4 ms / p99 55.1 ms (`docs/results/recovery-200-nix.md`). Agrees with the M3 run on older code | Two independent full runs, one result |
 | 2026-11-12 | Fresh clone, `nix develop -c make demo`: 23 s including a full debug build. Suspiciously fast, so checked: the clone had built its own 428 MB `target/`; crate sources and Nix packages were already on the machine | Check a number that looks too good; say what it does not include (downloads) |
+| 2026-11-12 | First CI run (Ubuntu 24.04, `fhs`, run 43274718767). The workflow's uncertain parts (systemd user session for cgroup delegation, the AppArmor user-namespace setting; D-065) worked unchanged. Lint and `make test` passed. The 200-kill suite failed: 1 violation in 4,800 runs, a `.tmp-cp-0002` folder left after recovery (`docs/results/recovery-200-fhs-run1-failed.md`) | The part expected to break did not; the part believed proven did. The `cp` child outlived the killed runtime (B-007, D-070) |
+| 2026-11-12 | B-007 could not be seen in 9,600 local kills, so it was made certain instead of likely: a `cp` wrapper that sleeps 0.4 s turned a sub-millisecond window into a test that failed every time before the fix and passes after | To reproduce a rare race, slow down one side of it on purpose |
+| 2026-11-12 | After the B-007 fix, on the development machine (`nix`): lint clean, `make test` passes, and the full suite gives 4,800 runs, 4,788 killed, 0 violations, 0 duplicated effects, 3,887/3,887 verdicts correct, recovery p50 19.5 ms / p99 48.7 ms (`docs/results/recovery-200-nix-after-b007.json`) | The fix did not disturb anything locally. It says nothing yet about Ubuntu: that needs a push and a new CI run |
 
 ---
 
@@ -1748,6 +1776,7 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | `openat2` | A way to open a file that lets the kernel refuse any path leaving a given folder |
 | Oracle (testing) | The part of a test that knows the right answer, ideally worked out without the code under test |
 | Orphan checkpoint | A checkpoint folder on disk that no log record names; left by a crash, deleted by recovery |
+| Orphan process | A process whose parent has died; it keeps running under a new parent unless something stops it |
 | p50 / p95 / p99 | The time that 50%, 95%, 99% of samples stayed under; p99 shows the slow cases the average hides |
 | Page cache | Memory where the kernel holds file data before writing it to disk |
 | Patch (unified diff) | A text file listing changed lines, which `patch` or `git apply` can apply to another copy |

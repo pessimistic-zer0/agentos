@@ -10,7 +10,7 @@ It is a learning and portfolio project, not a product. It does one thing: one ag
 
 **v0.1.** Everything below was built and tested on one machine: NixOS 26.05, Linux 7.1.8, btrfs, with the `nix` policy preset.
 
-- **Not yet verified: any other Linux distribution.** The `fhs` preset (Ubuntu, Debian, Fedora, Arch) and the CI job for it (`.github/workflows/ci.yml`) exist but have never run. Treat the Ubuntu instructions as untested.
+- **Not yet verified: any other Linux distribution.** The `fhs` preset (Ubuntu, Debian, Fedora, Arch) has run once in CI on Ubuntu 24.04: lint and the test suites passed, and the 200-kill fault-injection suite failed with 1 violation in 4,800 runs. That was a real bug (B-007 in [`docs/bugs.md`](docs/bugs.md)), since fixed; no CI run has been green yet. Treat the Ubuntu instructions as unverified until one is.
 - Licensed under MIT or Apache-2.0, at your option (see [License](#license)).
 - Read [what it does not do](#what-it-does-not-do) before trusting it with anything.
 
@@ -71,7 +71,7 @@ Three suites, one command (`nix develop -c make eval`). Results of record, with 
 
 A real LLM also completed the demo task (a local 4B model under llama.cpp), including after being killed mid-run. Three earlier attempts failed; both the failures and the successful run are in `docs/results/`. This shows the loop works end to end with a real model, not that the agent is good.
 
-The suites found five bugs in the runtime itself while it was being built; each has a short note in [`docs/bugs.md`](docs/bugs.md).
+The suites found six bugs in the runtime itself (one of them only on the first Ubuntu CI run); each has a short note in [`docs/bugs.md`](docs/bugs.md).
 
 ## How it works
 

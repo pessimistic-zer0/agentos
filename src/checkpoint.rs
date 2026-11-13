@@ -104,15 +104,37 @@ pub fn on_disk(checkpoints: &Path) -> Result<Vec<String>> {
 }
 
 /// `cp -a --reflink=auto SRC DST`, where DST does not exist yet.
+///
+/// The copy is a child process, and a child normally outlives its parent. If
+/// the runtime is killed during the copy, a surviving `cp` would go on
+/// writing, and could create its folder after recovery has cleaned up (bug
+/// B-007). So the child asks the kernel to kill it when the runtime dies.
 pub fn run_cp(src: &Path, dst: &Path) -> Result<()> {
-    let out = Command::new("cp")
-        .arg("-a")
-        .arg("--reflink=auto")
-        .arg("--")
-        .arg(src)
-        .arg(dst)
-        .output()
-        .context("running cp")?;
+    use std::os::unix::process::CommandExt;
+    let runtime_pid = nix::unistd::getpid();
+    let mut cmd = Command::new("cp");
+    cmd.arg("-a").arg("--reflink=auto").arg("--").arg(src).arg(dst);
+    // SAFETY: the closure runs in the forked child before `exec`, where only
+    // async-signal-safe calls are allowed. It makes two raw system calls
+    // (`prctl`, `getppid`) and allocates nothing. It relies on:
+    // - PR_SET_PDEATHSIG: the kernel sends SIGKILL to this child when the
+    //   *thread* that forked it exits. Checkpoints are made on the runtime's
+    //   main thread, which lives as long as the process.
+    // - the `getppid` check: if the runtime died between `fork` and `prctl`,
+    //   the signal was missed and the child now has a different parent, so it
+    //   stops here instead of running `cp`.
+    unsafe {
+        cmd.pre_exec(move || {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::getppid() != runtime_pid.as_raw() {
+                return Err(std::io::Error::other("the runtime died before the copy started"));
+            }
+            Ok(())
+        });
+    }
+    let out = cmd.output().context("running cp")?;
     if !out.status.success() {
         bail!("cp -a {} {} failed: {}", src.display(), dst.display(), String::from_utf8_lossy(&out.stderr).trim());
     }
