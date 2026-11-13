@@ -127,6 +127,8 @@ The bonus (M7, tag `m7` locally) is built on top of v0.1: the tool `ext.call`, t
 
 `main` and the tags `m0`–`m7`, `v0.1` are on GitHub (`pessimistic-zer0/agentos`). They were pushed once by the agent at Prince's direct request (D-083); the rule above is unchanged: the agent does not push.
 
+Open bugs, found by hand on 2026-11-13 and not fixed: B-009 (a sandboxed command can stop the run with a file the runtime cannot scan or copy) and B-010 (a `chmod 000` folder makes `recover` fail until it is fixed by hand). Neither is an escape. See `docs/bugs.md`.
+
 Open, and only Prince can close them:
 
 - Decide the project name (D-023, D-068). The license is settled: dual MIT OR Apache-2.0 (D-069).
