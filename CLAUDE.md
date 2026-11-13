@@ -129,6 +129,6 @@ Open, and only Prince can close them:
 
 - Push the tags (`m0`–`m6`, `v0.1`); `main` is on GitHub (`pessimistic-zer0/agentos`), the tags are not.
 - Decide the project name (D-023, D-068). The license is settled: dual MIT OR Apache-2.0 (D-069).
-- Push the bonus commits (tag `m7`). The bonus is built and passes on the `nix` preset; it is "not yet verified" on `fhs` until a CI run on those commits is green.
+- Push the tag `m7` with the others. The bonus is verified on `fhs` by CI run 43436681321 on `1bc27da` (`docs/results/recovery-ext-200-fhs.md`). Documents that still say "not yet verified on `fhs`" for the bonus (README bonus table, `docs/recovery-semantics.md` §9.4, the M7 document, `recovery-ext-200-nix.md`) were written before that run and need the same update D-072 made for v0.1.
 
 Update this section when any of these changes.

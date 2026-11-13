@@ -377,3 +377,7 @@ To see a kill in mid-request: start the service with `FAKE_SERVICE_FAULTS='order
 10. The policy check `is_loopback_url` is a string check. Design rule 7 forbids string checks for confinement. Why is this one acceptable, and what else (in `ext.rs`) keeps a request from leaving the machine?
 11. What can a hostile agent do with `ext.call` that it could not do with the four v0.1 tools? What stops it under the shipped policies?
 12. An interviewer says: "So you have exactly-once delivery." What is the accurate answer?
+
+## Notes added after the milestone
+
+- **2026-11-13, `fhs` preset.** The "not yet verified" above describes the state when this document was written. Prince pushed the same day, and CI run <https://github.com/pessimistic-zer0/agentos/actions/runs/43436681321> on commit `1bc27da` is green on Ubuntu 24.04: lint, all tests including `tests/external.rs`, and `make eval-recovery`. External cells: 1600 runs, 0 invariant violations, 0 duplicated effects, 942/942 cut-off calls classified correctly, 303 stops with the call left uncertain. Result of record: `docs/results/recovery-ext-200-fhs.md`.
