@@ -126,7 +126,7 @@ The harness was also shown able to fail: with the rollback of an uncertain `exec
 
 - **Power loss or a kernel crash.** The tests kill a process. Data the kernel has accepted survives a process kill whether or not it was fsynced, so these tests cannot show that the fsync calls are in the right places, and checkpoint contents are not fsynced at all. Nothing here says the state survives a power cut.
 - **Exactly-once execution.** See §5. An uncertain `exec` is rolled back and may be issued again.
-- **Effects outside the workspace.** v1 has none (no network, no external tools). The moment a tool can send an email or open a pull request, rollback no longer undoes it. That case is deliberately left for after v0.1.
+- **Effects outside the workspace.** v0.1 has none (no network, no external tools). The moment a tool can send an email or open a pull request, rollback no longer undoes it. That case was left for after v0.1 and is now covered, for one fake service, by the bonus tool: see §9.
 - **A crash during setup.** If the runtime dies before the workspace and its first checkpoint exist, `recover` says so and a new run must be started.
 - **Changes made to the execution folder by anyone else.** Recovery assumes only AgentOS writes there. A lock file (`flock`) keeps two `agentos` processes off the same execution; it does not stop other programs.
 - **Disk full.** If a checkpoint or a log write fails for lack of space, the runtime stops with an error; the call in flight is then uncertain and is settled by the rules above, if recovery itself has room to work.
@@ -144,3 +144,80 @@ $RUN run --resume <id>      # continues with call #7
 ```
 
 `AGENTOS_CRASH_AT` takes `P1`…`P8`; `AGENTOS_CRASH_CALL` picks the call; `AGENTOS_CRASH_DELAY_US` sets the random delay for the mid-effect points P3 and P5 (`src/faults.rs`). `make demo` runs this sequence; `make eval-recovery` runs the whole harness.
+
+## 9. The bonus: a call whose effect cannot be rolled back (added after v0.1)
+
+Everything above relies on one fact: all effects are inside the workspace, and a folder can be put back from a copy. The bonus tool `ext.call` asks a service outside the runtime to do something (D-073). A copy of the workspace does not undo that. This section gives its rules. Nothing in sections 1 to 8 changes for the other four tools.
+
+### 9.1 The problem in one picture
+
+```text
+   runtime                         service
+      │ ── request ──────────────►   │        case A: the request is lost.   Nothing was done.
+      │                              │
+      │ ── request ──────────────►   │ does it
+      │    ◄────────────── answer ── │        case B: the answer is lost.    It WAS done.
+      ▼
+   "no answer"   (the same in both cases; so is a kill of the runtime in mid-request)
+```
+
+From the runtime's side A and B look identical. Treating "no answer" as "failed" doubles the effect in case B when the agent tries again. Treating it as "done" loses the effect in case A.
+
+### 9.2 The rules
+
+1. **The key goes into the intent first.** The intent of an `ext.call` holds the service's URL, the hash of the payload, the timeout, the number of attempts, and an *idempotency key*, `agentos-<execution id>-c<call id>`. The key is computed, not random, so everyone who ever sends this call sends the same key (D-077). The payload is kept in the blob store.
+2. **An answer is one of three things** (D-076): HTTP 2xx, *applied*; HTTP 4xx, *refused, nothing done*; anything else (timeout, dropped connection, 5xx, nobody listening, a redirect), *unknown*.
+3. **Unknown is retried with the same key**, up to `external.attempts` times. The service promises to apply a key at most once and to repeat its first answer, so a retry cannot double anything.
+4. **Still unknown: stop.** The run ends with an error and the intent stays open. No COMPLETED and no FAILED is written, because neither is known to be true (D-079). The log now looks exactly as it would after a kill at that moment.
+5. **Recovery settles it forwards** (D-078, ADR 0012). It sends the same request again with the key from the intent. 2xx: `tool.reconciled`, APPLIED. 4xx: NOT APPLIED. No answer: recovery stops with an error, writes no verdict, and the execution stays interrupted. `agentos recover` is then simply run again later. `run --resume` recovers first, so the agent never moves on past an unsettled call.
+
+An `ext.call` takes no checkpoint, and a workspace rollback (for example after a later uncertain `exec`) does not touch what the service did.
+
+### 9.3 What a crash leaves, for `ext.call`
+
+| Killed… | The log shows | At the service | Recovery |
+|---|---|---|---|
+| P1: before the intent | `tool.requested` only | nothing: no request can have left | NOT APPLIED. If the agent asks again it is a new call with a new key, which is safe because nothing was sent under the old one |
+| P2: after the intent, before the request | intent, no ending | nothing | sends the request; APPLIED |
+| P3: while the request is in flight | intent, no ending | applied, not applied, or about to be | sends it again with the same key; APPLIED, exactly once, whichever request the service acts on |
+| P7: after COMPLETED | completed | applied | nothing to do |
+| P8: during recovery | as before, plus `recovery.started` | whatever the interrupted recovery's request did | run again; the same key again |
+| not killed; no answer to any attempt | intent, no ending | applied or not | as P3 |
+
+P4 to P6 sit around the checkpoint and do not exist for this tool.
+
+### 9.4 What is checked, and the result
+
+`tests/recovery/main.rs::external_calls_hold_under_kills_and_timeouts` runs a workload with two `ext.call` steps among file and command steps, against a fake service inside the test program (D-075, D-080). The service survives every kill, and its own list of applied requests is the oracle.
+
+| Check | How |
+|---|---|
+| No request without a durable intent (I1) | Every request the service ever received carries a key named by an intent in the log |
+| Verdicts are right | Recovery's APPLIED / NOT APPLIED equals the service's record for that key |
+| The log tells the truth | Every ending of an `ext.call` in the log (completed, failed, reconciled) agrees with the service |
+| Nothing lost, nothing doubled | At the end each order is in the service's record exactly once, counted by payload |
+| A stop decides nothing | A run or recovery that stopped "uncertain" wrote no verdict and made no new call |
+| The workspace invariants I2 to I5 | As in §6 |
+
+Result of record (`nix` preset, 2026-11-13, `docs/results/recovery-ext-200-nix.md`; **not yet verified on `fhs`**):
+
+| | |
+|---|---|
+| Runs (8 cells × 200) | 1,600 |
+| Runs in which the runtime was killed (the five P cells, 1,000 runs) | 987 |
+| Runs in which recovery itself was killed (P8, 200 runs) | 192 |
+| Stops with the call left uncertain (a run or a recovery got no answer) | 288 |
+| Invariant violations | **0** |
+| Orders applied twice, or not at all | **0** |
+| Cut-off calls whose verdict matched the service's record | 932 of 932 |
+
+The harness was shown able to fail here too: with recovery answering "not applied" without asking the service, 48 doubled effects in 160 runs; with a fresh key for every attempt, 70 (`docs/results/recovery-ext-mutations.md`).
+
+### 9.5 What is not promised
+
+- **Exactly-once only with a service that honours the key.** With one that ignores it, every retry is a new effect, and AgentOS cannot tell.
+- **The service's own durability.** The fake keeps its state in memory and is never killed in the tests. Whether a real service remembers keys across its own crashes is its property.
+- **Progress while the service is down.** The call stays uncertain and the run stays stopped for as long as nobody answers. That is deliberate.
+- **The answer of a reconciled call.** The agent is told the call was applied; the service's answer is kept only as the first 200 characters in the verdict's reason.
+- **Order between the workspace and the service.** If a later `exec` is rolled back, an earlier `ext.call` stays done. The two are not one transaction.
+

@@ -20,7 +20,7 @@ The agent may be hostile from the start or become so by reading a file ("prompt 
 1. Host files outside the workspace, especially `~/.ssh`, `~/.config`, tokens.
 2. Files in the target repository that the policy denies (for example `.env`).
 3. The runtime's environment variables and credentials (including the LLM API key).
-4. Network egress.
+4. Network egress. (v0.1: none at all. With the bonus tool: requests to `127.0.0.1` services named in the policy; see §7.)
 5. The event log, the checkpoints and the blob store (the agent must not rewrite its own history).
 6. Host CPU, memory and process ids.
 7. The original repository (never modified; the output is a patch).
@@ -99,3 +99,36 @@ Stated so nobody has to find them.
 Claimed, with tests: on the two tested systems, none of the 32 attacks above got out of the sandbox or past the file tools, and none of 23 ordinary operations was refused.
 
 Not claimed: perfect isolation, safety against kernel bugs, safety on systems that were not tested, or that the list of attacks is complete. A passing suite shows the attacks someone thought of.
+
+## 7. The bonus tool `ext.call` (added after v0.1)
+
+Sections 1 to 6 describe v0.1, which had no way to reach anything outside the workspace. The bonus adds one: `ext.call` sends a text payload to a service named in the policy (D-073). This section says what that changes. The shipped policies do not allow it; everything here applies only when someone writes a policy with an `[external]` section.
+
+**What is new in the trust picture**
+
+| Trusted | Not trusted |
+|---|---|
+| The service's promise to apply an idempotency key at most once (AgentOS cannot check it) | The payload: the agent writes it |
+| The policy's choice of services | The service's answer: it is shown to the agent like any tool output, and could carry text that steers a model |
+
+**Attacks, defences, tests** (tests in `tests/external.rs` unless another file is named)
+
+| # | Attack | Defence | Test |
+|---|---|---|---|
+| E1 | Calling a service the policy does not list, or any service under the shipped policy | No rule means deny; the agent supplies a name, never a URL | `shipped_policy_denies_ext_call`, `allowed_call_is_logged_keyed_and_applied_once` (the `nobody` step) |
+| E2 | A policy that points at another machine (by mistake or by a hostile edit) | URLs must be `http://127.0.0.1:<port>`; anything else stops the run at startup, before an execution exists | `a_policy_naming_another_machine_is_refused_at_startup`; `policy::tests::external_urls_must_be_loopback_by_number` (11 refused forms, including `http://127.0.0.1:80@evil.example/`) |
+| E3 | A local service that redirects the request somewhere else | Redirects are never followed; the result counts as "no answer" | `a_redirect_is_not_followed` |
+| E4 | A proxy variable in the runtime's environment sending the request off the machine | The client is built with no proxy | none; by reading the HTTP library's source (D-076) |
+| E5 | Code run by an allowed command talking to the service directly, skipping policy, log and key | Unchanged from v0.1: the sandbox has its own empty network | `sandboxed_code_cannot_reach_the_service` |
+| E6 | Making an irreversible effect happen twice by crashing or timing out the runtime | Intent with the key before the request; retries and recovery reuse the same key; no answer leaves the call uncertain instead of guessed | Fault-injection cells P1, P2, P3, P7, P8, T1, T2, T3 in `tests/recovery/main.rs` (`docs/results/recovery-ext-200-nix.md`) |
+| E7 | A huge answer flooding the log or the agent | The answer body is cut at `limits.max_output_kb`; the log stores a hash | `long_answers_are_cut_at_the_limit` |
+
+**What is not defended, and should be known before allowing `ext.call` in a policy**
+
+- **It is a way out for data.** The payload is whatever the agent chooses, so anything the agent can read (every file in the workspace, every command output) can be sent to the listed service. Denied files are still never in the workspace. With v0.1's four tools the only way out was the patch; this is a second one. The loopback rule limits *where* it goes, not *what* goes.
+- **It is a way in for text.** The service's answer becomes a tool result. A hostile service could use it for prompt injection. Only the scripted agent can call `ext.call` today (the LLM agent is not offered the tool), so this is a limit to remember, not an open hole.
+- **There is no human approval.** A model that has been talked into it could trigger a real, irreversible effect with one call. v1 cut approval workflows. That is acceptable for a fake ledger and would not be for a real payment service.
+- **The exactly-once result depends on the service.** If a service ignores the idempotency key, every retry is a second effect. AgentOS cannot detect that from outside.
+- **`127.0.0.1` means "this machine", not "safe".** Any program listening on the named port receives the request. Which port to name is the policy author's decision.
+- **Budget:** a call can hold the runtime for `attempts × timeout_ms` (6 seconds with the defaults).
+

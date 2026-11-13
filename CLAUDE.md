@@ -23,12 +23,11 @@ Follow the entry template in that file. Write "In plain words" for a beginner. U
 
 ## Scope is fixed
 
-The five parts (gateway, policy, sandbox, event log, checkpoints + recovery), the build order, and the cut list in the v1 document do not change during normal work.
+The five parts (gateway, policy, sandbox, event log, checkpoints + recovery), the build order, and the cut list in the v1 document do not change during normal work. The "Bonus" of the v1 document (one fake external tool) is built (M7, D-073); it is the only addition and it is finished. It does not open the door to more tools.
 
 - Do not add features, tools, dependencies or abstractions that the v1 document does not list.
 - If an idea comes up that is outside v1, add one line to the parking lot (§22 of the spec) and continue with the current milestone.
 - If a v1 decision turns out not to work in practice, make the smallest change that fixes it, record it as a new decision-log entry that replaces the old one, update the v1 document to match, and continue. Do not use this to add scope.
-- The "Bonus" section of the v1 document must not start before v0.1 is tagged.
 
 ## How to work: build without stopping, document everything
 
@@ -67,6 +66,7 @@ At the end of each milestone, write `docs/milestones/M<n>-<name>.md` from `docs/
 | `M4-llm-agent.md` | 9 | LLM agent loop |
 | `M5-benchmarks.md` | 10 | Benchmarks, full security suite |
 | `M6-release.md` | 11–12 | README, threat model, recovery semantics, v0.1 |
+| `M7-bonus-external-tool.md` | after v0.1 | Bonus: `ext.call`, the fake service, its reconciliation rule and fault cells |
 
 ## Design rules that must hold
 
@@ -74,7 +74,7 @@ At the end of each milestone, write `docs/milestones/M<n>-<name>.md` from `docs/
 2. No policy match means deny.
 3. An intent is written and fsynced before its effect starts.
 4. Order for a mutating call: effect → checkpoint → COMPLETED record that names the checkpoint.
-5. An UNCERTAIN call is never re-executed before it is reconciled.
+5. An UNCERTAIN call is never re-executed before it is reconciled. For `ext.call`, reconciling *is* sending the same request with the same idempotency key; no answer means it stays uncertain and the agent does not continue (D-078).
 6. Files matching deny globs are never copied into the workspace.
 7. Paths are confined by the kernel (`openat2`, mount namespace, Landlock), never by string checks.
 8. Commands are argv arrays run with `execve`. Never build a shell string.
@@ -115,6 +115,7 @@ Run everything inside the dev shell (`flake.nix`): `nix develop -c <command>`, o
 - Lint: `nix develop -c cargo clippy --all-targets`.
 - Demo: `nix develop -c make demo` (the fix, then a deliberate kill, recover and resume). By hand: `systemd-run --user --scope -p Delegate=yes cargo run -- run --repo examples/demo-repo --policy policies/nix.toml --agent scripted --script examples/scripts/fix-demo.toml`, then `cargo run -- trace`.
 - M0 practice program: `cd experiments/m0-ramp && cargo test`. Other experiments: see each `experiments/*/NOTES.md`.
+- Bonus tool by hand: `cargo run --example fake_service` (port 8099; `FAKE_SERVICE_FAULTS='order-1=drop_after'` loses an answer), add the `[external]` section it prints to a copy of a policy, and use a script step `tool = "ext.call"`. Tests: `tests/external.rs`; the external fault cells are the second test in `tests/recovery/main.rs` (report: `target/recovery-ext-report.json`).
 - Bugs the suites find in the runtime get a note in `docs/bugs.md`.
 - CI: `gh run list --limit 5`, `gh run view <id> --log-failed`, `gh run download <id> -n recovery-report-fhs`.
 
@@ -122,10 +123,12 @@ Run everything inside the dev shell (`flake.nix`): `nix develop -c <command>`, o
 
 v0.1 tagged locally (tags `m0`–`m6`, `v0.1`). All seven milestones are done on the `nix` preset. The `fhs` preset is verified by CI run 43385661105 (2026-11-13, commit `c3c9502`, Ubuntu 24.04; D-072): lint, all test suites and the 200-kill suite pass. Two earlier runs failed and found B-007 and B-008. Results of record: `docs/results/recovery-200-fhs.md`, `security-fhs.md`. Not run on Ubuntu: benchmarks, `make demo`.
 
+The bonus (M7, tag `m7` locally) is built on top of v0.1: the tool `ext.call`, the fake service, its recovery rule (D-073 to D-081, ADR 0012). On the `nix` preset the external cells give 1,600 runs with 0 violations and 0 duplicated effects (`docs/results/recovery-ext-200-nix.md`).
+
 Open, and only Prince can close them:
 
 - Push the tags (`m0`–`m6`, `v0.1`); `main` is on GitHub (`pessimistic-zer0/agentos`), the tags are not.
 - Decide the project name (D-023, D-068). The license is settled: dual MIT OR Apache-2.0 (D-069).
-- The "Bonus" section of the v1 document has not been started. It may start now that v0.1 is tagged, but only if Prince asks for it.
+- Push the bonus commits (tag `m7`). The bonus is built and passes on the `nix` preset; it is "not yet verified" on `fhs` until a CI run on those commits is green.
 
 Update this section when any of these changes.

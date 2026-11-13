@@ -4,7 +4,7 @@ A small Rust runtime that runs a coding agent's tool calls inside a rootless Lin
 
 The agent (a script, or an LLM) never touches anything itself. It asks; a gateway checks a policy, writes down what is about to happen, does it, and writes down that it is done. If the runtime dies in between, recovery can say for every call whether it happened, and it never silently runs an uncertain call again.
 
-It is a learning and portfolio project, not a product. It does one thing: one agent, one copy of a repository, four tools, a command line.
+It is a learning and portfolio project, not a product. It does one thing: one agent, one copy of a repository, four tools (plus one bonus tool, off by default), a command line.
 
 ## Status
 
@@ -12,6 +12,7 @@ It is a learning and portfolio project, not a product. It does one thing: one ag
 
 - **Verified on two systems, no more.** NixOS on the development machine, and Ubuntu 24.04 in CI ([run 43385661105](https://github.com/pessimistic-zer0/agentos/actions/runs/43385661105), 2026-11-13: lint, all test suites, and 4,800 kills with 0 violations). The first two CI runs failed and found two real bugs (B-007, B-008 in [`docs/bugs.md`](docs/bugs.md)). Debian, Fedora and Arch use the same `fhs` preset and have not been run. On Ubuntu the benchmarks and `make demo` have not been run either.
 - Licensed under MIT or Apache-2.0, at your option (see [License](#license)).
+- **After v0.1: one bonus tool.** `ext.call` sends a request to a (fake) outside service, something a checkpoint cannot undo. It is off unless a policy allows it. See [the bonus](#the-bonus-a-call-that-cannot-be-rolled-back).
 - Read [what it does not do](#what-it-does-not-do) before trusting it with anything.
 
 ## The demo
@@ -72,6 +73,43 @@ Three suites, one command (`nix develop -c make eval`). Results of record, with 
 A real LLM also completed the demo task (a local 4B model under llama.cpp), including after being killed mid-run. Three earlier attempts failed; both the failures and the successful run are in `docs/results/`. This shows the loop works end to end with a real model, not that the agent is good.
 
 The suites found seven bugs in the runtime itself (two of them only on the Ubuntu CI runs); each has a short note in [`docs/bugs.md`](docs/bugs.md).
+
+## The bonus: a call that cannot be rolled back
+
+v0.1 can always fall back on "put the folder back as it was". Built after v0.1, the bonus adds the case where that is impossible: a fifth tool, `ext.call`, asks a service outside the runtime to do something.
+
+```toml
+# policy: the agent names a service, never a URL; only this machine is allowed
+[external]
+timeout_ms = 2000
+attempts   = 3
+[[external.service]]
+name = "ledger"
+url  = "http://127.0.0.1:8099/apply"
+```
+
+```toml
+# script step
+[[step]]
+tool    = "ext.call"
+service = "ledger"
+payload = "order-1"
+```
+
+- Before the request leaves, the intent records an **idempotency key** (`agentos-<execution id>-c<call id>`). The service applies a key at most once.
+- A timeout does not say whether the service did the work. The gateway sends the *same* request with the *same* key again; if no attempt is answered, the run **stops** with the call uncertain instead of recording a guess.
+- After a crash or such a stop, `agentos recover` sends the same request again. Answered: APPLIED, exactly once. Not answered: still uncertain, and the agent does not continue.
+
+The service is a small fake (`tests/common/fake_service.rs`; run it with `cargo run --example fake_service`) that can lose a request or lose an answer on demand. Eight extra fault-injection cells kill the runtime around the request or make the service go silent, and check the service's own record:
+
+| | Result (`nix` preset; not yet verified on `fhs`) |
+|---|---|
+| 8 cells × 200 runs: killed before the intent, after it, in mid-request, after completion, during recovery; request lost; answer lost; no answer at all | 1,600 runs, **0 invariant violations**, **0 orders applied twice or lost**, 932 of 932 verdicts matching the service's record |
+| The same harness against two seeded bugs ("say it failed", "retry with a new key"), 160 runs each | 48 and 70 doubled effects: it can fail |
+
+Raw data: [`docs/results/recovery-ext-200-nix.md`](docs/results/recovery-ext-200-nix.md), [`recovery-ext-mutations.md`](docs/results/recovery-ext-mutations.md).
+
+It is off by default: the shipped policies have no `[external]` section, and the LLM agent is not offered the tool. Allowing it gives the agent a way to send data out; read [`docs/threat-model.md`](docs/threat-model.md) §7 first. Details: [`docs/recovery-semantics.md`](docs/recovery-semantics.md) §9.
 
 ## How it works
 
@@ -158,9 +196,9 @@ max_tool_calls = 50
 
 - **It is not hardened like a production container runtime.** No seccomp filter; kernel bugs are out of scope; tested on one kernel and one distribution.
 - **No power-loss guarantee.** The tests kill the process; they do not cut power. Checkpoints are not fsynced.
-- **No exactly-once execution.** A command that was cut off is rolled back and may be issued again by the agent as a new call.
+- **No exactly-once execution.** A command that was cut off is rolled back and may be issued again by the agent as a new call. An external call is applied once only if the service honours the idempotency key.
 - **No disk limit.** A command can fill the disk. Checkpoints are never pruned.
-- **No network, ever**, for commands. No web search, no package downloads, no external tools.
+- **No network, ever**, for commands. No web search, no package downloads. The only thing that leaves the runtime is the bonus tool's request to a `127.0.0.1` service that a policy names, and the LLM request.
 - **The sandbox can see** the read-only system folders in full (on NixOS, all of `/nix/store`) and some facts about the host (host name, kernel version, the workspace's path).
 - **Prompt injection is contained, not prevented.** A file can talk the model into asking for something bad; the policy and sandbox then refuse or confine it.
 - **Containment ends at the patch.** A patch can change test hooks or CI files that later run unsandboxed on your machine. Read it before applying.
@@ -173,7 +211,7 @@ src/
   main.rs          command line
   gateway.rs       requested → policy → intent → effect → checkpoint → completed
   policy.rs        the TOML policy and its glob rules
-  tools/           fs.rs (openat2 file tools), exec.rs (program lookup, output capture)
+  tools/           fs.rs (openat2 file tools), exec.rs (program lookup, output capture), ext.rs (bonus: one HTTP request)
   sandbox/         ns.rs (namespaces, new root), cgroup.rs, landlock.rs, beneath.rs (openat2)
   log.rs           event log and the call state machine
   workspace.rs     the execution folder; copying the repo without denied files
@@ -182,9 +220,10 @@ src/
   faults.rs        crash points for the tests
   agent/           scripted.rs, llm.rs
 policies/          fhs.toml, nix.toml
-tests/             security/ (32 attacks), recovery/ (fault injection), benign.rs, llm_agent.rs, vertical_slice.rs
+tests/             security/ (32 attacks), recovery/ (fault injection), benign.rs, llm_agent.rs, vertical_slice.rs,
+                   external.rs and common/fake_service.rs (bonus)
 benches/, bench/   the three overhead benchmarks
-examples/          demo-repo/, scripts/, sandbox_spawn.rs
+examples/          demo-repo/, scripts/, sandbox_spawn.rs, fake_service.rs (bonus)
 experiments/       small programs that tried each mechanism alone first
 docs/              see below
 ```
@@ -198,7 +237,7 @@ This project was built to be studied afterwards, so the written record is as muc
 | [`AgentOS v1 — Scoped Design.md`](AgentOS%20v1%20—%20Scoped%20Design.md) | The plan: scope, cut list, threat model, milestones |
 | [`docs/decision-log.md`](docs/decision-log.md) | Every decision taken or discarded, with reasons and evidence; findings; glossary |
 | [`docs/milestones/`](docs/milestones/) | One document per milestone: requirements with evidence, the code explained, problems hit, questions |
-| [`docs/decisions/`](docs/decisions/) | 11 short ADRs for the hard-to-undo decisions |
+| [`docs/decisions/`](docs/decisions/) | 12 short ADRs for the hard-to-undo decisions |
 | [`docs/threat-model.md`](docs/threat-model.md) | What is protected, each attack with its defence and test, what is out of scope |
 | [`docs/recovery-semantics.md`](docs/recovery-semantics.md) | What a crash leaves and what recovery decides, per crash point and tool |
 | [`docs/bugs.md`](docs/bugs.md) | Bugs the test suites found in the runtime |
