@@ -102,7 +102,7 @@ Not claimed: perfect isolation, safety against kernel bugs, safety on systems th
 
 ## 7. The bonus tool `ext.call` (added after v0.1)
 
-Sections 1 to 6 describe v0.1, which had no way to reach anything outside the workspace. The bonus adds one: `ext.call` sends a text payload to a service named in the policy (D-073). This section says what that changes. The shipped policies do not allow it; everything here applies only when someone writes a policy with an `[external]` section.
+Sections 1 to 6 describe v0.1, which had no way to reach anything outside the workspace. The bonus adds one: `ext.call` sends a text payload to a service named in the policy (D-073). This section says what that changes. The shipped policies do not allow it; everything here applies only when someone writes a policy with an `[external]` section. The tests named below pass on both presets: on NixOS on the development machine, and on Ubuntu 24.04 in CI (<https://github.com/pessimistic-zer0/agentos/actions/runs/43436681321>).
 
 **What is new in the trust picture**
 
@@ -120,7 +120,7 @@ Sections 1 to 6 describe v0.1, which had no way to reach anything outside the wo
 | E3 | A local service that redirects the request somewhere else | Redirects are never followed; the result counts as "no answer" | `a_redirect_is_not_followed` |
 | E4 | A proxy variable in the runtime's environment sending the request off the machine | The client is built with no proxy | none; by reading the HTTP library's source (D-076) |
 | E5 | Code run by an allowed command talking to the service directly, skipping policy, log and key | Unchanged from v0.1: the sandbox has its own empty network | `sandboxed_code_cannot_reach_the_service` |
-| E6 | Making an irreversible effect happen twice by crashing or timing out the runtime | Intent with the key before the request; retries and recovery reuse the same key; no answer leaves the call uncertain instead of guessed | Fault-injection cells P1, P2, P3, P7, P8, T1, T2, T3 in `tests/recovery/main.rs` (`docs/results/recovery-ext-200-nix.md`) |
+| E6 | Making an irreversible effect happen twice by crashing or timing out the runtime | Intent with the key before the request; retries and recovery reuse the same key; no answer leaves the call uncertain instead of guessed | Fault-injection cells P1, P2, P3, P7, P8, T1, T2, T3 in `tests/recovery/main.rs` (`docs/results/recovery-ext-200-nix.md`, `recovery-ext-200-fhs.md`) |
 | E7 | A huge answer flooding the log or the agent | The answer body is cut at `limits.max_output_kb`; the log stores a hash | `long_answers_are_cut_at_the_limit` |
 
 **What is not defended, and should be known before allowing `ext.call` in a policy**

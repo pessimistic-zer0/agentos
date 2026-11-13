@@ -2,7 +2,7 @@
 
 Command: `make eval-recovery` (200 runs per cell, tests run one at a time, D-081) on 2026-11-13, on the working tree that became the M7 commit, debug build, 8 workers, NixOS 26.05, kernel 7.1.8, btrfs. Raw report: `recovery-ext-200-nix.json`. The same command's result for the 24 original cells is `recovery-200-nix-m7.md`.
 
-**Not yet verified on the `fhs` preset**: the bonus commits had not been pushed when this was written, so CI had not run them.
+The `fhs` result is in `recovery-ext-200-fhs.md` (CI run 43436681321). When this file was first written the bonus commits had not been pushed and `fhs` was not yet verified.
 
 The workload has two `ext.call` steps among file and command steps. Each run aims at one of them. In the P cells the runtime is killed; in the T cells nothing is killed and the fake service misbehaves. The oracle is the service's own record of what it applied (D-080).
 

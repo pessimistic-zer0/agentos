@@ -102,12 +102,12 @@ payload = "order-1"
 
 The service is a small fake (`tests/common/fake_service.rs`; run it with `cargo run --example fake_service`) that can lose a request or lose an answer on demand. Eight extra fault-injection cells kill the runtime around the request or make the service go silent, and check the service's own record:
 
-| | Result (`nix` preset; not yet verified on `fhs`) |
-|---|---|
-| 8 cells × 200 runs: killed before the intent, after it, in mid-request, after completion, during recovery; request lost; answer lost; no answer at all | 1,600 runs, **0 invariant violations**, **0 orders applied twice or lost**, 932 of 932 verdicts matching the service's record |
-| The same harness against two seeded bugs ("say it failed", "retry with a new key"), 160 runs each | 48 and 70 doubled effects: it can fail |
+| | `nix` preset, development machine | `fhs` preset, Ubuntu 24.04 in CI |
+|---|---|---|
+| 8 cells × 200 runs: killed before the intent, after it, in mid-request, after completion, during recovery; request lost; answer lost; no answer at all | 1,600 runs, **0 invariant violations**, **0 orders applied twice or lost**, 932 of 932 verdicts matching the service's record | 1,600 runs, **0 invariant violations**, **0 orders applied twice or lost**, 942 of 942 verdicts matching |
+| The same harness against two seeded bugs ("say it failed", "retry with a new key"), 160 runs each | 48 and 70 doubled effects: it can fail | Not run |
 
-Raw data: [`docs/results/recovery-ext-200-nix.md`](docs/results/recovery-ext-200-nix.md), [`recovery-ext-mutations.md`](docs/results/recovery-ext-mutations.md).
+Raw data: [`docs/results/recovery-ext-200-nix.md`](docs/results/recovery-ext-200-nix.md), [`recovery-ext-200-fhs.md`](docs/results/recovery-ext-200-fhs.md) (one CI run, [43436681321](https://github.com/pessimistic-zer0/agentos/actions/runs/43436681321)), [`recovery-ext-mutations.md`](docs/results/recovery-ext-mutations.md).
 
 It is off by default: the shipped policies have no `[external]` section, and the LLM agent is not offered the tool. Allowing it gives the agent a way to send data out; read [`docs/threat-model.md`](docs/threat-model.md) §7 first. Details: [`docs/recovery-semantics.md`](docs/recovery-semantics.md) §9.
 

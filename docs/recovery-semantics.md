@@ -199,7 +199,7 @@ P4 to P6 sit around the checkpoint and do not exist for this tool.
 | A stop decides nothing | A run or recovery that stopped "uncertain" wrote no verdict and made no new call |
 | The workspace invariants I2 to I5 | As in §6 |
 
-Result of record (`nix` preset, 2026-11-13, `docs/results/recovery-ext-200-nix.md`; **not yet verified on `fhs`**):
+Result of record (`nix` preset, 2026-11-13, `docs/results/recovery-ext-200-nix.md`):
 
 | | |
 |---|---|
@@ -210,6 +210,8 @@ Result of record (`nix` preset, 2026-11-13, `docs/results/recovery-ext-200-nix.m
 | Invariant violations | **0** |
 | Orders applied twice, or not at all | **0** |
 | Cut-off calls whose verdict matched the service's record | 932 of 932 |
+
+On the `fhs` preset (Ubuntu 24.04 in CI, 2026-11-13, <https://github.com/pessimistic-zer0/agentos/actions/runs/43436681321>, commit `1bc27da`, `docs/results/recovery-ext-200-fhs.md`): 1,600 runs, 994 killed in the P cells, 192 with recovery killed too, 303 stops with the call left uncertain, **0** invariant violations, **0** orders applied twice or lost, 942 of 942 verdicts matching the service's record. That is one CI run.
 
 The harness was shown able to fail here too: with recovery answering "not applied" without asking the service, 48 doubled effects in 160 runs; with a fresh key for every attempt, 70 (`docs/results/recovery-ext-mutations.md`).
 

@@ -123,12 +123,11 @@ Run everything inside the dev shell (`flake.nix`): `nix develop -c <command>`, o
 
 v0.1 tagged locally (tags `m0`–`m6`, `v0.1`). All seven milestones are done on the `nix` preset. The `fhs` preset is verified by CI run 43385661105 (2026-11-13, commit `c3c9502`, Ubuntu 24.04; D-072): lint, all test suites and the 200-kill suite pass. Two earlier runs failed and found B-007 and B-008. Results of record: `docs/results/recovery-200-fhs.md`, `security-fhs.md`. Not run on Ubuntu: benchmarks, `make demo`.
 
-The bonus (M7, tag `m7` locally) is built on top of v0.1: the tool `ext.call`, the fake service, its recovery rule (D-073 to D-081, ADR 0012). On the `nix` preset the external cells give 1,600 runs with 0 violations and 0 duplicated effects (`docs/results/recovery-ext-200-nix.md`).
+The bonus (M7, tag `m7` locally) is built on top of v0.1: the tool `ext.call`, the fake service, its recovery rule (D-073 to D-081, ADR 0012). On the `nix` preset the external cells give 1,600 runs with 0 violations and 0 duplicated effects (`docs/results/recovery-ext-200-nix.md`). On `fhs` the same, in CI run 43436681321 on `1bc27da` (D-082, `docs/results/recovery-ext-200-fhs.md`).
 
 Open, and only Prince can close them:
 
-- Push the tags (`m0`–`m6`, `v0.1`); `main` is on GitHub (`pessimistic-zer0/agentos`), the tags are not.
+- Push the tags (`m0`–`m7`, `v0.1`); `main` is on GitHub (`pessimistic-zer0/agentos`), the tags are not.
 - Decide the project name (D-023, D-068). The license is settled: dual MIT OR Apache-2.0 (D-069).
-- Push the tag `m7` with the others. The bonus is verified on `fhs` by CI run 43436681321 on `1bc27da` (`docs/results/recovery-ext-200-fhs.md`). Documents that still say "not yet verified on `fhs`" for the bonus (README bonus table, `docs/recovery-semantics.md` §9.4, the M7 document, `recovery-ext-200-nix.md`) were written before that run and need the same update D-072 made for v0.1.
 
 Update this section when any of these changes.
