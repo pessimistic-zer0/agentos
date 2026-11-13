@@ -1973,6 +1973,30 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 **Concepts to learn.** None new; see D-072.
 
+### D-083 — One push by the agent, at Prince's direct request
+- **Date:** 2026-11-13
+- **Status:** Taken (a one-time exception to D-027, which stays in force)
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** The rule is that the agent saves work locally and Prince does every upload to GitHub himself. On 2026-11-13, with the licence and the bonus finished and CI green, Prince told the agent to "push whatever is needed to be pushed". The agent did that once: the `main` branch and the tags `m0` to `m7` and `v0.1`. The rule itself is not changed. The next push is Prince's again unless he says otherwise.
+
+**The problem.** D-027 and `CLAUDE.md` say "never run `git push`, in any form". Prince wrote that rule, and Prince gave a direct instruction that goes against it. Following the instruction silently would leave a push in the history that the written rule says cannot exist.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Push once, as asked, and record it as an exception | Taken | The rule exists so that Prince decides when work leaves his machine. He decided. The record says who decided and what was sent |
+| Refuse and point at the rule | Discarded | The rule protects Prince's choice; it is not a reason to override his choice |
+| Treat the request as lifting the rule for good | Discarded | He asked for one push, not for a change of policy. An old or general go-ahead is not a standing permission |
+| Push `main` only, leave the tags | Discarded | "Whatever is needed": the tags were listed as an open item only he could close, and they were the only other thing not on the remote |
+
+**What this means for the code.** Nothing. `CLAUDE.md`'s push rule is unchanged; its status section now says `main` and the tags are on GitHub. The untracked file `docs/project-overview.md` was not committed or pushed: the agent did not write it.
+
+**Evidence.** Before the push, `git log origin/main..main` listed three commits and `git ls-remote --tags origin` listed no tags. The push commands and their results are in the Findings row of this date.
+
+**Concepts to learn.** Why a rule and the reason for the rule are different things; branches versus tags on a remote.
+
 ---
 
 ## Still open

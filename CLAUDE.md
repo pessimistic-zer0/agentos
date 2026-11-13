@@ -125,9 +125,10 @@ v0.1 tagged locally (tags `m0`–`m6`, `v0.1`). All seven milestones are done on
 
 The bonus (M7, tag `m7` locally) is built on top of v0.1: the tool `ext.call`, the fake service, its recovery rule (D-073 to D-081, ADR 0012). On the `nix` preset the external cells give 1,600 runs with 0 violations and 0 duplicated effects (`docs/results/recovery-ext-200-nix.md`). On `fhs` the same, in CI run 43436681321 on `1bc27da` (D-082, `docs/results/recovery-ext-200-fhs.md`).
 
+`main` and the tags `m0`–`m7`, `v0.1` are on GitHub (`pessimistic-zer0/agentos`). They were pushed once by the agent at Prince's direct request (D-083); the rule above is unchanged: the agent does not push.
+
 Open, and only Prince can close them:
 
-- Push the tags (`m0`–`m7`, `v0.1`); `main` is on GitHub (`pessimistic-zer0/agentos`), the tags are not.
 - Decide the project name (D-023, D-068). The license is settled: dual MIT OR Apache-2.0 (D-069).
 
 Update this section when any of these changes.
