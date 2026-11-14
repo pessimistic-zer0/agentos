@@ -13,7 +13,7 @@ It is a learning and portfolio project, not a product. It does one thing: one ag
 - **Verified on two systems, no more.** NixOS on the development machine, and Ubuntu 24.04 in CI ([run 43385661105](https://github.com/pessimistic-zer0/agentos/actions/runs/43385661105), 2026-11-13: lint, all test suites, and 4,800 kills with 0 violations). The first two CI runs failed and found two real bugs (B-007, B-008 in [`docs/bugs.md`](docs/bugs.md)). Debian, Fedora and Arch use the same `fhs` preset and have not been run. On Ubuntu the benchmarks and `make demo` have not been run either.
 - Licensed under MIT or Apache-2.0, at your option (see [License](#license)).
 - **After v0.1: one bonus tool.** `ext.call` sends a request to a (fake) outside service, something a checkpoint cannot undo. It is off unless a policy allows it. See [the bonus](#the-bonus-a-call-that-cannot-be-rolled-back).
-- **After that: what a first user needs.** Clearer first messages, a patch that says what it leaves out, packages from outside the repository, and an AppArmor profile for Ubuntu. See [on your own project](#on-your-own-project). Verified on NixOS; the Ubuntu run, and the profile in particular, are **not yet verified** (they need a CI run).
+- **After that: what a first user needs.** Clearer first messages, a patch that says what it leaves out, packages from outside the repository, and an AppArmor profile for Ubuntu. See [on your own project](#on-your-own-project). Verified on NixOS and, in [CI run 43590153676](https://github.com/pessimistic-zer0/agentos/actions/runs/43590153676), on Ubuntu 24.04, where a second job runs the sandbox through the profile with Ubuntu's restriction left on.
 - Read [what it does not do](#what-it-does-not-do) before trusting it with anything.
 
 ## The demo
@@ -61,7 +61,8 @@ make demo                                                       # picks policies
 
 ```sh
 # (a) For agentos alone: install the program and the profile that comes with it.
-#     Not yet verified: the profile is new and is tried by the CI job `fhs-apparmor`.
+#     Tried by the CI job `fhs-apparmor` on Ubuntu 24.04 (with the path changed to the
+#     test binary; the install to /usr/local/bin below was not itself run in CI).
 cargo build --release
 sudo install -m 755 target/release/agentos /usr/local/bin/agentos
 sudo install -m 644 packaging/apparmor/agentos /etc/apparmor.d/agentos

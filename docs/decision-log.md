@@ -2250,6 +2250,33 @@ What a policy author must know: everything under a read-only mount can be read b
 
 **Concepts to learn.** AppArmor; a profile's `unconfined` flag; why "may create it" and "may use it" are different permissions.
 
+### D-094 — The first-user work counts as verified on `fhs`, and the AppArmor profile as working, by CI run 43590153676
+- **Date:** 2026-11-14
+- **Status:** Taken (same rule as D-072, D-082 and D-087)
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** D-089 to D-093 were built and tested on NixOS, and the AppArmor profile could not be tried there at all. Prince pushed; GitHub ran both jobs on Ubuntu 24.04 and both are green. So these changes now count as passing on both systems, and the profile has been seen to work: with Ubuntu's restriction switched on, agentos first refused to start and named the profile, and after the profile was loaded it ran the demo task and four suites.
+
+**The problem.** D-089 to D-093 each say "not yet run on `fhs`", and D-093 says the profile is not yet verified. By D-072 that holds until a CI run on the commit is green.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Record the green run on `366c986` in a new entry and update the lines in the README and CLAUDE.md that said "not yet verified" | Taken | The rule from D-072. The earlier entries keep their text |
+| Make `fhs-apparmor` run every suite, including the 200 kills | Discarded | The profile changes whether the sandbox can start, not how recovery behaves; the main job already runs those suites |
+| Stop offering the system-wide `sysctl` | Discarded | `make demo` and the main CI job run the binary from `target/`, where a path-bound profile does not apply |
+
+**What this means for the code.** No code change. The README's Ubuntu block and status line, and CLAUDE.md's status, cite the run.
+
+**Evidence.** <https://github.com/pessimistic-zer0/agentos/actions/runs/43590153676>, commit `366c986`, both jobs `success`, read with `gh run view --log` on 2026-11-14.
+- Job `fhs-apparmor` (`kernel.apparmor_restrict_unprivileged_userns = 1`): without the profile, agentos stopped with `user namespaces cannot be used (writing /proc/self/setgroups: Permission denied (os error 13))` and printed the install command for `packaging/apparmor/agentos`. With the profile loaded (`aa-status` lists `agentos`): the demo script `COMPLETED … after 7 steps`; `vertical_slice` 4, `security` 32, `benign` 1, `deps` 5 passed, 0 failed. `exec_cannot_mount_even_in_a_nested_user_namespace` passed, which answers the question D-093 left open as far as that test goes.
+- Job `fhs` (restriction off, as before): `make test` 25 + 1 + 5 + 14 + 16 + 3 + 4 + 32 + 4 passed, 0 failed (104 tests), which includes `tests/deps.rs` with a real `python3 -m venv` on Ubuntu; lint clean; 200-kill step 4,800 runs, 4,800 killed, 0 violations, 0 duplicated effects; external cells 1,600 runs, 0 violations, 0 duplicated effects.
+- This was the first run for all of it; nothing needed a fix. What it shows about Ubuntu itself: a program without a profile is refused at the first write to `/proc/self/setgroups`, so the namespace is created and then unusable, as D-093 expected.
+- Not run on Ubuntu, as before: benchmarks, `make demo`. Not tested anywhere: the profile at its shipped path `/usr/local/bin/agentos` (CI rewrites the path to the test binary), and Ubuntu versions other than 24.04.
+
+**Concepts to learn.** None new; see D-072 and D-093.
+
 ---
 
 ## Still open
