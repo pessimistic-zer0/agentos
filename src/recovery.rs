@@ -9,7 +9,7 @@
 //! | no intent in the log | NOT APPLIED: the effect never started |
 //! | `fs.read`, `fs.list` | NOT APPLIED: nothing to undo; the agent can ask again |
 //! | `fs.write`, file has the new hash | APPLIED: take the missing checkpoint now |
-//! | `fs.write`, file has the old hash | NOT APPLIED |
+//! | `fs.write`, file has the old hash | NOT APPLIED (rolled back first if the write was going to make folders) |
 //! | `fs.write`, anything else | roll back to the last checkpoint; NOT APPLIED |
 //! | `exec` | cannot be known: roll back to the last checkpoint; NOT APPLIED |
 //! | `ext.call`, the service answers 2xx to the same request and key | APPLIED (it was done before, or it is done now; never twice) |
@@ -89,7 +89,7 @@ pub fn recover(dir: &ExecDir, log: &mut EventLog) -> Result<RecoveryReport> {
     let mut orphans = Vec::new();
     for cp in checkpoint::on_disk(&dir.checkpoints())? {
         if !named.contains(&cp) {
-            std::fs::remove_dir_all(dir.checkpoints().join(&cp))?;
+            checkpoint::remove_tree(&dir.checkpoints().join(&cp))?;
             orphans.push(cp);
         }
     }
@@ -174,6 +174,12 @@ fn reconcile(dir: &ExecDir, c: &CallRecord, last: &str, named: &[String]) -> Res
                     })
                 }
                 // The file is as it was before the call (or still absent).
+                // The write was going to make folders first (D-084). The file
+                // is absent, but some of those folders may exist: only the
+                // checkpoint says what the workspace looked like before.
+                Some(now) if now == pre_hash && plan.get("created_dirs").and_then(Value::as_array).is_some_and(|d| !d.is_empty()) => {
+                    rollback("the write did not happen, but folders may have been made for it")
+                }
                 Some(now) if now == pre_hash => Ok(not_applied("file still has its old content; the write did not happen")),
                 Some(_) => rollback("file matches neither the old nor the new content"),
                 None => rollback("the file's folder could not be inspected safely"),

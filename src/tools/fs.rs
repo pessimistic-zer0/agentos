@@ -114,10 +114,24 @@ pub fn list(fd: OwnedFd, rel: &str) -> Result<Vec<ListEntry>, ToolError> {
 /// The folder an `fs.write` goes into, opened beneath the workspace, plus
 /// the file name inside it.
 pub struct WriteTarget {
+    /// The file's folder, or, if that does not exist yet, the deepest folder
+    /// on the way to it that does.
     pub parent: OwnedFd,
+    /// Folder names between `parent` and the file that do not exist yet.
+    /// `write` makes them; nothing is made before the intent is logged (D-084).
+    pub missing: Vec<String>,
     pub name: String,
     /// Workspace-relative path of the target, as resolved by the kernel.
     pub rel: String,
+}
+
+impl WriteTarget {
+    /// Workspace-relative paths of the folders `write` will make, outermost first.
+    pub fn new_dirs(&self) -> Vec<String> {
+        let parts: Vec<&str> = self.rel.split('/').collect();
+        let dirs = parts.len() - 1; // the last part is the file name
+        (dirs - self.missing.len()..dirs).map(|i| parts[..=i].join("/")).collect()
+    }
 }
 
 pub enum OpenedParent {
@@ -137,18 +151,45 @@ pub fn open_for_write(work: &Path, path: &str) -> Result<OpenedParent, ToolError
         return Err(ToolError::new(format!("`{path}` does not name a file")));
     }
     let root = beneath::open_root(work).map_err(|e| ToolError::new(format!("workspace: {e}")))?;
-    match beneath::open_beneath(&root, dir, OFlag::O_PATH | OFlag::O_DIRECTORY, ResolveFlag::empty()) {
-        Ok(parent) => {
-            let dir_rel = resolved_rel(work, &parent)?;
-            let rel = if dir_rel.is_empty() { name.to_string() } else { format!("{dir_rel}/{name}") };
-            Ok(OpenedParent::Inside(WriteTarget { parent, name: name.to_string(), rel }))
+    let target = |parent: OwnedFd, missing: Vec<String>| -> Result<OpenedParent, ToolError> {
+        let mut parts: Vec<String> = Vec::new();
+        let dir_rel = resolved_rel(work, &parent)?;
+        if !dir_rel.is_empty() {
+            parts.push(dir_rel);
         }
-        Err(e) if beneath::is_escape(e) => Ok(OpenedParent::Outside(e)),
-        Err(Errno::ENOENT) | Err(Errno::ENOTDIR) => {
-            Err(ToolError::new(format!("the folder for `{path}` does not exist (fs.write does not create folders)")))
-        }
-        Err(e) => Err(errno(path, e)),
+        parts.extend(missing.iter().cloned());
+        parts.push(name.to_string());
+        Ok(OpenedParent::Inside(WriteTarget { parent, missing, name: name.to_string(), rel: parts.join("/") }))
+    };
+    let open = |p: &str| beneath::open_beneath(&root, p, OFlag::O_PATH | OFlag::O_DIRECTORY, ResolveFlag::empty());
+    match open(dir) {
+        Ok(parent) => return target(parent, Vec::new()),
+        Err(e) if beneath::is_escape(e) => return Ok(OpenedParent::Outside(e)),
+        Err(Errno::ENOENT) => {}
+        Err(Errno::ENOTDIR) => return Err(ToolError::new(format!("the folder for `{path}` is not a folder"))),
+        Err(e) => return Err(errno(path, e)),
     }
+    // The folder does not exist. Find the deepest folder on the way that
+    // does, still asking the kernel (so a symlink or `..` in the existing
+    // part is confined as always). What is left over are the folders to
+    // make. They must be plain names: `..` in a part that does not exist
+    // cannot be resolved by anyone.
+    let comps: Vec<&str> = dir.split('/').filter(|c| !c.is_empty() && *c != ".").collect();
+    for k in (0..comps.len()).rev() {
+        match open(&comps[..k].join("/")) {
+            Ok(parent) => {
+                if comps[k..].contains(&"..") {
+                    break;
+                }
+                return target(parent, comps[k..].iter().map(|c| c.to_string()).collect());
+            }
+            Err(e) if beneath::is_escape(e) => return Ok(OpenedParent::Outside(e)),
+            Err(Errno::ENOENT) => continue,
+            Err(Errno::ENOTDIR) => return Err(ToolError::new(format!("`{}` is not a folder", comps[..k].join("/")))),
+            Err(e) => return Err(errno(path, e)),
+        }
+    }
+    Err(ToolError::new(format!("the folder for `{path}` does not exist")))
 }
 
 /// Hash of the file the write would replace, or `None` if there is none.
@@ -156,6 +197,9 @@ pub fn open_for_write(work: &Path, path: &str) -> Result<OpenedParent, ToolError
 /// A symlink or any other non-regular file there is refused: replacing it
 /// would make reconciliation ambiguous, and following it is never wanted.
 pub fn current_hash(t: &WriteTarget) -> Result<Option<String>, ToolError> {
+    if !t.missing.is_empty() {
+        return Ok(None); // its folder does not exist yet, so neither does the file
+    }
     match openat(&t.parent, t.name.as_str(), OFlag::O_RDONLY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC | OFlag::O_NONBLOCK, Mode::empty()) {
         Err(Errno::ENOENT) => Ok(None),
         Err(Errno::ELOOP) => Err(ToolError::new(format!("`{}` is a symlink; fs.write only replaces regular files", t.rel))),
@@ -181,29 +225,70 @@ pub fn temp_name(call_id: u64) -> String {
 /// temp file (`O_EXCL | O_NOFOLLOW`, so it cannot be a planted link), write,
 /// fsync, then `renameat` over the target. `renameat` replaces the name
 /// itself and never follows a symlink there.
+///
+/// If folders are missing they are made first, one `mkdirat` each through
+/// the handle of the folder above. `mkdirat` fails if the name exists in any
+/// form (also as a symlink), and the new folder is then opened with
+/// `O_NOFOLLOW`, so this never walks through a link. If the write fails
+/// afterwards, the folders are removed again: FAILED means nothing changed.
 pub fn write(t: &WriteTarget, content: &str, call_id: u64) -> Result<u64, ToolError> {
+    if t.missing.is_empty() {
+        return write_in(&t.parent, &t.name, &t.rel, content, call_id);
+    }
+    // (folder above, name) of each folder made, to undo in reverse order.
+    let mut made: Vec<(OwnedFd, &str)> = Vec::new();
+    let result = (|| {
+        let mut cur = t.parent.try_clone().map_err(|e| io(&t.rel, e))?;
+        for comp in &t.missing {
+            match nix::sys::stat::mkdirat(&cur, comp.as_str(), Mode::from_bits_truncate(0o755)) {
+                Ok(()) => {}
+                Err(Errno::EEXIST) => return Err(ToolError::new(format!("`{comp}` on the way to `{}` exists and is not a folder", t.rel))),
+                Err(e) => return Err(errno(&t.rel, e)),
+            }
+            let next = openat(&cur, comp.as_str(), OFlag::O_PATH | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC, Mode::empty());
+            made.push((cur, comp.as_str()));
+            cur = next.map_err(|e| errno(&t.rel, e))?;
+        }
+        write_in(&cur, &t.name, &t.rel, content, call_id)
+    })();
+    if result.is_err() {
+        for (above, name) in made.iter().rev() {
+            let _ = unlinkat(above, *name, UnlinkatFlags::RemoveDir);
+        }
+    }
+    result
+}
+
+/// The atomic replace itself, in a folder that exists.
+fn write_in(parent: &OwnedFd, name: &str, rel: &str, content: &str, call_id: u64) -> Result<u64, ToolError> {
+    struct T<'a> {
+        parent: &'a OwnedFd,
+        name: &'a str,
+        rel: &'a str,
+    }
+    let t = T { parent, name, rel };
     let tmp = temp_name(call_id);
     // Keep the mode of the file being replaced; new files get 0644 (minus umask).
-    let mode = match fstatat(&t.parent, t.name.as_str(), nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW) {
+    let mode = match fstatat(t.parent, t.name, nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW) {
         Ok(st) => Mode::from_bits_truncate(st.st_mode & 0o7777),
         Err(_) => Mode::from_bits_truncate(0o644),
     };
     let result = (|| -> Result<(), ToolError> {
         let fd = openat(
-            &t.parent,
+            t.parent,
             tmp.as_str(),
             OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_EXCL | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
             mode,
         )
-        .map_err(|e| errno(&t.rel, e))?;
+        .map_err(|e| errno(t.rel, e))?;
         let mut f = File::from(fd);
-        f.write_all(content.as_bytes()).map_err(|e| io(&t.rel, e))?;
-        f.set_permissions(std::fs::Permissions::from_mode(mode.bits())).map_err(|e| io(&t.rel, e))?;
-        f.sync_all().map_err(|e| io(&t.rel, e))?;
-        renameat(&t.parent, tmp.as_str(), &t.parent, t.name.as_str()).map_err(|e| errno(&t.rel, e))
+        f.write_all(content.as_bytes()).map_err(|e| io(t.rel, e))?;
+        f.set_permissions(std::fs::Permissions::from_mode(mode.bits())).map_err(|e| io(t.rel, e))?;
+        f.sync_all().map_err(|e| io(t.rel, e))?;
+        renameat(t.parent, tmp.as_str(), t.parent, t.name).map_err(|e| errno(t.rel, e))
     })();
     if result.is_err() {
-        let _ = unlinkat(&t.parent, tmp.as_str(), UnlinkatFlags::NoRemoveDir);
+        let _ = unlinkat(t.parent, tmp.as_str(), UnlinkatFlags::NoRemoveDir);
     }
     result.map(|()| content.len() as u64)
 }

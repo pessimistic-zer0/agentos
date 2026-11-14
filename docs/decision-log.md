@@ -950,7 +950,7 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 ### D-040 — How malformed and failing calls are recorded
 - **Date:** 2026-11-11
-- **Status:** Taken
+- **Status:** Taken; its last rule ("`fs.write` does not create folders") is replaced by D-084
 - **Area:** policy
 - **ADR:** none
 
@@ -1997,6 +1997,85 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 **Concepts to learn.** Why a rule and the reason for the rule are different things; branches versus tags on a remote.
 
+### D-084 — `fs.write` makes the folders that are missing on the way to its file
+- **Date:** 2026-11-14
+- **Status:** Taken (replaces the last rule of D-040)
+- **Area:** policy
+- **ADR:** none
+
+**In plain words.** Before, `fs.write` to `src/newpkg/mod.py` failed if the folder `src/newpkg` did not exist, and no tool could make a folder. An agent could therefore never add a new package, which is ordinary work. Now `fs.write` makes the missing folders itself, but only when the policy allows the file to be written there. Nothing new can be reached this way: the same rules decide, and the kernel still confines the path.
+
+**The problem.** A hand check on 2026-11-13 showed the block (Findings). Prince chose to remove it. D-040 had discarded this because a crash between "folder made" and "file written" leaves a workspace that matches neither the old nor the new state.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| `fs.write` makes missing folders; the intent lists them; recovery rolls back when it finds the list and no new file | Taken | No new tool. The crash case D-040 worried about is handled by the rule recovery already has for "neither old nor new": roll back to the last checkpoint |
+| A fifth tool `fs.mkdir` | Discarded | A new tool is new scope (the tool list is fixed), and an empty folder is not something a patch can carry anyway |
+| Leave it; let the agent make folders through `pytest` | Discarded | It works only by running code, which is the opposite of what the file tools are for |
+| Allow the write if the *file* matches a write glob, and also require every new folder to match one | Discarded | `exec` may already leave new folders anywhere as long as they hold allowed files (D-009); one rule for both is easier to explain. Deny rules are still checked on every new folder |
+
+**What this means for the code.**
+- `tools/fs.rs::open_for_write`: if the folder cannot be opened because it does not exist, the deepest folder that does exist is opened instead, still with `openat2(RESOLVE_BENEATH)`, and the rest of the path is kept as a list of names to make (`WriteTarget.missing`). A `..` among those names is refused: a path through a folder that does not exist cannot be resolved.
+- `gateway.rs::decide`: the policy is checked on the full resolved path as before. In addition every folder that would be made is checked against the deny rules, so `src/.env/x.py` is refused by the rule for `.env`.
+- Nothing is made before the intent is on disk (design rule 3). The intent's plan gets `created_dirs`, the list of folders about to be made.
+- `tools/fs.rs::write`: one `mkdirat` per folder, through the handle of the folder above, then open it with `O_NOFOLLOW`. `mkdirat` fails if the name exists in any form, including a symlink that points at nothing. If the write then fails, the folders are removed again, so FAILED still means "nothing changed".
+- `recovery.rs`: a cut-off `fs.write` whose intent has `created_dirs` and whose file is absent is rolled back to the last checkpoint instead of being called NOT APPLIED on the spot, because some of the folders may exist.
+- The LLM agent's description of `fs_write` says that missing folders are made.
+
+**Evidence.** `tests/hardening.rs`, run on the `nix` preset on 2026-11-14: `fs_write_makes_missing_folders_inside_the_write_globs`, `fs_write_makes_no_folder_it_should_not` (8 refused forms; nothing made inside or outside the workspace) and `a_folder_making_write_is_recovered_at_every_crash_point` (P2, P4, P6 and 12 kills at P3) pass. Mutation check: with the new recovery rule switched off, the last test failed 3 times out of 3 with `P3 (delay 40): NOT APPLIED but folders were left behind`. Not yet run on `fhs`.
+
+**Concepts to learn.** `mkdirat`; why "check, then act" is safe here (the check and the act both go through one already-opened folder handle).
+
+### D-085 — When the runtime cannot record what a command left behind, the call fails and is undone
+- **Date:** 2026-11-14
+- **Status:** Taken
+- **Area:** durability
+- **ADR:** none
+
+**In plain words.** After every command the runtime walks the workspace and copies it. A command can leave things that make the walk or the copy fail: a file name that is not valid text, a file nobody may read, a folder nobody may open. Before, that stopped the whole run with an error. Now the runtime puts the workspace back to the last checkpoint and tells the agent that the call failed and why. The run goes on.
+
+**The problem.** Bug B-009. Errors were split into "the tool failed" (told to the agent) and "the runtime broke" (the run stops) by which piece of code raised them. The scan and the copy are runtime code, but what they trip over was chosen by untrusted code.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Roll back to the last checkpoint, log FAILED, hand the reason to the agent | Taken | FAILED already means "nothing was changed" (D-040), and after the rollback that is true. No new state, no new record type |
+| Repair the workspace instead (rename bad names, `chmod` files readable) and complete the call | Discarded | The runtime would be inventing workspace content the command did not write, and every repair is a new place for a bug |
+| Skip what cannot be read and complete the call | Discarded | The checkpoint would no longer be a copy of the workspace, which is the invariant recovery rests on |
+| Keep stopping the run | Discarded | Lets code in the repository end the agent's work, and the agent never learns why |
+| Apply the same to a checkpoint failure after `fs.write` | Discarded | `fs.write` cannot create such files, and after this change none survive an `exec`. A copy failure there is a real runtime problem (disk full) and still stops the run |
+
+**What this means for the code.** `gateway.rs::undo_exec` is called when `checkpoint::revert_outside` fails after a command, or when `checkpoint::create` fails for an `exec` call. It runs `checkpoint::restore` and returns a `ToolError`; host paths in the message are replaced by `<execution>`. If the restore itself fails, the runtime stops with the intent open, exactly as after a crash, and `agentos recover` settles it. The command's output is not kept for such a call. `checkpoint::create` removes its half-made copy when `cp` fails.
+
+**Evidence.** `tests/hardening.rs`, `nix` preset, 2026-11-14: four tests named `…_fails_the_call_not_the_run` (non-UTF-8 name, `chmod 000` file, `chmod 000` folder inside and outside the write globs) pass; each checks that call 1 is FAILED, call 2 completes, the workspace equals `cp-0000` and no host path is in the message. All four failed on the code before the fix (commit `0c29b2d`). Not yet run on `fhs`.
+
+**Concepts to learn.** Who caused an error versus where it surfaced; why a rollback keeps an invariant that a repair would not.
+
+### D-086 — Trees shaped by sandboxed code are deleted with `remove_tree`, which unlocks folders first
+- **Date:** 2026-11-14
+- **Status:** Taken
+- **Area:** durability
+- **ADR:** none
+
+**In plain words.** To delete a folder you must be allowed to list it and to remove names from it. Those rights are three bits on the folder, and its owner can switch them off. A command in the sandbox runs as the same user as the runtime, so it can leave folders that the runtime's plain "delete this tree" cannot remove. Recovery deletes the old workspace as its last step, so one such folder made recovery fail every time. The runtime now switches the three bits back on, for folders only, and deletes again.
+
+**The problem.** Bug B-010. While fixing it a second form turned up: a read-only folder (mode 555) with a file in it *can* be copied, so it ends up inside a checkpoint, and then neither a rollback nor the removal of an orphan checkpoint could delete it.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Try the plain delete; if it fails, give every folder in the tree owner read, write and search, then delete again | Taken | Small, and changes nothing in the common case |
+| Normalise modes when the checkpoint is made | Discarded | Changes what the command wrote; a repo may really contain a read-only folder |
+| Leave the undeletable tree and move on | Discarded | It is the old workspace under the name the next restore needs; and leftovers that grow are their own problem |
+| Run the delete in a user namespace as "root" | Discarded | Far more machinery than three permission bits |
+
+**What this means for the code.** `checkpoint::remove_tree` replaces `std::fs::remove_dir_all` in `checkpoint::create`, `restore`, `remove_leftovers` and `remove_entry`, and in `recovery::recover` (orphan checkpoints). It never follows a symlink: a mode is changed only on what `symlink_metadata` reports as a real folder. It relies on no sandboxed process being alive, which holds everywhere it is called (the exec's cgroup is destroyed first; recovery kills leftover cgroups first).
+
+**Evidence.** `tests/hardening.rs`, `nix` preset, 2026-11-14: `recovery_works_after_a_kill_while_the_workspace_holds_a_locked_folder` (the runtime is killed from outside while the command sleeps; `recover` succeeds, a second `recover` finds nothing to do) and `recovery_works_when_a_checkpoint_holds_a_read_only_folder` (kill at P6; the orphan `cp-0002` is removed) pass. Both failed on the code before the fix. Not yet run on `fhs`.
+
+**Concepts to learn.** Permission bits on a folder: read = list names, write = add and remove names, execute = "search" (use a name inside it). Why the owner is still bound by them (only root is not).
+
 ---
 
 ## Still open
@@ -2066,6 +2145,7 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-13 | Commit `75c9178` cites D-082, but the entry itself was missing from it: the script that wrote the entry stopped on an undefined variable, and the commit command ran anyway. The entry was added in the next commit, not by rewriting history | Chain steps so that a failed one stops the rest (`&&`), and look at the diff before committing. The same kind of slip as the M1 series (Findings, 2026-11-11) |
 | 2026-11-13 | The one push of D-083: `git push origin main` sent `1bc27da..b122e09` (four commits); `git push origin m0 m1 m2 m3 m4 m5 m6 m7 v0.1` created nine new tags on the remote. Afterwards `git status -sb` showed `main` level with `origin/main` and `git ls-remote --tags origin` listed all nine. This row was written after the push, so the commit that holds it is local until Prince pushes it | A record of a push cannot be inside the push it describes; the last entry is always one commit behind |
 | 2026-11-13 | Asked to verify the finished project, Claude ran all suites (pass) and then tried by hand what the suites do not: files a sandboxed command leaves behind that the runtime's own bookkeeping cannot handle. Expected a failed tool call. Got a stopped run for a non-UTF-8 file name and a `chmod 000` file, and for a `chmod 000` folder an execution that `recover` and `--resume` both refuse forever (B-009, B-010 in `docs/bugs.md`, both open). Also seen, and by design (D-040): `fs.write` cannot create a file in a folder that does not exist, and no shipped tool can make a folder | The post-`exec` scan, the checkpoint copy and the restore run in trusted code but on a tree shaped by untrusted code; their errors were treated as runtime failures. The security suite tests for escapes and the recovery suite for crashes of a well-behaved workspace; nothing tested the two together |
+| 2026-11-14 | Fixing B-010 (a `chmod 000` folder), the same fault was expected only in workspaces a command had just left. A second test showed it also in a state every suite had called healthy: a read-only folder (mode 555) with one file copies without complaint, sits in a checkpoint, and then no rollback and no orphan-checkpoint removal can delete it. All 9 new tests in `tests/hardening.rs` failed on the old code and pass on the new (D-084 to D-086). With the new recovery rule for folder-making writes switched off, the P3 kills caught it 3 runs out of 3. Afterwards on `nix`: `make test` 90 passed, 0 failed; clippy 0 warnings; `RUNS=20 make eval-recovery` 480 + 160 runs, 0 violations, 0 duplicated effects (a quick look, not a result of record) | The dangerous leftovers are not only the ones that make a step fail at once; some pass every check and break a *later* step. Deleting is an operation with its own permissions, separate from reading and copying |
 
 ---
 
@@ -2099,6 +2179,8 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | Init (PID 1) | The first process in a PID namespace; it must collect dead children, and when it exits the kernel kills the rest |
 | Idempotent | Doing it twice gives the same result as doing it once |
 | Idempotency key | A label sent with a request so that sending it twice has the effect of sending it once |
+| Permission bits (mode) | Nine switches on every file and folder: read, write and execute, each for the owner, the group and everyone else. `chmod 000` switches all off; `555` is read and execute for all, write for nobody |
+| Search bit | The execute bit on a folder. Without it nobody (except root) can use any name inside the folder, even its owner |
 | Intent | A log record written before an action, saying what is about to happen |
 | Helper (re-exec) | Starting your own program a second time to do a job that needs a fresh, single-threaded process |
 | Landlock | Kernel feature that lets a process give up its own access to files, permanently |

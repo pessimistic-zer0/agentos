@@ -116,6 +116,7 @@ Run everything inside the dev shell (`flake.nix`): `nix develop -c <command>`, o
 - Demo: `nix develop -c make demo` (the fix, then a deliberate kill, recover and resume). By hand: `systemd-run --user --scope -p Delegate=yes cargo run -- run --repo examples/demo-repo --policy policies/nix.toml --agent scripted --script examples/scripts/fix-demo.toml`, then `cargo run -- trace`.
 - M0 practice program: `cd experiments/m0-ramp && cargo test`. Other experiments: see each `experiments/*/NOTES.md`.
 - Bonus tool by hand: `cargo run --example fake_service` (port 8099; `FAKE_SERVICE_FAULTS='order-1=drop_after'` loses an answer), add the `[external]` section it prints to a copy of a policy, and use a script step `tool = "ext.call"`. Tests: `tests/external.rs`; the external fault cells are the second test in `tests/recovery/main.rs` (report: `target/recovery-ext-report.json`).
+- Hostile leftovers and folder-making writes: `tests/hardening.rs` (part of `make test`; alone: `systemd-run --user --scope -p Delegate=yes cargo test --test hardening`).
 - Bugs the suites find in the runtime get a note in `docs/bugs.md`.
 - CI: `gh run list --limit 5`, `gh run view <id> --log-failed`, `gh run download <id> -n recovery-report-fhs`.
 
@@ -127,7 +128,7 @@ The bonus (M7, tag `m7` locally) is built on top of v0.1: the tool `ext.call`, t
 
 `main` and the tags `m0`–`m7`, `v0.1` are on GitHub (`pessimistic-zer0/agentos`). They were pushed once by the agent at Prince's direct request (D-083); the rule above is unchanged: the agent does not push.
 
-Open bugs, found by hand on 2026-11-13 and not fixed: B-009 (a sandboxed command can stop the run with a file the runtime cannot scan or copy) and B-010 (a `chmod 000` folder makes `recover` fail until it is fixed by hand). Neither is an escape. See `docs/bugs.md`.
+After M7, a hand check found two bugs that no suite covered, B-009 and B-010 (`docs/bugs.md`). Both are fixed (D-085, D-086), and `fs.write` now makes missing folders (D-084, which replaces the last rule of D-040). Tests: `tests/hardening.rs`, 9 tests, passing on `nix` (2026-11-14). **Not yet verified on `fhs`**: these commits are local, and CI runs only after Prince pushes.
 
 Open, and only Prince can close them:
 

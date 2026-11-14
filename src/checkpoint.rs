@@ -24,11 +24,53 @@ pub fn create(work: &Path, checkpoints: &Path, name: &str) -> Result<PathBuf> {
     }
     let tmp = checkpoints.join(format!(".tmp-{name}"));
     if tmp.exists() {
-        std::fs::remove_dir_all(&tmp)?; // left over from an earlier crash
+        remove_tree(&tmp)?; // left over from an earlier crash
     }
-    run_cp(work, &tmp)?;
+    if let Err(e) = run_cp(work, &tmp) {
+        let _ = remove_tree(&tmp); // do not leave half a copy behind
+        return Err(e);
+    }
     std::fs::rename(&tmp, &final_path).with_context(|| format!("renaming {} into place", tmp.display()))?;
     Ok(final_path)
+}
+
+/// Delete a folder tree that code in the sandbox may have shaped.
+///
+/// `remove_dir_all` alone is not enough for such a tree: the owner of a
+/// folder cannot list it without the read bit, or delete from it without the
+/// write and search bits, and a command can clear those bits (`chmod 000`).
+/// A workspace like that made recovery fail for good (bug B-010). So when
+/// the plain delete fails, every folder in the tree is given back the
+/// owner's three bits and the delete is tried again.
+///
+/// This relies on nothing else touching the tree meanwhile: it is only
+/// called when no sandboxed process is alive. Symlinks are never followed:
+/// a mode is only changed on what `symlink_metadata` says is a real folder.
+pub fn remove_tree(path: &Path) -> Result<()> {
+    fn unlock(dir: &Path) -> std::io::Result<()> {
+        let m = std::fs::symlink_metadata(dir)?;
+        if !m.is_dir() {
+            return Ok(());
+        }
+        let mode = m.mode() & 0o7777;
+        if mode & 0o700 != 0o700 {
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode | 0o700))?;
+        }
+        for e in std::fs::read_dir(dir)? {
+            let e = e?;
+            if e.file_type()?.is_dir() {
+                unlock(&e.path())?;
+            }
+        }
+        Ok(())
+    }
+    match std::fs::remove_dir_all(path) {
+        Ok(()) => return Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => {}
+    }
+    unlock(path).with_context(|| format!("making {} deletable", path.display()))?;
+    std::fs::remove_dir_all(path).with_context(|| format!("removing {}", path.display()))
 }
 
 /// Number in a checkpoint name (`cp-0007` -> 7).
@@ -52,7 +94,7 @@ fn restore_tmp(work: &Path) -> PathBuf {
 pub fn restore(work: &Path, cp: &Path) -> Result<()> {
     let tmp = restore_tmp(work);
     if tmp.exists() {
-        std::fs::remove_dir_all(&tmp)?; // left over from an interrupted restore
+        remove_tree(&tmp)?; // left over from an interrupted restore
     }
     run_cp(cp, &tmp)?;
     crate::faults::point("P8", None);
@@ -66,7 +108,7 @@ pub fn restore(work: &Path, cp: &Path) -> Result<()> {
     .with_context(|| format!("swapping {} into place", tmp.display()))?;
     crate::faults::point("P8", None);
     // `tmp` now holds the old workspace contents.
-    std::fs::remove_dir_all(&tmp)?;
+    remove_tree(&tmp)?;
     Ok(())
 }
 
@@ -75,13 +117,13 @@ pub fn restore(work: &Path, cp: &Path) -> Result<()> {
 pub fn remove_leftovers(work: &Path, checkpoints: &Path) -> Result<()> {
     let tmp = restore_tmp(work);
     if tmp.exists() {
-        std::fs::remove_dir_all(&tmp)?;
+        remove_tree(&tmp)?;
     }
     if checkpoints.exists() {
         for e in std::fs::read_dir(checkpoints)? {
             let e = e?;
             if e.file_name().to_string_lossy().starts_with(".tmp-") {
-                std::fs::remove_dir_all(e.path())?;
+                remove_tree(&e.path())?;
             }
         }
     }
@@ -255,7 +297,7 @@ fn remove_entry(work_root: &OwnedFd, rel: &str, entry: &Entry, only_if_empty: bo
             return Ok(std::fs::remove_dir(&p).is_ok());
         }
         // std's remove_dir_all does not follow symlinks inside the tree.
-        std::fs::remove_dir_all(&p).with_context(|| format!("removing `{rel}`"))?;
+        remove_tree(&p).with_context(|| format!("removing `{rel}`"))?;
     } else {
         std::fs::remove_file(&p).with_context(|| format!("removing `{rel}`"))?;
     }

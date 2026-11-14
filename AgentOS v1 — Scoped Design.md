@@ -128,7 +128,7 @@ On restart, recovery replays the log, finds calls with an intent but no terminal
 | Tool | Effect | How an UNCERTAIN call is reconciled |
 | --- | --- | --- |
 | `fs.read`, `fs.list` | None | Mark NOT APPLIED; the agent can re-issue it |
-| `fs.write` | One file in `/work` | The intent stores the path, pre-write hash and new-content hash. File matches the new hash: APPLIED (take the missing checkpoint now). Matches the old hash: NOT APPLIED. Anything else: roll back to the last checkpoint |
+| `fs.write` | One file in `/work` | The intent stores the path, pre-write hash and new-content hash. File matches the new hash: APPLIED (take the missing checkpoint now). Matches the old hash: NOT APPLIED (if the write was going to make folders, roll back first; D-084). Anything else: roll back to the last checkpoint |
 | `exec` | Anything inside `/work` | Can't be known; roll `/work` back to the last checkpoint and mark NOT APPLIED |
 
 **Invariants the fault-injection harness checks**
@@ -170,7 +170,7 @@ The runtime resolves each allowed command to its real path on the host before th
 
 **Write globs and `exec`.** Code run by `exec` can write anywhere in `/work`. After each `exec`, the runtime compares the workspace with the pre-call checkpoint. Any change outside the write globs is reverted from the checkpoint and logged as a policy violation. The call itself still completes.
 
-**Atomic writes.** `fs.write` writes a temp file beneath the workspace, fsyncs it, then `renameat` over the target, so a crash never leaves a half-written file.
+**Atomic writes.** `fs.write` writes a temp file beneath the workspace, fsyncs it, then `renameat` over the target, so a crash never leaves a half-written file. Folders missing on the way to the file are made first, after the intent, if the policy allows the file (D-084).
 
 **Rootless cgroups.** Run the runtime under a delegated cgroup subtree (`systemd-run --user --scope -p Delegate=yes`) so no root is needed. A cgroup cannot hold both processes and child groups with limits, so the runtime first moves every process of the delegated group (itself and, for example, the shell that started it) into a leaf group, then creates one child group per `exec` (D-049). Checked working on NixOS (kernel 7.1) and, in CI, on Ubuntu 24.04, which restricts unprivileged user namespaces by default and needs a documented one-line setting.
 

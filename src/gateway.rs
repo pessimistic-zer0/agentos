@@ -153,7 +153,16 @@ impl Gateway {
                     faults::point("P4", Some(call_id)); // effect done, no checkpoint yet
                     let name = checkpoint::name(checkpoint::number(&self.last_checkpoint).unwrap_or(0) + 1);
                     faults::arm("P5", Some(call_id)); // kill during the copy
-                    checkpoint::create(&self.dir.work(), &self.dir.checkpoints(), &name)?;
+                    if let Err(e) = checkpoint::create(&self.dir.work(), &self.dir.checkpoints(), &name) {
+                        // Only a command can leave files that cannot be
+                        // copied; for it this is the call's failure (D-085).
+                        if !matches!(call, ToolCall::Exec { .. }) {
+                            return Err(e);
+                        }
+                        let e = self.undo_exec(e)?;
+                        self.log.append(EventBody::ToolFailed { call_id, error: e.0.clone() })?;
+                        return Ok(ToolResult { call_id, outcome: ToolOutcome::Failed { error: e.0 }, output: None });
+                    }
                     faults::point("P6", Some(call_id)); // checkpoint exists, log does not name it
                     Some(name)
                 } else {
@@ -242,6 +251,11 @@ impl Gateway {
                         if !d.allowed {
                             return Decided::Deny(d);
                         }
+                        // A folder the write would make must not be a denied
+                        // path either (`src/.env/x.py` would create `src/.env`).
+                        if let Some(rule) = target.new_dirs().iter().find_map(|dir| policy.denied(dir)) {
+                            return Decided::Deny(Decision { allowed: false, rule });
+                        }
                         Decided::Allow(d, Approved::Write { target, content: content.clone() })
                     }
                     Err(e) => match beneath::lexical_rel(path).map(|r| policy.check_path(Access::Write, &r)) {
@@ -272,12 +286,20 @@ impl Gateway {
     fn plan(&self, call_id: u64, a: &Approved) -> Result<serde_json::Value, ToolError> {
         Ok(match a {
             Approved::Read { rel, .. } | Approved::List { rel, .. } => json!({ "path": rel }),
-            Approved::Write { target, content } => json!({
-                "path": target.rel,
-                "pre_hash": fstool::current_hash(target)?,
-                "new_hash": crate::blob::content_hash(content.as_bytes()),
-                "temp": fstool::temp_name(call_id),
-            }),
+            Approved::Write { target, content } => {
+                let mut plan = json!({
+                    "path": target.rel,
+                    "pre_hash": fstool::current_hash(target)?,
+                    "new_hash": crate::blob::content_hash(content.as_bytes()),
+                    "temp": fstool::temp_name(call_id),
+                });
+                // Folders the write will make first. Recovery rolls back if
+                // it finds this and no new file (D-084).
+                if !target.missing.is_empty() {
+                    plan["created_dirs"] = json!(target.new_dirs());
+                }
+                plan
+            }
             Approved::Exec { argv } => {
                 let program = self
                     .programs
@@ -345,6 +367,29 @@ impl Gateway {
         })
     }
 
+    /// The command ran, but the runtime could not finish its own bookkeeping
+    /// on what it left behind (the scan for the revert, or the checkpoint
+    /// copy): a file name that is not UTF-8, a file or folder with no
+    /// permission bits. Code in the sandbox chose that, so it is the call
+    /// that fails, not the runtime (bug B-009, D-085). The workspace is put
+    /// back to the last checkpoint first, so FAILED keeps its meaning:
+    /// nothing was changed. If even that cannot be done, the runtime stops,
+    /// with the intent open, and `agentos recover` deals with it.
+    fn undo_exec(&self, why: anyhow::Error) -> Result<ToolError> {
+        use anyhow::Context;
+        let base = self.dir.checkpoints().join(&self.last_checkpoint);
+        checkpoint::restore(&self.dir.work(), &base).with_context(|| format!("rolling back the workspace after: {why:#}"))?;
+        // Host paths mean nothing to the agent; show them from the execution folder.
+        let mut text = format!("{why:#}");
+        for root in [std::fs::canonicalize(&self.dir.root).ok(), Some(self.dir.root.clone())].into_iter().flatten() {
+            text = text.replace(&root.display().to_string(), "<execution>");
+        }
+        Ok(ToolError::new(format!(
+            "the command left files in the workspace that the runtime cannot record ({text}). \
+             Everything this command changed was undone; the workspace is as it was before the call."
+        )))
+    }
+
     fn run_exec(&mut self, call_id: u64, argv: &[String]) -> Result<Result<ToolOutput, ToolError>> {
         let program = self.programs.lookup(&argv[0]).expect("checked in plan").to_path_buf();
         let work = std::fs::canonicalize(self.dir.work())?;
@@ -375,7 +420,10 @@ impl Gateway {
         // D-009: whatever the command changed outside the write globs is put back.
         let base = self.dir.checkpoints().join(&self.last_checkpoint);
         let policy = &self.policy;
-        let reverted = checkpoint::revert_outside(&work, &base, |rel| policy.writable(rel))?;
+        let reverted = match checkpoint::revert_outside(&work, &base, |rel| policy.writable(rel)) {
+            Ok(reverted) => reverted,
+            Err(e) => return Ok(Err(self.undo_exec(e)?)),
+        };
         if !reverted.is_empty() {
             self.log.append(EventBody::PolicyViolation { call_id, reverted: reverted.clone() })?;
         }

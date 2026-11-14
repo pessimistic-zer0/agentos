@@ -323,7 +323,7 @@ fn tool_schemas() -> Value {
     json!([
         f("fs_list", "List the entries of a folder.", json!({"path": path}), &["path"]),
         f("fs_read", "Read a text file.", json!({"path": path}), &["path"]),
-        f("fs_write", "Replace a file with new content (the whole file).",
+        f("fs_write", "Replace a file with new content (the whole file). A new file may be in a folder that does not exist yet; the folder is made.",
           json!({"path": path, "content": {"type": "string", "description": "The complete new content of the file"}}), &["path", "content"]),
         f("exec", "Run an allowed command, given as a list of arguments (no shell). Example: [\"pytest\", \"-q\"].",
           json!({"argv": {"type": "array", "items": {"type": "string"}}}), &["argv"]),
