@@ -67,6 +67,7 @@ At the end of each milestone, write `docs/milestones/M<n>-<name>.md` from `docs/
 | `M5-benchmarks.md` | 10 | Benchmarks, full security suite |
 | `M6-release.md` | 11–12 | README, threat model, recovery semantics, v0.1 |
 | `M7-bonus-external-tool.md` | after v0.1 | Bonus: `ext.call`, the fake service, its reconciliation rule and fault cells |
+| `M8-first-user.md` | after M7 | Bugs found by hand (B-009 to B-013), folder-making writes, first messages, the patch's notes, packages from outside the repo, the AppArmor profile, the first trial on a real project |
 
 ## Design rules that must hold
 
@@ -130,9 +131,13 @@ The bonus (M7, tag `m7` locally) is built on top of v0.1: the tool `ext.call`, t
 
 `main` and the tags `m0`–`m7`, `v0.1` are on GitHub (`pessimistic-zer0/agentos`). They were pushed once by the agent at Prince's direct request (D-083); the rule above is unchanged: the agent does not push.
 
-After M7, a hand check found two bugs that no suite covered, B-009 and B-010 (`docs/bugs.md`). Both are fixed (D-085, D-086), and `fs.write` now makes missing folders (D-084, which replaces the last rule of D-040). Tests: `tests/hardening.rs`, 9 tests, passing on `nix` (2026-11-14) and on `fhs` in CI run 43573592353 on `7d0ac1b` (D-087), together with every other suite and the 200-kill run.
+M8 (tag `m8` locally; `docs/milestones/M8-first-user.md`) is the work after the bonus, asked for by Prince on 2026-11-13 and 2026-11-14:
 
-After that, on 2026-11-14, Prince asked for what a first user needs (D-088): clearer first messages and an early check for the LLM server (D-089), a patch that lists what it cannot carry (D-090), a relative state folder fixed (B-011), packages from outside the repo (D-091, D-092; `tests/deps.rs`, `experiments/m8-venv`), and an AppArmor profile with a startup probe (D-093; `packaging/apparmor/agentos`). On `nix`: `make test` 104 passed. On `fhs`: CI run 43590153676 on `366c986` (D-094), both jobs green: `fhs` (all suites, the 200-kill run) and `fhs-apparmor` (restriction on; agentos refuses without the profile, then runs the demo task and four suites with it). Not tested: the profile at its shipped path `/usr/local/bin/agentos`. Benchmarks were not run again after the shipped policies gained `PYTHONDONTWRITEBYTECODE`. Other ideas from the walk-through are parked in the spec, §22.
+- Bugs found by using the program by hand, all fixed: B-009 to B-013 (`docs/bugs.md`). `fs.write` makes missing folders (D-084).
+- What a first user needs (D-088): clearer first messages and an early check for the LLM server (D-089); a patch that lists what it cannot carry (D-090, D-095); packages from outside the repo (D-091, D-092; `tests/deps.rs`); an AppArmor profile and a startup probe that tries (D-093, D-096; `packaging/apparmor/agentos`).
+- First trial on a project that is not the demo: `docs/results/real-repo-trial-nix.md` (the test project is in `~/Temp/AgentOS_temp/`, outside this repository). Ideas it raised are parked in the spec, §22.
+- On `nix`: `make test` 105 passed; 200-kill run 4,800 + 1,600 runs with 0 violations (`docs/results/recovery-200-nix-m8.md`); benchmarks re-run (`docs/results/bench-nix-m8/`).
+- On `fhs`: everything up to `366c986` is verified by CI run 43590153676 (D-094), both jobs: `fhs` and `fhs-apparmor`. **Not yet verified on `fhs`:** the commits after it (`bb60f5b` to tag `m8`): B-012, B-013 with the new probe (D-096), and two new CI steps (`make demo`; the profile installed at `/usr/local/bin/agentos`). They need a push and a green run.
 
 Open, and only Prince can close them:
 

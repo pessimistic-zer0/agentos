@@ -1,0 +1,12 @@
+date:       2026-11-14T15:43:37Z
+cpu:        13th Gen Intel(R) Core(TM) i5-13420H (12 threads)
+ram:        15.3 GiB
+kernel:     Linux 7.1.8
+os:         NixOS 26.05 (Yarara)
+filesystem: btrfs (state and workspace under target/)
+rustc:      rustc 1.95.0 (59807616e 2026-04-14) (built from a source tarball)
+build:      release
+preset:     nix
+python:     Python 3.13.15, pytest 9.0.3
+hyperfine:  hyperfine 1.20.0
+commit:     15fab27
