@@ -117,6 +117,8 @@ Run everything inside the dev shell (`flake.nix`): `nix develop -c <command>`, o
 - M0 practice program: `cd experiments/m0-ramp && cargo test`. Other experiments: see each `experiments/*/NOTES.md`.
 - Bonus tool by hand: `cargo run --example fake_service` (port 8099; `FAKE_SERVICE_FAULTS='order-1=drop_after'` loses an answer), add the `[external]` section it prints to a copy of a policy, and use a script step `tool = "ext.call"`. Tests: `tests/external.rs`; the external fault cells are the second test in `tests/recovery/main.rs` (report: `target/recovery-ext-report.json`).
 - Hostile leftovers and folder-making writes: `tests/hardening.rs` (part of `make test`; alone: `systemd-run --user --scope -p Delegate=yes cargo test --test hardening`).
+- Packages from outside the repo (a mounted virtualenv, `[sandbox.env]`): `tests/deps.rs`. First messages, the patch's notes, the startup probe: `tests/hardening.rs`.
+- Ubuntu without the system-wide sysctl: `packaging/apparmor/agentos` (install steps in its header and in the README); CI job `fhs-apparmor`.
 - Bugs the suites find in the runtime get a note in `docs/bugs.md`.
 - CI: `gh run list --limit 5`, `gh run view <id> --log-failed`, `gh run download <id> -n recovery-report-fhs`.
 
@@ -129,6 +131,8 @@ The bonus (M7, tag `m7` locally) is built on top of v0.1: the tool `ext.call`, t
 `main` and the tags `m0`–`m7`, `v0.1` are on GitHub (`pessimistic-zer0/agentos`). They were pushed once by the agent at Prince's direct request (D-083); the rule above is unchanged: the agent does not push.
 
 After M7, a hand check found two bugs that no suite covered, B-009 and B-010 (`docs/bugs.md`). Both are fixed (D-085, D-086), and `fs.write` now makes missing folders (D-084, which replaces the last rule of D-040). Tests: `tests/hardening.rs`, 9 tests, passing on `nix` (2026-11-14) and on `fhs` in CI run 43573592353 on `7d0ac1b` (D-087), together with every other suite and the 200-kill run.
+
+After that, on 2026-11-14, Prince asked for what a first user needs (D-088): clearer first messages and an early check for the LLM server (D-089), a patch that lists what it cannot carry (D-090), a relative state folder fixed (B-011), packages from outside the repo (D-091, D-092; `tests/deps.rs`, `experiments/m8-venv`), and an AppArmor profile with a startup probe (D-093; `packaging/apparmor/agentos`). On `nix`: `make test` 104 passed. **Not yet verified on `fhs`**: these commits (`f009931` to the latest) are local. The AppArmor profile has never been run anywhere; the CI job `fhs-apparmor` is its first test. Benchmarks were not run again after the shipped policies gained `PYTHONDONTWRITEBYTECODE`. Other ideas from the walk-through are parked in the spec, §22.
 
 Open, and only Prince can close them:
 

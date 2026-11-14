@@ -13,6 +13,7 @@ It is a learning and portfolio project, not a product. It does one thing: one ag
 - **Verified on two systems, no more.** NixOS on the development machine, and Ubuntu 24.04 in CI ([run 43385661105](https://github.com/pessimistic-zer0/agentos/actions/runs/43385661105), 2026-11-13: lint, all test suites, and 4,800 kills with 0 violations). The first two CI runs failed and found two real bugs (B-007, B-008 in [`docs/bugs.md`](docs/bugs.md)). Debian, Fedora and Arch use the same `fhs` preset and have not been run. On Ubuntu the benchmarks and `make demo` have not been run either.
 - Licensed under MIT or Apache-2.0, at your option (see [License](#license)).
 - **After v0.1: one bonus tool.** `ext.call` sends a request to a (fake) outside service, something a checkpoint cannot undo. It is off unless a policy allows it. See [the bonus](#the-bonus-a-call-that-cannot-be-rolled-back).
+- **After that: what a first user needs.** Clearer first messages, a patch that says what it leaves out, packages from outside the repository, and an AppArmor profile for Ubuntu. See [on your own project](#on-your-own-project). Verified on NixOS; the Ubuntu run, and the profile in particular, are **not yet verified** (they need a CI run).
 - Read [what it does not do](#what-it-does-not-do) before trusting it with anything.
 
 ## The demo
@@ -53,8 +54,22 @@ You need: Linux 5.14 or newer with cgroup v2, Landlock and unprivileged user nam
 ```sh
 sudo apt install build-essential python3-pytest diffutils       # Ubuntu / Debian
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh  # Rust
-sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0   # Ubuntu 23.10+ only
 make demo                                                       # picks policies/fhs.toml
+```
+
+**Ubuntu 23.10 and newer** allow user namespaces only to programs that have an AppArmor profile. Pick one:
+
+```sh
+# (a) For agentos alone: install the program and the profile that comes with it.
+#     Not yet verified: the profile is new and is tried by the CI job `fhs-apparmor`.
+cargo build --release
+sudo install -m 755 target/release/agentos /usr/local/bin/agentos
+sudo install -m 644 packaging/apparmor/agentos /etc/apparmor.d/agentos
+sudo apparmor_parser -r /etc/apparmor.d/agentos
+
+# (b) For every program on the machine (what `make demo` and the main CI job use,
+#     because they run the binary from target/, where the profile does not apply):
+sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 ```
 
 If something is missing, `agentos` stops at startup and says what (for example, how to get a delegated cgroup).
@@ -72,7 +87,7 @@ Three suites, one command (`nix develop -c make eval`). Results of record, with 
 
 A real LLM also completed the demo task (a local 4B model under llama.cpp), including after being killed mid-run. Three earlier attempts failed; both the failures and the successful run are in `docs/results/`. This shows the loop works end to end with a real model, not that the agent is good.
 
-The suites found seven bugs in the runtime itself (two of them only on the Ubuntu CI runs); each has a short note in [`docs/bugs.md`](docs/bugs.md).
+The suites found seven bugs in the runtime itself (two of them only on the Ubuntu CI runs); each has a short note in [`docs/bugs.md`](docs/bugs.md). Three more (B-009 to B-011) were found after v0.1 by using the program by hand, in places no suite looked; they are in the same file.
 
 ## The bonus: a call that cannot be rolled back
 
@@ -183,6 +198,9 @@ allow = [["pytest"], ["python3", "-m", "pytest"]]   # argv prefixes
 [sandbox]
 ro_mounts = ["/nix/store"]                          # fhs preset: /usr, /bin, /lib, /lib64
 
+[sandbox.env]                                       # extra variables for commands, fixed text
+PYTHONDONTWRITEBYTECODE = "1"
+
 [limits]
 memory_mb = 512
 pids = 128
@@ -191,6 +209,40 @@ call_timeout_s = 60
 max_output_kb = 64
 max_tool_calls = 50
 ```
+
+### On your own project
+
+The shipped policies fit the demo. For a real repository, copy one and change four things.
+
+1. **Where the agent may write.** `[filesystem] write`: for example `["src/**", "tests/**", "pyproject.toml"]`. `fs.write` makes missing folders inside these paths. Anything else is refused, and what a command changes elsewhere is put back.
+2. **Which commands it may run.** `[exec] allow`: argv prefixes, bare program names. Every allowed command is arbitrary code (your test suite runs your code); the sandbox is what confines it. There is no network in the sandbox, so a command that downloads something will fail.
+3. **The packages your tests need.** The sandbox sees the copy of the repo and the folders in `sandbox.ro_mounts`, nothing else. Not your home folder, and not a virtualenv, even one inside the repo.
+   - *A virtualenv:* add its folder to `ro_mounts` and start `agentos` with it activated. A mount may not be under `/tmp`.
+
+     ```toml
+     [sandbox]
+     ro_mounts = ["/usr", "/bin", "/lib", "/lib64", "/home/me/proj/.venv"]
+     ```
+     ```sh
+     source /home/me/proj/.venv/bin/activate
+     agentos run --repo /home/me/proj --policy my-policy.toml --agent llm --task "..."
+     ```
+   - *Any other folder of packages:* mount it the same way and point at it with a variable:
+
+     ```toml
+     [sandbox.env]
+     PYTHONPATH = "/home/me/deps"
+     ```
+   Everything under a mount can be read by the code the agent runs (never written). Do not mount a folder that holds secrets.
+4. **The limits.** `call_timeout_s` (60) must be longer than your test suite takes; `max_tool_calls` (50) is the whole run's budget; `max_output_kb` (64) is also the largest file `fs.read` returns.
+
+Things to know before the first run:
+
+- **The result is a patch**, printed at the end as `patch: <path>`. Read it, then apply it in your repository with `git apply <path>` or `patch -p1 < <path>`. A patch is text: if the run added a binary file, changed a file's mode or made an empty folder, the run ends with `NOT in the patch: …` and the patch starts with one `# agentos:` line per such change, saying where to copy the file from.
+- **`.git` is not in the workspace** (the shipped deny list leaves it out), so commands that ask git for something will not find a repository.
+- **The whole repository is copied** at the start and again after every change. On btrfs and XFS the copies share disk blocks. Elsewhere, a repository with a large `node_modules` or `target/` folder is slow and takes space: 20,000 small files took 5.4 s for a 7-call run here, against 0.6 s for the demo.
+- **If you stop a run** (Ctrl-C, or the terminal closes), nothing is printed. `agentos status` shows it as `interrupted`; `agentos run --resume <id>` settles the call that was cut off and goes on.
+- **Nothing is deleted for you.** Each execution keeps its workspace and one checkpoint per change. Remove old ones with `rm -rf ~/.local/share/agentos/executions/<id>`.
 
 ## What it does not do
 
