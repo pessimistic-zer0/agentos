@@ -77,35 +77,95 @@ fn status_file() -> fs::File {
     fs::File::from(unsafe { OwnedFd::from_raw_fd(STATUS_FD) })
 }
 
-/// Hidden first argument that runs `probe_main`.
-pub const PROBE_ARG: &str = "__probe-userns";
+/// The steps of `probe_in_child`, in order; the child's exit code is the
+/// number of the step that failed (1-based), 0 if none did.
+pub const PROBE_STEPS: [&str; 6] = [
+    "creating a user namespace",
+    "writing /proc/self/setgroups",
+    "writing /proc/self/uid_map",
+    "writing /proc/self/gid_map",
+    "changing a mount inside the user namespace",
+    "bringing up the loopback interface inside the user namespace",
+];
 
-/// Entry point of `agentos __probe-userns`: do the first steps of building
-/// a sandbox and say whether they worked. Exit code 0 means yes; otherwise
-/// the reason is on stderr. Never returns.
+/// Do the first steps of building a sandbox and leave through `_exit`:
+/// code 0 if all worked, otherwise the number of the failed step, with the
+/// error number written to fd 2 as decimal digits.
 ///
-/// It goes as far as the first step that needs a privilege *inside* the new
-/// user namespace (changing a mount). That matters on Ubuntu: there the
-/// kernel lets a program without an AppArmor profile create the namespace
-/// and then refuses everything it tries to do in it.
-pub fn probe_main() -> ! {
-    let run = || -> Result<()> {
-        let (uid, gid) = (nix::unistd::getuid().as_raw(), nix::unistd::getgid().as_raw());
-        unshare(CloneFlags::CLONE_NEWUSER | CloneFlags::CLONE_NEWNS | CloneFlags::CLONE_NEWNET).context("creating a user namespace")?;
-        fs::write("/proc/self/setgroups", "deny").context("writing /proc/self/setgroups")?;
-        fs::write("/proc/self/uid_map", format!("{uid} {uid} 1")).context("writing uid_map")?;
-        fs::write("/proc/self/gid_map", format!("{gid} {gid} 1")).context("writing gid_map")?;
-        mount(None::<&str>, "/", None::<&str>, MsFlags::MS_REC | MsFlags::MS_PRIVATE, None::<&str>).context("changing a mount inside the user namespace")?;
-        loopback_up().context("bringing up the loopback interface inside the user namespace")?;
-        Ok(())
-    };
-    match run() {
-        Ok(()) => std::process::exit(0),
-        Err(e) => {
-            eprintln!("{e:#}");
-            std::process::exit(1)
+/// It goes as far as steps that need a privilege *inside* the new user
+/// namespace. That matters on Ubuntu: there the kernel lets a program
+/// without an AppArmor profile create the namespace and then refuses what
+/// it tries to do in it (D-093).
+///
+/// This runs in a forked child of the runtime, between `fork` and what
+/// would be `exec` (`Command::pre_exec`), so it works whatever program the
+/// runtime is part of: `agentos`, a benchmark, a test (bug B-013). In that
+/// place only async-signal-safe calls are allowed, because another thread
+/// of the parent may have held a lock (for example the allocator's) at the
+/// moment of the fork. So: raw system calls only, no allocation, no
+/// `format!`; the map text is prepared by the caller before the fork.
+///
+/// # Safety
+/// Must only be called in a freshly forked child. It never returns.
+pub unsafe fn probe_in_child(uid_map: &[u8], gid_map: &[u8]) -> ! {
+    unsafe fn fail(step: i32) -> ! {
+        // The error number as digits, without allocating.
+        let mut e = *libc::__errno_location();
+        let mut buf = [0u8; 12];
+        let mut at = buf.len();
+        loop {
+            at -= 1;
+            buf[at] = b'0' + (e % 10) as u8;
+            e /= 10;
+            if e == 0 {
+                break;
+            }
         }
+        libc::write(2, buf[at..].as_ptr().cast(), buf.len() - at);
+        libc::_exit(step)
     }
+    unsafe fn write_file(path: &std::ffi::CStr, text: &[u8]) -> bool {
+        let fd = libc::open(path.as_ptr(), libc::O_WRONLY | libc::O_CLOEXEC);
+        if fd < 0 {
+            return false;
+        }
+        let ok = libc::write(fd, text.as_ptr().cast(), text.len()) == text.len() as isize;
+        let e = *libc::__errno_location();
+        libc::close(fd);
+        *libc::__errno_location() = e;
+        ok
+    }
+    if libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWNS | libc::CLONE_NEWNET) != 0 {
+        fail(1)
+    }
+    if !write_file(c"/proc/self/setgroups", b"deny") {
+        fail(2)
+    }
+    if !write_file(c"/proc/self/uid_map", uid_map) {
+        fail(3)
+    }
+    if !write_file(c"/proc/self/gid_map", gid_map) {
+        fail(4)
+    }
+    if libc::mount(std::ptr::null(), c"/".as_ptr(), std::ptr::null(), libc::MS_REC | libc::MS_PRIVATE, std::ptr::null()) != 0 {
+        fail(5)
+    }
+    // The same two ioctl calls as `loopback_up`, without its error text.
+    let fd = libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0);
+    if fd < 0 {
+        fail(6)
+    }
+    let mut ifr: libc::ifreq = std::mem::zeroed();
+    ifr.ifr_name[0] = b'l' as libc::c_char;
+    ifr.ifr_name[1] = b'o' as libc::c_char;
+    if libc::ioctl(fd, libc::SIOCGIFFLAGS, &mut ifr) != 0 {
+        fail(6)
+    }
+    ifr.ifr_ifru.ifru_flags |= libc::IFF_UP as libc::c_short;
+    if libc::ioctl(fd, libc::SIOCSIFFLAGS, &ifr) != 0 {
+        fail(6)
+    }
+    libc::_exit(0)
 }
 
 /// Entry point of `agentos __sandbox-init <json>`. Never returns.

@@ -461,3 +461,15 @@ fn a_machine_without_user_namespaces_is_told_so_by_trying_not_by_guessing() {
     assert!(err.contains("max_user_namespaces is 0"), "{err}");
     assert!(!t.state.join("executions").exists());
 }
+
+#[test]
+fn the_startup_check_works_from_a_program_that_is_not_agentos() {
+    // B-013: the first version of the check started "itself" with a hidden
+    // argument, which only the agentos binary understands. A benchmark or a
+    // test that uses the library got "user namespaces cannot be used".
+    // This test binary is such a program.
+    let me = std::env::current_exe().unwrap();
+    assert_ne!(me, agentos_bin());
+    let problems = agentos::sandbox::check_host(&me);
+    assert!(!problems.iter().any(|p| p.contains("user namespaces")), "{problems:#?}");
+}

@@ -83,9 +83,6 @@ fn main() -> Result<()> {
     if args.len() == 3 && args[1] == "__sandbox-init" {
         agentos::sandbox::ns::helper_main(&args[2]);
     }
-    if args.len() == 2 && args[1] == agentos::sandbox::ns::PROBE_ARG {
-        agentos::sandbox::ns::probe_main();
-    }
     let cli = Cli::parse();
     // Made absolute once, here: later steps run helper programs (`diff`,
     // `cp`) from other folders, where a relative path means something else

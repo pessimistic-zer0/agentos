@@ -142,19 +142,36 @@ pub fn run(helper: &Path, spec: &SandboxSpec, cg: &ExecCgroup, timeout: Duration
 /// Check, at startup, that this machine can run the sandbox. Returns every
 /// problem found, each with what to do about it (CLAUDE.md, "Portability").
 ///
-/// `helper` is the agentos binary. It is started once as
-/// `agentos __probe-userns` to find out whether a user namespace can really
-/// be used. Reading the kernel's switches is not enough for that: on Ubuntu
-/// the switch `apparmor_restrict_unprivileged_userns` can be on and agentos
-/// still be allowed, through its AppArmor profile (D-093).
+/// Whether a user namespace can really be used is found out by trying, in
+/// a forked child (`ns::probe_in_child`). Reading the kernel's switches is
+/// not enough: on Ubuntu the switch `apparmor_restrict_unprivileged_userns`
+/// can be on and agentos still be allowed, through its AppArmor profile
+/// (D-093). `helper` is only the program named in the `Command` that does
+/// the fork; it is never started.
 pub fn check_host(helper: &Path) -> Vec<String> {
     let mut problems = Vec::new();
     let read = |p: &str| std::fs::read_to_string(p).ok().map(|s| s.trim().to_string());
-    let probe = Command::new(helper).arg(ns::PROBE_ARG).env_clear().stdin(Stdio::null()).output();
-    let failure = match probe {
-        Ok(out) if out.status.success() => None,
-        Ok(out) => Some(String::from_utf8_lossy(&out.stderr).trim().to_string()),
-        Err(e) => Some(format!("starting {}: {e}", helper.display())),
+    let uid_map = format!("{0} {0} 1", nix::unistd::getuid().as_raw()).into_bytes();
+    let gid_map = format!("{0} {0} 1", nix::unistd::getgid().as_raw()).into_bytes();
+    let mut probe = Command::new(helper);
+    probe.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
+    // SAFETY: the closure runs in the forked child and never returns; it
+    // makes raw system calls only and touches nothing but the two byte
+    // strings prepared above (see `probe_in_child` for what it relies on).
+    unsafe {
+        probe.pre_exec(move || ns::probe_in_child(&uid_map, &gid_map));
+    }
+    let failure = match probe.output() {
+        Ok(out) if out.status.code() == Some(0) => None,
+        Ok(out) => {
+            let step = out.status.code().and_then(|c| ns::PROBE_STEPS.get((c as usize).wrapping_sub(1))).copied().unwrap_or("the probe");
+            let errno = String::from_utf8_lossy(&out.stderr).trim().parse::<i32>().ok();
+            Some(match errno {
+                Some(e) => format!("{step}: {}", std::io::Error::from_raw_os_error(e)),
+                None => format!("{step} failed"),
+            })
+        }
+        Err(e) => Some(format!("starting the probe: {e}")),
     };
     if let Some(why) = failure {
         // The probe says that it does not work; the switches say why.

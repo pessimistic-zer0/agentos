@@ -2226,7 +2226,7 @@ What a policy author must know: everything under a read-only mount can be read b
 
 ### D-093 — Ubuntu: an AppArmor profile for agentos, and a startup check that tries instead of reading switches
 - **Date:** 2026-11-14
-- **Status:** Taken; the profile is **not yet verified** (it can only be tried on Ubuntu, in CI, after Prince pushes)
+- **Status:** Taken; the profile is **not yet verified** (it can only be tried on Ubuntu, in CI, after Prince pushes). Its probe mechanism (`__probe-userns`) is replaced by D-096; the profile was verified by D-094
 - **Area:** sandbox
 - **ADR:** none
 
@@ -2299,6 +2299,30 @@ What a policy author must know: everything under a read-only mount can be read b
 
 **Concepts to learn.** None new; see D-090.
 
+### D-096 — The user-namespace probe runs in a forked child, not as a second start of the program (replaces the probe of D-093)
+- **Date:** 2026-11-14
+- **Status:** Taken; D-093's profile and its reasons stand, its `__probe-userns` mechanism is replaced
+- **Area:** sandbox
+- **ADR:** none
+
+**In plain words.** To find out whether user namespaces work, the runtime tries to make one. The first version did that by starting the same program a second time with a secret argument. That only works if the program is `agentos`. The benchmarks are different programs that use the same code, and for them the trick started a second benchmark. Now the try happens in a short-lived copy of the running process (a fork) that never becomes another program, so it does not matter which program it is.
+
+**The problem.** Bug B-013.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Do the probe's steps in the forked child of a `Command`, in `pre_exec`, and `_exit` there with the number of the failed step; the error number goes to the child's stderr as digits | Taken | Works from any program. Nothing is ever started |
+| Keep the hidden argument and make every program handle it | Discarded | Every benchmark, example and future user of the library would have to remember |
+| Probe in the runtime's own process | Discarded | `unshare(CLONE_NEWUSER)` changes the calling process for good, and refuses if it has several threads |
+| Call `fork()` directly | Discarded | `Command` already does the fork, the pipes and the wait correctly |
+
+**What this means for the code.** `sandbox/ns.rs::probe_in_child` (an `unsafe fn`: only async-signal-safe calls, no allocation, because another thread may have held the allocator's lock at the moment of the fork; the id-map text is prepared before the fork) and `PROBE_STEPS`. `sandbox::check_host` builds the `Command` and turns exit code and error number into the message. `main.rs` no longer knows a probe argument. The messages are unchanged in shape, so the CI job `fhs-apparmor`, which looks for two of their phrases, needs no change.
+
+**Evidence.** `nix` preset, 2026-11-14: `make test` 105 passed; clippy clean; `the_startup_check_works_from_a_program_that_is_not_agentos` passes; with the limit set to 0 in a throwaway namespace the message is `user namespaces cannot be used (creating a user namespace: No space left on device (os error 28))`; the `fs.write` benchmark runs again (`docs/results/bench-nix-m8/`). Not yet run on `fhs`, and in particular the Ubuntu message (which step fails without the profile) has not been seen with this version.
+
+**Concepts to learn.** `fork` and `exec` as two steps; async-signal-safety; why a library must not assume which program it is in.
+
 ---
 
 ## Still open
@@ -2370,6 +2394,7 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-13 | Asked to verify the finished project, Claude ran all suites (pass) and then tried by hand what the suites do not: files a sandboxed command leaves behind that the runtime's own bookkeeping cannot handle. Expected a failed tool call. Got a stopped run for a non-UTF-8 file name and a `chmod 000` file, and for a `chmod 000` folder an execution that `recover` and `--resume` both refuse forever (B-009, B-010 in `docs/bugs.md`, both open). Also seen, and by design (D-040): `fs.write` cannot create a file in a folder that does not exist, and no shipped tool can make a folder | The post-`exec` scan, the checkpoint copy and the restore run in trusted code but on a tree shaped by untrusted code; their errors were treated as runtime failures. The security suite tests for escapes and the recovery suite for crashes of a well-behaved workspace; nothing tested the two together |
 | 2026-11-14 | Fixing B-010 (a `chmod 000` folder), the same fault was expected only in workspaces a command had just left. A second test showed it also in a state every suite had called healthy: a read-only folder (mode 555) with one file copies without complaint, sits in a checkpoint, and then no rollback and no orphan-checkpoint removal can delete it. All 9 new tests in `tests/hardening.rs` failed on the old code and pass on the new (D-084 to D-086). With the new recovery rule for folder-making writes switched off, the P3 kills caught it 3 runs out of 3. Afterwards on `nix`: `make test` 90 passed, 0 failed; clippy 0 warnings; `RUNS=20 make eval-recovery` 480 + 160 runs, 0 violations, 0 duplicated effects (a quick look, not a result of record) | The dangerous leftovers are not only the ones that make a step fail at once; some pass every check and break a *later* step. Deleting is an operation with its own permissions, separate from reading and copying |
 | 2026-11-14 | Prince asked where a real user would struggle. Claude used the built binary as a newcomer would, on the `nix` preset. Run and seen: (1) a patch from a run that added a binary file, made a script executable and changed a mode applied with `git apply` without any message, but the binary file was missing and both modes were lost; (2) a test importing a package from a `.venv` inside the repo ended with exit 2: the virtualenv is not used; (3) `--agent llm` with no server running copied the workspace, failed with `Connection refused`, named no environment variable, and left an execution that shows as `interrupted` with 0 calls; (4) a repo of 20,000 small files (79 MB) took 5.4 s for the 7-call demo script against 0.6 s for the demo repo, with 4 full checkpoints; (5) a policy parse error is printed twice; (6) without the `systemd-run` prefix the message names a missing `cpu` controller before it names the fix. Read, not run: there is no signal handler, so Ctrl-C ends the run without a word; nothing deletes old executions; the README does not say how to apply the patch or write a policy. A Ctrl-C test from a background shell was void (background jobs ignore SIGINT) | The suites prove the claims; none of them plays a newcomer. Features that would close these gaps are outside v1 and are in the parking lot (spec §22) until Prince decides. Items 1, 3, 5, 6 and the README gaps are defects or wording inside v1 |
+| 2026-11-14 | First run on a project that is not the demo: an inventory service with real PyPI packages in a virtualenv, written by a separate AI agent that was told not to look at AgentOS. Expected the new dependency support to be the weak point. It worked at once (same `3 failed, 75 passed` as outside; after four tickets were fixed through the gateway, 79 passed, in the sandbox and again after `git apply` in a clone). What failed was elsewhere: the applied patch lacked the package's empty `__init__.py` (B-012, fixed, D-095); `.env.example` was denied; a 134 KB fixture and a gzip file could not be read; `.pytest_cache` showed up as a policy violation on every test run; a forgotten `activate` gave exit 4 with no hint. The local 4B model solved a one-line ticket in 5 calls and 33 s and gave up on a two-module ticket after one call, which the runtime records as `COMPLETED`. Record: `docs/results/real-repo-trial-nix.md` | A project nobody tuned for the tool finds different things from a test written by the tool's author: D-090's list of what a patch cannot carry was written from memory and was one item short. The limits that bite first are the file tools' (size, text only), not the sandbox's |
 
 ---
 
@@ -2407,6 +2432,7 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | Search bit | The execute bit on a folder. Without it nobody (except root) can use any name inside the folder, even its owner |
 | Virtualenv | A folder holding one project's Python packages and a `python3` that is a link to the system's Python; Python uses the folder's packages only when started through that link |
 | AppArmor | A Linux security module that limits programs by profiles (permission files), one per program path. Ubuntu uses it to decide who may use user namespaces |
+| Async-signal-safe | Safe to call in a process that was just forked from a program with several threads: it takes no lock and allocates no memory. Raw system calls are; `format!` is not |
 | Intent | A log record written before an action, saying what is about to happen |
 | Helper (re-exec) | Starting your own program a second time to do a job that needs a fresh, single-threaded process |
 | Landlock | Kernel feature that lets a process give up its own access to files, permanently |

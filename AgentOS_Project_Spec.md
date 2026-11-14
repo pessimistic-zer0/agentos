@@ -1080,6 +1080,13 @@ Uncommitted. Some are research projects on their own.
   - **Starting:** every command needs the `systemd-run --user --scope -p Delegate=yes` prefix; the runtime could start itself that way. On Ubuntu, ship an AppArmor profile instead of telling users to switch off a system-wide protection.
   - **Stopping:** Ctrl-C ends the run silently; say that it can be resumed and how.
   - **Checking before running:** `agentos check` for the host and a policy file, so mistakes show before an execution exists.
+- **From the first trial on a real project (2026-11-14; `docs/results/real-repo-trial-nix.md`).** None is in v1:
+  - **Reading part of a file** (`fs.read` with a line range), and large files at all: the 64 KB cap stopped a ticket about a 134 KB fixture.
+  - **Binary files and file modes through the file tools** (read, write, make executable).
+  - **A hint when a mounted virtualenv is not the one in use** (its `bin` is not first on `PATH`).
+  - **A narrower default deny list:** `.env.*` also denies `.env.example`; and a way to say "do not copy, but it is not a secret" (today `deny` does both jobs, as for `.venv/**`).
+  - **Caches as non-violations:** `.pytest_cache` changes are reverted and reported on every test run.
+  - **A run that ends with words but without passing tests** is shown as `COMPLETED`; a clearer end state, or one nudge to continue.
 
 ---
 
