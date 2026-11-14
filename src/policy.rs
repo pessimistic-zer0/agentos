@@ -28,6 +28,10 @@ pub enum PolicyError {
     EmptyExecRule(usize),
     #[error("sandbox.ro_mounts entry `{0}` must be an absolute path")]
     RelativeMount(String),
+    #[error("sandbox.ro_mounts entry `{0}` cannot be used: the sandbox puts its own folder at /work, /tmp, /proc and /dev, and `/` would show the whole machine; keep the folder somewhere else (for example under your home folder)")]
+    ReservedMount(String),
+    #[error("sandbox.env name `{name}`: {reason}")]
+    Env { name: String, reason: &'static str },
     #[error("limits.{0} must be greater than zero")]
     ZeroLimit(&'static str),
     #[error("external.service `{name}`: {reason}")]
@@ -79,7 +83,19 @@ pub struct SandboxRules {
     /// Host folders mounted read-only inside the sandbox (distro-specific; this
     /// is what the `fhs` and `nix` presets differ in).
     pub ro_mounts: Vec<String>,
+    /// Extra environment variables for every command, on top of `PATH`,
+    /// `HOME` and `LANG` (which the runtime sets and a policy cannot
+    /// change). Written as a `[sandbox.env]` table. Values are fixed text:
+    /// nothing is taken from the runtime's own environment (D-092).
+    #[serde(default)]
+    pub env: std::collections::BTreeMap<String, String>,
 }
+
+/// Places the sandbox builds itself. A host folder mounted there would be
+/// covered up, or would stop the sandbox from starting.
+const RESERVED_MOUNTS: [&str; 4] = ["/work", "/tmp", "/proc", "/dev"];
+/// Variables the runtime sets for every command.
+const RESERVED_ENV: [&str; 3] = ["PATH", "HOME", "LANG"];
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -215,6 +231,22 @@ impl Policy {
         for m in &self.sandbox.ro_mounts {
             if !m.starts_with('/') {
                 return Err(PolicyError::RelativeMount(m.clone()));
+            }
+            let tidy = m.trim_end_matches('/');
+            if tidy.is_empty() || RESERVED_MOUNTS.iter().any(|r| tidy == *r || tidy.starts_with(&format!("{r}/"))) {
+                return Err(PolicyError::ReservedMount(m.clone()));
+            }
+        }
+        for (name, value) in &self.sandbox.env {
+            let err = |reason| PolicyError::Env { name: name.clone(), reason };
+            if name.is_empty() || name.contains('=') || name.contains('\0') {
+                return Err(err("a name must not be empty or contain `=`"));
+            }
+            if RESERVED_ENV.contains(&name.as_str()) {
+                return Err(err("PATH, HOME and LANG are set by the runtime and cannot be changed"));
+            }
+            if value.contains('\0') {
+                return Err(err("the value contains a NUL byte"));
             }
         }
         let l = &self.limits;
@@ -467,6 +499,29 @@ max_tool_calls = 20
         assert!(matches!(Policy::parse(&zero), Err(PolicyError::ZeroLimit("pids"))));
         let rel = DEMO.replace(r#"ro_mounts = ["/usr"]"#, r#"ro_mounts = ["usr"]"#);
         assert!(matches!(Policy::parse(&rel), Err(PolicyError::RelativeMount(_))));
+        for reserved in ["/", "/tmp", "/tmp/venv", "/proc/1", "/dev", "/work/", "/work/x"] {
+            let p = DEMO.replace(r#"ro_mounts = ["/usr"]"#, &format!(r#"ro_mounts = ["/usr", "{reserved}"]"#));
+            assert!(matches!(Policy::parse(&p), Err(PolicyError::ReservedMount(_))), "{reserved}");
+        }
+        for fine in ["/home/u/.venvs/proj", "/opt/tools", "/tmpfiles", "/workspace"] {
+            let p = DEMO.replace(r#"ro_mounts = ["/usr"]"#, &format!(r#"ro_mounts = ["/usr", "{fine}"]"#));
+            assert!(Policy::parse(&p).is_ok(), "{fine}");
+        }
+    }
+
+    #[test]
+    fn sandbox_env_is_fixed_text_with_three_names_reserved() {
+        assert!(demo().sandbox.env.is_empty(), "no [sandbox.env] means no extra variables");
+        let with = |table: &str| Policy::parse(&DEMO.replace("[limits]", &format!("[sandbox.env]\n{table}\n[limits]")));
+        let p = with("PYTHONPATH = \"/opt/deps\"\nEMPTY = \"\"").unwrap();
+        assert_eq!(p.sandbox.env.get("PYTHONPATH").map(String::as_str), Some("/opt/deps"));
+        assert_eq!(p.sandbox.env.get("EMPTY").map(String::as_str), Some(""));
+        for reserved in ["PATH", "HOME", "LANG"] {
+            assert!(matches!(with(&format!("{reserved} = \"x\"")), Err(PolicyError::Env { .. })), "{reserved}");
+        }
+        assert!(matches!(with("\"A=B\" = \"x\""), Err(PolicyError::Env { .. })));
+        assert!(matches!(with("\"\" = \"x\""), Err(PolicyError::Env { .. })));
+        assert!(matches!(with("N = 1"), Err(PolicyError::Parse { .. })), "values are text");
     }
 
     fn with_external(extra: &str) -> Result<Policy, PolicyError> {

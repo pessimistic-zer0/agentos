@@ -1,5 +1,12 @@
 # Default AgentOS policy for FHS distributions (preset `fhs`).
 # The only difference from nix.toml is [sandbox].ro_mounts.
+#
+# For your own project, copy this file and change:
+#   [filesystem] write   where the agent may write
+#   [exec] allow         which commands it may run (each is arbitrary code, confined by the sandbox)
+#   [sandbox] ro_mounts  add a virtualenv or another folder of packages (read-only in the sandbox)
+#   [sandbox.env]        variables the commands need
+# See "Using it on your own project" in the README.
 policy_version = 1
 name = "default-fhs"
 
@@ -22,6 +29,12 @@ allow = [
 # libraries on Ubuntu, Debian, Fedora and Arch. A folder that is a symlink on the
 # host (for example /bin -> usr/bin) is recreated as the same symlink.
 ro_mounts = ["/usr", "/bin", "/lib", "/lib64"]
+
+[sandbox.env]
+# Extra environment variables for every command (fixed text). PATH, HOME and
+# LANG are set by the runtime. This one stops Python writing compiled .pyc
+# files next to the sources: a patch cannot carry them (D-090, D-092).
+PYTHONDONTWRITEBYTECODE = "1"
 
 [limits]
 memory_mb      = 512

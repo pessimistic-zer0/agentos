@@ -21,7 +21,7 @@ jobs:
         with:
           components: clippy
       - name: Install pytest and hyperfine
-        run: sudo apt-get update && sudo apt-get install -y python3-pytest hyperfine
+        run: sudo apt-get update && sudo apt-get install -y python3-pytest python3-venv hyperfine
       - name: Allow unprivileged user namespaces (Ubuntu 23.10+ restricts them through AppArmor)
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Start a systemd user session for the runner (needed for cgroup delegation)

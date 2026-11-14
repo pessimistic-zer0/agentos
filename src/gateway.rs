@@ -398,11 +398,16 @@ impl Gateway {
             ro_mounts: self.policy.sandbox.ro_mounts.iter().map(PathBuf::from).collect(),
             program,
             argv: argv.to_vec(),
-            env: vec![
+            // Three variables from the runtime, then the policy's own
+            // (`[sandbox.env]`, fixed text; it cannot name these three).
+            env: [
                 ("PATH".to_string(), self.programs.search_path()),
                 ("HOME".to_string(), "/work".to_string()),
                 ("LANG".to_string(), self.lang.clone()),
-            ],
+            ]
+            .into_iter()
+            .chain(self.policy.sandbox.env.iter().map(|(k, v)| (k.clone(), v.clone())))
+            .collect(),
             cgroup: self.sandbox.cgroups.path_of(&sandbox::cgroup_name(&self.dir.id, call_id)),
             parent_pid: std::process::id() as i32,
             uid: nix::unistd::getuid().as_raw(),

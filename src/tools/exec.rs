@@ -18,9 +18,17 @@ pub struct Programs {
 }
 
 impl Programs {
-    /// Find each program the policy allows on the host `PATH` and resolve
-    /// symlinks to its real location. The sandbox `PATH` is built from these
-    /// real locations, so no distro layout is assumed in the code.
+    /// Find each program the policy allows on the host `PATH`. The sandbox
+    /// `PATH` is built from where they were found, so no distro layout is
+    /// assumed in the code.
+    ///
+    /// The path used is the one found on `PATH`, with only its *folder*
+    /// resolved, as long as it and every symlink step behind it can be seen
+    /// in the sandbox. Otherwise it is the program's real location, with all
+    /// symlinks resolved. Keeping the found name matters for a Python
+    /// virtualenv: `venv/bin/python3` is a symlink to the system's Python,
+    /// and Python only uses the virtualenv's packages when it is started
+    /// through that link (D-091).
     pub fn resolve(policy: &Policy, host_path: &str) -> Result<Programs> {
         let mut resolved = Vec::new();
         for prog in policy.programs() {
@@ -32,21 +40,25 @@ impl Programs {
                 .filter(|d| !d.is_empty())
                 .map(|d| Path::new(d).join(&prog))
                 .find(|p| is_executable(p));
-            let real = match found {
-                Some(p) => std::fs::canonicalize(&p)?,
+            let real = match &found {
+                Some(p) => std::fs::canonicalize(p)?,
                 None => bail!("allowed program `{prog}` was not found on PATH"),
             };
             // The sandbox sees only sandbox.ro_mounts, so the program must live there.
             let mounts: Vec<PathBuf> = policy.sandbox.ro_mounts.iter().map(PathBuf::from).collect();
             if !crate::sandbox::visible_in_sandbox(&real, &mounts) {
                 bail!(
-                    "allowed program `{prog}` is at {}, which is not under any sandbox.ro_mounts entry ({}); \
-                     use the policy preset for this system (policies/fhs.toml or policies/nix.toml)",
+                    "allowed program `{prog}` is at {}, which the sandbox cannot see: it is not under any \
+                     sandbox.ro_mounts entry ({}).\n  \
+                     If this is the wrong kind of system for the policy, use the other preset (policies/fhs.toml or policies/nix.toml).\n  \
+                     If the program is in a virtualenv or another folder of your own, add that folder to sandbox.ro_mounts in a copy of the policy.",
                     real.display(),
                     policy.sandbox.ro_mounts.join(", ")
                 );
             }
-            resolved.push((prog.clone(), real));
+            let found = found.expect("checked above");
+            let as_found = link_chain_visible(&found, &mounts).unwrap_or(real);
+            resolved.push((prog.clone(), as_found));
         }
         Ok(Programs { resolved })
     }
@@ -64,6 +76,28 @@ impl Programs {
             .collect();
         dirs.into_iter().collect::<Vec<_>>().join(":")
     }
+}
+
+/// `found` with its folder resolved, if that path and every symlink step
+/// from it to the real file is under a read-only mount. `None` if any step
+/// is not (the caller then uses the fully resolved path, which is).
+fn link_chain_visible(found: &Path, mounts: &[PathBuf]) -> Option<PathBuf> {
+    // Resolve the folder, keep the name: `/bin/x` becomes `/usr/bin/x`, but
+    // `venv/bin/python3` stays the link it is.
+    let tidy = |p: &Path| Some(std::fs::canonicalize(p.parent()?).ok()?.join(p.file_name()?));
+    let start = tidy(found)?;
+    let mut at = start.clone();
+    for _ in 0..40 {
+        if !crate::sandbox::visible_in_sandbox(&at, mounts) {
+            return None;
+        }
+        if !std::fs::symlink_metadata(&at).ok()?.file_type().is_symlink() {
+            return Some(start);
+        }
+        // A relative link target is relative to the link's own folder.
+        at = tidy(&at.parent()?.join(std::fs::read_link(&at).ok()?))?;
+    }
+    None // a loop of links
 }
 
 fn is_executable(p: &Path) -> bool {

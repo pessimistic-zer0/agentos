@@ -2171,6 +2171,59 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 **Concepts to learn.** What a unified diff is; file modes; why "silently skipped" is worse than "refused".
 
+### D-091 — An allowed program is started through the path it was found at, not through its fully resolved path
+- **Date:** 2026-11-14
+- **Status:** Taken (changes how D-012's "resolve to the real path" is done)
+- **Area:** sandbox
+- **ADR:** none
+
+**In plain words.** A Python virtualenv is a folder with its own packages and a `python3` that is only a signpost (a symlink) to the system's Python. Python uses the virtualenv's packages only when it is started through that signpost. The runtime used to follow every signpost before starting a program, so it started the system's Python and the virtualenv was lost. Now it keeps the path where the program was found, and only tidies the folder part.
+
+**The problem.** First of the two features Prince approved (D-088): tests that import installed packages. The experiment `experiments/m8-venv` showed that a mounted virtualenv already worked for `pytest`, and for `python3 -m pytest` only by luck.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Keep the found path (folder resolved, name kept) when that path and every symlink step behind it are under a read-only mount; otherwise the fully resolved path, as before | Taken | The virtualenv's link survives; systems where the found path is not visible (NixOS: `/run/current-system/sw/bin`) behave as before |
+| Always keep the found path | Discarded | On NixOS it is often outside the mounts, so the program could not be started |
+| Teach the runtime about virtualenvs (`VIRTUAL_ENV`, `pyvenv.cfg`) | Discarded | Python-specific knowledge in `src/`. The link rule is general: Node, Ruby and others use the same trick |
+| Mount the user's whole home folder read-only | Discarded | It holds `~/.ssh`. A mount is named one folder at a time, by the policy author |
+
+**What this means for the code.** `tools/exec.rs`: `Programs::resolve` calls `link_chain_visible`. The check that the *real* file is under a mount is unchanged and still comes first. The error for a program outside the mounts now also says what to do for a virtualenv. The intent's `program` field shows the path used. On `fhs` the visible change is that `/usr/bin/python3` is started as that, not as `/usr/bin/python3.12`.
+
+**Evidence.** `tests/deps.rs`, `nix` preset, 2026-11-14: `a_virtualenv_outside_the_repo_is_used_when_it_is_mounted_and_active` (both steps exit 0 inside the virtualenv; the intent names `venv/bin/python3`) and `a_virtualenv_that_is_not_mounted_is_refused_at_startup_with_the_way_out` pass. Mutation check: with the old "fully resolved" rule put back, the first test failed on the intent's program path (`/nix/store/…/python3.13`), and only there, which matches the experiment: it worked before, by luck. All other suites pass unchanged. Not yet run on `fhs`.
+
+**Concepts to learn.** Symlink; virtualenv; how a program finds out where it was started from (`argv[0]`).
+
+### D-092 — `[sandbox.env]`: fixed environment variables from the policy; four places a mount may not be
+- **Date:** 2026-11-14
+- **Status:** Taken (extends D-012 and the "environment cleared" rule: still nothing from the host's environment)
+- **Area:** policy
+- **ADR:** none
+
+**In plain words.** Commands in the sandbox get three environment variables and nothing else, so that no secret from the user's shell leaks in. That stays. But some projects need a setting to find their packages or to run at all (`PYTHONPATH`, `NODE_PATH`, `DJANGO_SETTINGS_MODULE`). The policy can now list such variables with fixed values. It is the policy author who writes them, as plain text in the file; nothing is copied from the shell.
+
+**The problem.** Second half of the dependencies feature. Also two things found on the way: a read-only mount under `/tmp` broke the sandbox with "File exists", and Python's `.pyc` files made every run's patch carry notes about binary files (D-090).
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| A table `[sandbox.env]` of name = "text"; `PATH`, `HOME` and `LANG` cannot be set | Taken | Smallest thing that works; the values are in the policy file, whose hash is in the log, so a run records what it was given |
+| Pass chosen variables through from the host (`pass = ["PYTHONPATH"]`) | Discarded | The value would not be in the log, and one careless name (`AWS_SECRET_ACCESS_KEY`) leaks a secret |
+| Let the agent set variables per call | Discarded | The agent is untrusted; `LD_PRELOAD` alone would be a new attack to think about, and the tool arguments are fixed |
+| Refuse `ro_mounts` entries that are `/` or under `/work`, `/tmp`, `/proc`, `/dev` when the policy is loaded | Taken | The sandbox builds those itself; before, the failure came at the first command and named no cause |
+| Make such mounts work | Discarded | No use for it; a folder can be kept elsewhere |
+| Shipped policies set `PYTHONDONTWRITEBYTECODE = "1"` | Taken | No `.pyc` files, so the patch of a Python run is text only and D-090's note stays meaningful |
+| Hide `.pyc` files from the note instead | Discarded | Python knowledge in `src/`, and the files would still be in the workspace and the checkpoints |
+
+**What this means for the code.** `policy.rs`: `SandboxRules.env` (a sorted map), `PolicyError::Env` and `ReservedMount`, checked in `validate`. `gateway.rs::run_exec` appends the policy's variables after the three fixed ones. `policies/nix.toml` and `fhs.toml` gain the table. The write glob `**/__pycache__/**` stays: a policy without the variable still needs it. The benchmarks in `docs/results/bench-nix/` were measured before this change and have not been run again; Python without `.pyc` files may start a little slower.
+
+What a policy author must know: everything under a read-only mount can be read by any code the agent runs, and a variable such as `LD_PRELOAD` or `PYTHONSTARTUP` changes what runs. Both are in the policy file, which is trusted (threat model §1); the agent can change neither.
+
+**Evidence.** `nix` preset, 2026-11-14. `tests/deps.rs`: `a_package_folder_is_reached_through_a_mount_and_a_policy_variable` (the import works, the variable arrives, and two attempts to write into the mounted folder from the sandbox are refused; the folder is unchanged on the host), `without_the_mount_the_package_is_simply_not_there`, `the_shipped_policies_leave_no_compiled_python_files_behind` pass. `policy::tests`: `sandbox_env_is_fixed_text_with_three_names_reserved`, and 7 refused and 4 accepted mount paths in `bad_policies_are_refused`. The experiment is in `experiments/m8-venv/NOTES.md`. Not yet run on `fhs`.
+
+**Concepts to learn.** Environment variables; why "copied from the shell" and "written in a file" differ for auditing; bytecode caches.
+
 ---
 
 ## Still open
@@ -2277,6 +2330,7 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | Idempotency key | A label sent with a request so that sending it twice has the effect of sending it once |
 | Permission bits (mode) | Nine switches on every file and folder: read, write and execute, each for the owner, the group and everyone else. `chmod 000` switches all off; `555` is read and execute for all, write for nobody |
 | Search bit | The execute bit on a folder. Without it nobody (except root) can use any name inside the folder, even its owner |
+| Virtualenv | A folder holding one project's Python packages and a `python3` that is a link to the system's Python; Python uses the folder's packages only when started through that link |
 | Intent | A log record written before an action, saying what is about to happen |
 | Helper (re-exec) | Starting your own program a second time to do a job that needs a fresh, single-threaded process |
 | Landlock | Kernel feature that lets a process give up its own access to files, permanently |
