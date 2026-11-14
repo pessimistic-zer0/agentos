@@ -141,21 +141,39 @@ pub fn run(helper: &Path, spec: &SandboxSpec, cg: &ExecCgroup, timeout: Duration
 
 /// Check, at startup, that this machine can run the sandbox. Returns every
 /// problem found, each with what to do about it (CLAUDE.md, "Portability").
-pub fn check_host() -> Vec<String> {
+///
+/// `helper` is the agentos binary. It is started once as
+/// `agentos __probe-userns` to find out whether a user namespace can really
+/// be used. Reading the kernel's switches is not enough for that: on Ubuntu
+/// the switch `apparmor_restrict_unprivileged_userns` can be on and agentos
+/// still be allowed, through its AppArmor profile (D-093).
+pub fn check_host(helper: &Path) -> Vec<String> {
     let mut problems = Vec::new();
     let read = |p: &str| std::fs::read_to_string(p).ok().map(|s| s.trim().to_string());
-    if read("/proc/sys/user/max_user_namespaces").as_deref() == Some("0") {
-        problems.push("user namespaces are disabled (/proc/sys/user/max_user_namespaces is 0)".into());
-    }
-    if read("/proc/sys/kernel/unprivileged_userns_clone").as_deref() == Some("0") {
-        problems.push("unprivileged user namespaces are disabled; enable with: sudo sysctl -w kernel.unprivileged_userns_clone=1".into());
-    }
-    if read("/proc/sys/kernel/apparmor_restrict_unprivileged_userns").as_deref() == Some("1") {
-        problems.push(
-            "AppArmor blocks unprivileged user namespaces (Ubuntu 23.10+ default); allow them with: \
-             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0"
-                .into(),
-        );
+    let probe = Command::new(helper).arg(ns::PROBE_ARG).env_clear().stdin(Stdio::null()).output();
+    let failure = match probe {
+        Ok(out) if out.status.success() => None,
+        Ok(out) => Some(String::from_utf8_lossy(&out.stderr).trim().to_string()),
+        Err(e) => Some(format!("starting {}: {e}", helper.display())),
+    };
+    if let Some(why) = failure {
+        // The probe says that it does not work; the switches say why.
+        let mut msg = format!("user namespaces cannot be used ({why})");
+        if read("/proc/sys/kernel/apparmor_restrict_unprivileged_userns").as_deref() == Some("1") {
+            msg.push_str(
+                "\n    This system (Ubuntu 23.10 or newer) only allows them for programs with an AppArmor profile. \
+                 Install the one that comes with agentos; it allows them for agentos alone:\n      \
+                 sudo install -m 644 packaging/apparmor/agentos /etc/apparmor.d/agentos\n      \
+                 sudo apparmor_parser -r /etc/apparmor.d/agentos\n    \
+                 (The profile names /usr/local/bin/agentos; change that line if the program is somewhere else.)\n    \
+                 Or, for every program on the machine: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0",
+            );
+        } else if read("/proc/sys/user/max_user_namespaces").as_deref() == Some("0") {
+            msg.push_str("\n    They are switched off: /proc/sys/user/max_user_namespaces is 0");
+        } else if read("/proc/sys/kernel/unprivileged_userns_clone").as_deref() == Some("0") {
+            msg.push_str("\n    They are switched off for ordinary users; switch them on with: sudo sysctl -w kernel.unprivileged_userns_clone=1");
+        }
+        problems.push(msg);
     }
     if landlock::kernel_abi() < 1 {
         problems.push("Landlock is not available (kernel 5.13+ with Landlock in the `lsm=` list is needed)".into());

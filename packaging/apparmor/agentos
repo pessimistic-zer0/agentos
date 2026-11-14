@@ -1,0 +1,31 @@
+# AppArmor profile for agentos (Ubuntu 23.10 and newer).
+#
+# Ubuntu does not let ordinary programs use user namespaces unless a profile
+# says so (kernel.apparmor_restrict_unprivileged_userns = 1). agentos builds
+# its sandbox out of a user namespace, so without this file it cannot start
+# there. This profile allows user namespaces for the agentos program only.
+# The other way, `sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`,
+# switches the protection off for every program on the machine.
+#
+# `flags=(unconfined)` means: this profile restricts nothing. It exists only
+# to carry the one permission below. The sandbox itself is made by agentos
+# (namespaces, Landlock, cgroups), not by AppArmor.
+#
+# Install (see "Ubuntu" in the README):
+#   sudo install -m 755 target/release/agentos /usr/local/bin/agentos
+#   sudo install -m 644 packaging/apparmor/agentos /etc/apparmor.d/agentos
+#   sudo apparmor_parser -r /etc/apparmor.d/agentos
+#
+# The profile is tied to the program's path. If agentos lives somewhere else,
+# change the path on the `profile` line before installing.
+
+abi <abi/4.0>,
+
+include <tunables/global>
+
+profile agentos /usr/local/bin/agentos flags=(unconfined) {
+  userns,
+
+  # Local additions, if any.
+  include if exists <local/agentos>
+}

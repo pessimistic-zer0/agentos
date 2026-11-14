@@ -72,12 +72,12 @@ pub fn is_locked(dir: &ExecDir) -> bool {
 /// Check the machine can run the sandbox, and set up the cgroup subtree.
 /// Stops with one message listing everything that is missing.
 pub fn prepare_sandbox() -> Result<SandboxCtx> {
-    let problems = crate::sandbox::check_host();
+    let helper = std::env::current_exe().context("finding the agentos binary")?;
+    let problems = crate::sandbox::check_host(&helper);
     if !problems.is_empty() {
         bail!("the AgentOS sandbox cannot start:\n  - {}", problems.join("\n  - "));
     }
     let cgroups = crate::sandbox::cgroup::CgroupRoot::init()?;
-    let helper = std::env::current_exe().context("finding the agentos binary")?;
     Ok(SandboxCtx { cgroups, helper })
 }
 

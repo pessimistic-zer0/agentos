@@ -436,3 +436,25 @@ fn a_relative_state_dir_works() {
     let id2 = run(&tail, Some("./by-env")).trim().to_string();
     assert!(t.root.join("by-env/executions").join(&id2).join("result.patch").exists());
 }
+
+#[test]
+fn a_machine_without_user_namespaces_is_told_so_by_trying_not_by_guessing() {
+    // D-093: the startup check really tries to build a user namespace. Here
+    // the limit is set to 0 inside a throwaway user namespace, which is how
+    // a machine that forbids them looks from the inside.
+    let t = TestEnv::new("hard-no-userns");
+    let script = repo_root().join("examples/scripts/fix-demo.toml");
+    let args = run_args(&t, &script, &demo_repo());
+    let inner = format!(
+        "echo 0 > /proc/sys/user/max_user_namespaces && exec {} --state-dir {} {}",
+        agentos_bin().display(),
+        t.state.display(),
+        args.iter().map(|a| format!("'{a}'")).collect::<Vec<_>>().join(" ")
+    );
+    let out = std::process::Command::new("unshare").args(["-Ur", "sh", "-c", &inner]).current_dir(repo_root()).output().expect("unshare");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{err}");
+    assert!(err.contains("user namespaces cannot be used"), "{err}");
+    assert!(err.contains("max_user_namespaces is 0"), "{err}");
+    assert!(!t.state.join("executions").exists());
+}

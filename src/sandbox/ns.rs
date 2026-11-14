@@ -77,6 +77,37 @@ fn status_file() -> fs::File {
     fs::File::from(unsafe { OwnedFd::from_raw_fd(STATUS_FD) })
 }
 
+/// Hidden first argument that runs `probe_main`.
+pub const PROBE_ARG: &str = "__probe-userns";
+
+/// Entry point of `agentos __probe-userns`: do the first steps of building
+/// a sandbox and say whether they worked. Exit code 0 means yes; otherwise
+/// the reason is on stderr. Never returns.
+///
+/// It goes as far as the first step that needs a privilege *inside* the new
+/// user namespace (changing a mount). That matters on Ubuntu: there the
+/// kernel lets a program without an AppArmor profile create the namespace
+/// and then refuses everything it tries to do in it.
+pub fn probe_main() -> ! {
+    let run = || -> Result<()> {
+        let (uid, gid) = (nix::unistd::getuid().as_raw(), nix::unistd::getgid().as_raw());
+        unshare(CloneFlags::CLONE_NEWUSER | CloneFlags::CLONE_NEWNS | CloneFlags::CLONE_NEWNET).context("creating a user namespace")?;
+        fs::write("/proc/self/setgroups", "deny").context("writing /proc/self/setgroups")?;
+        fs::write("/proc/self/uid_map", format!("{uid} {uid} 1")).context("writing uid_map")?;
+        fs::write("/proc/self/gid_map", format!("{gid} {gid} 1")).context("writing gid_map")?;
+        mount(None::<&str>, "/", None::<&str>, MsFlags::MS_REC | MsFlags::MS_PRIVATE, None::<&str>).context("changing a mount inside the user namespace")?;
+        loopback_up().context("bringing up the loopback interface inside the user namespace")?;
+        Ok(())
+    };
+    match run() {
+        Ok(()) => std::process::exit(0),
+        Err(e) => {
+            eprintln!("{e:#}");
+            std::process::exit(1)
+        }
+    }
+}
+
 /// Entry point of `agentos __sandbox-init <json>`. Never returns.
 pub fn helper_main(spec_json: &str) -> ! {
     let mut status = status_file();

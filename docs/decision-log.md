@@ -2224,6 +2224,32 @@ What a policy author must know: everything under a read-only mount can be read b
 
 **Concepts to learn.** Environment variables; why "copied from the shell" and "written in a file" differ for auditing; bytecode caches.
 
+### D-093 — Ubuntu: an AppArmor profile for agentos, and a startup check that tries instead of reading switches
+- **Date:** 2026-11-14
+- **Status:** Taken; the profile is **not yet verified** (it can only be tried on Ubuntu, in CI, after Prince pushes)
+- **Area:** sandbox
+- **ADR:** none
+
+**In plain words.** Ubuntu (23.10 and newer) lets a program use user namespaces only if a small permission file, an AppArmor profile, says so. Until now the README told Ubuntu users to switch that protection off for the whole machine. agentos now comes with a profile that allows user namespaces for agentos alone. For that to work, the startup check had to change too: it used to read the kernel switch and refuse whenever it was on. Now it starts a tiny copy of itself that really tries to build a namespace, and only complains if that fails.
+
+**The problem.** Second feature Prince approved (D-088). The reading on 2026-11-14 showed the same wall in bug reports for bubblewrap, Claude Code and Cursor, and one report asking tools to ship a profile instead of recommending the system-wide switch.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Ship `packaging/apparmor/agentos`: a profile with `flags=(unconfined)` and the single rule `userns,`, tied to `/usr/local/bin/agentos` | Taken | The form Ubuntu itself uses for programs that need user namespaces. It restricts nothing and grants one thing |
+| Keep recommending `sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` only | Discarded | Weakens every program on the machine to run one. It stays in the message as the second choice |
+| A confining profile (list what agentos may read and write) | Discarded | The confinement is agentos's own job (namespaces, Landlock, cgroups). A second, partial description of it would be one more thing to get wrong and keep in step |
+| Startup check: run `agentos __probe-userns`, which creates user, mount and network namespaces, writes the id maps, changes a mount and brings up loopback | Taken | These are the sandbox's own first steps. On Ubuntu a program without a profile may create the namespace and is then refused inside it, so only trying shows the truth |
+| Keep reading the three kernel switches | Discarded | With the profile loaded the switch is still on, and agentos would refuse to start although it could |
+| Change the existing CI job to use the profile | Discarded | If the profile had a fault, the job that verifies everything else would go red with it. A second job, `fhs-apparmor`, keeps the two results apart |
+
+**What this means for the code.** `sandbox/ns.rs::probe_main` and `PROBE_ARG`; `main.rs` handles the hidden argument before `clap`, like `__sandbox-init`; `sandbox::check_host(helper)` runs the probe and uses the switches only to explain a failure. `packaging/apparmor/agentos` is new. `.github/workflows/ci.yml` has a second job that switches the restriction on, checks that agentos refuses and names the profile, installs the profile for the test binary's path, and runs the demo task and four suites. One more process is started per run (not measured).
+
+**Evidence.** On NixOS (no AppArmor), 2026-11-14: the probe exits 0; with the limit set to 0 inside a throwaway user namespace it exits 1 with `creating a user namespace: ENOSPC`, and agentos stops with `user namespaces cannot be used … max_user_namespaces is 0` (`tests/hardening.rs::a_machine_without_user_namespaces_is_told_so_by_trying_not_by_guessing`). `make test`: 104 passed, 0 failed. The workflow file parses (`yq`). **Not run: the profile itself, the Ubuntu branch of the message, and the new CI job.** Whether code inside the sandbox keeps the profile's permission after `execve` is not known; the security suite in the new job will show it (`exec_cannot_mount_even_in_a_nested_user_namespace`).
+
+**Concepts to learn.** AppArmor; a profile's `unconfined` flag; why "may create it" and "may use it" are different permissions.
+
 ---
 
 ## Still open
@@ -2331,6 +2357,7 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | Permission bits (mode) | Nine switches on every file and folder: read, write and execute, each for the owner, the group and everyone else. `chmod 000` switches all off; `555` is read and execute for all, write for nobody |
 | Search bit | The execute bit on a folder. Without it nobody (except root) can use any name inside the folder, even its owner |
 | Virtualenv | A folder holding one project's Python packages and a `python3` that is a link to the system's Python; Python uses the folder's packages only when started through that link |
+| AppArmor | A Linux security module that limits programs by profiles (permission files), one per program path. Ubuntu uses it to decide who may use user namespaces |
 | Intent | A log record written before an action, saying what is about to happen |
 | Helper (re-exec) | Starting your own program a second time to do a job that needs a fresh, single-threaded process |
 | Landlock | Kernel feature that lets a process give up its own access to files, permanently |
