@@ -372,18 +372,20 @@ fn the_patch_lists_what_it_cannot_carry() {
 open("/work/src/blob.bin", "wb").write(bytes(range(256)))
 os.chmod("/work/src/stats.py", 0o600)
 os.mkdir("/work/src/empty")
+open("/work/src/pkg_init.py", "w").close()
 open("/work/src/plain.py", "w").write("y = 2\n")"##;
     let script = t.write_script("s.toml", &format!("task = \"left out\"\n{}", exec_step(code)));
     let args = run_args(&t, &script, &demo_repo());
     let args: Vec<&str> = args.iter().map(String::as_str).filter(|a| *a != "--quiet").collect();
     let shown = t.agentos(&args);
-    assert!(shown.contains("NOT in the patch: 1 binary file, 2 file modes, 1 empty folder."), "{shown}");
+    assert!(shown.contains("NOT in the patch: 1 binary file, 2 file modes, 1 empty file, 1 empty folder."), "{shown}");
     let id = only_execution(&t);
     let patch_path = t.exec_dir(&id).join("result.patch");
     let patch = std::fs::read_to_string(&patch_path).unwrap();
     let work = t.exec_dir(&id).join("work");
     for line in [
-        "# agentos: this patch leaves out 4 thing(s)".to_string(),
+        "# agentos: this patch leaves out 5 thing(s)".to_string(),
+        "# agentos: empty new file not in this patch: src/pkg_init.py (create it: touch src/pkg_init.py)".to_string(),
         format!("# agentos: binary file not in this patch: src/blob.bin (copy it from {})", work.join("src/blob.bin").display()),
         "# agentos: new file is executable, but a patch creates plain files: src/run.sh (chmod 755)".to_string(),
         "# agentos: empty folder not in this patch: src/empty".to_string(),
@@ -399,6 +401,7 @@ open("/work/src/plain.py", "w").write("y = 2\n")"##;
     assert!(st.status.success(), "{}{}", String::from_utf8_lossy(&st.stdout), String::from_utf8_lossy(&st.stderr));
     assert_eq!(std::fs::read_to_string(target.join("src/plain.py")).unwrap(), "y = 2\n");
     assert!(!target.join("src/blob.bin").exists(), "this is the gap the note is about");
+    assert!(!target.join("src/pkg_init.py").exists(), "B-012: `patch` does not create an empty new file");
 }
 
 #[test]

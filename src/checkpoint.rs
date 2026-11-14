@@ -515,6 +515,13 @@ pub fn write_patch(base: &Path, work: &Path, out: &Path) -> Result<PatchReport> 
                 left_out.modes += 1;
                 extra.push(format!("# agentos: mode changed, which this patch cannot do: {rel} ({:o} -> {:o})\n", old.mode, e.mode));
             }
+            // `diff` prints a header and no lines for a new file with nothing
+            // in it, and `patch` and `git apply` then create nothing. The
+            // usual victim is a Python package's empty `__init__.py` (B-012).
+            (Kind::File, None) if e.size == 0 => {
+                left_out.empty_files += 1;
+                extra.push(format!("# agentos: empty new file not in this patch: {rel} (create it: touch {rel})\n"));
+            }
             (Kind::File, None) if e.mode & 0o111 != 0 => {
                 left_out.modes += 1;
                 extra.push(format!("# agentos: new file is executable, but a patch creates plain files: {rel} (chmod {:o})\n", e.mode));
@@ -524,6 +531,12 @@ pub fn write_patch(base: &Path, work: &Path, out: &Path) -> Result<PatchReport> 
                 extra.push(format!("# agentos: empty folder not in this patch: {rel}\n"));
             }
             _ => {}
+        }
+    }
+    for (rel, e) in &a {
+        if e.kind == Kind::File && e.size == 0 && !b.contains_key(rel) {
+            left_out.empty_files += 1;
+            extra.push(format!("# agentos: empty file was deleted, which this patch cannot do: {rel}\n"));
         }
     }
     left_out.symlinks = notes.len();
@@ -550,6 +563,7 @@ pub struct PatchReport {
 pub struct LeftOut {
     pub binary: usize,
     pub modes: usize,
+    pub empty_files: usize,
     pub empty_dirs: usize,
     pub symlinks: usize,
 }
@@ -561,7 +575,7 @@ impl LeftOut {
 
     /// For example `2 binary files, 1 file mode`.
     pub fn describe(&self) -> String {
-        [(self.binary, "binary file"), (self.modes, "file mode"), (self.empty_dirs, "empty folder"), (self.symlinks, "symlink")]
+        [(self.binary, "binary file"), (self.modes, "file mode"), (self.empty_files, "empty file"), (self.empty_dirs, "empty folder"), (self.symlinks, "symlink")]
             .iter()
             .filter(|(n, _)| *n > 0)
             .map(|(n, what)| format!("{n} {what}{}", if *n == 1 { "" } else { "s" }))

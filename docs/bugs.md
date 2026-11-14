@@ -93,3 +93,12 @@ are in the Findings table of `decision-log.md`, not here.)
 - **Why no suite saw it:** every test passes an absolute `--state-dir`, and the default (`~/.local/share/agentos`) is absolute.
 - **Fix:** the state folder is made absolute once, in `main.rs`, before anything uses it. New test: `a_relative_state_dir_works` in `tests/hardening.rs` (both `--state-dir` and `AGENTOS_STATE_DIR`).
 - **Lesson:** a path is only meaningful together with the folder it is relative to. Anything that starts another program in another folder must hand it absolute paths, and the cheapest place to make them absolute is where they enter the program.
+
+## B-012 — an empty new file was silently missing from the patch
+- **Found:** 2026-11-14, in the first trial on a project that is not the demo (`docs/results/real-repo-trial-nix.md`). Fixed the same day.
+- **What was done:** the agent added a Python package: `src/inventory/alerts/__init__.py` (empty) and `low_stock.py`. The run completed, the tests passed in the sandbox, the patch applied with `git apply` without a message.
+- **Symptom:** after applying, `src/inventory/alerts/` held `low_stock.py` and no `__init__.py`. The run had printed no `NOT in the patch` line.
+- **Cause:** for a new file with nothing in it, `diff -N` prints its header line and no lines of content, and `patch` and `git apply` create nothing from that. D-090 had listed four things a unified diff cannot carry (binary files, modes, empty folders, symlinks) and missed this fifth one.
+- **Why it matters:** an empty `__init__.py` is how most Python packages start. Here the tests still passed after applying, because Python accepts a folder without it as a "namespace package"; with other tools (packaging, some linters, older layouts) the package would be broken, and nothing would have said why.
+- **Fix:** `checkpoint::write_patch` counts new empty files (and deleted empty files) in `LeftOut.empty_files` and writes `# agentos: empty new file not in this patch: <path> (create it: touch <path>)`. `tests/hardening.rs::the_patch_lists_what_it_cannot_carry` covers it and checks that `patch` indeed does not create the file.
+- **Lesson:** "what can this format not carry?" was answered from memory in D-090, and the answer was one item short. A list like that should come from trying each kind of change, which is what the real project did by accident.

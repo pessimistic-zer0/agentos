@@ -2277,6 +2277,28 @@ What a policy author must know: everything under a read-only mount can be read b
 
 **Concepts to learn.** None new; see D-072 and D-093.
 
+### D-095 — The patch also lists empty files (completes D-090)
+- **Date:** 2026-11-14
+- **Status:** Taken
+- **Area:** durability
+- **ADR:** none
+
+**In plain words.** D-090 made the patch say what it cannot carry. The first run on a real project showed one more such thing: a new file with nothing in it, like the `__init__.py` that starts a Python package. The patch tools create nothing for it. It is now on the list, with the command that creates it.
+
+**The problem.** Bug B-012.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Count new and deleted empty files in the patch's notes, with `touch <path>` as the hint | Taken | Same mechanism as D-090; one more kind |
+| Write a newline into empty files so that the diff carries them | Discarded | Changes what the agent wrote |
+
+**What this means for the code.** `checkpoint.rs`: `LeftOut.empty_files`; two more cases in `write_patch`.
+
+**Evidence.** `tests/hardening.rs::the_patch_lists_what_it_cannot_carry`, extended, passes on `nix` (2026-11-14); the same test asserts that `patch -p1` leaves the empty file out. Seen first in the trial: `docs/results/real-repo-trial-nix.md`. Not yet run on `fhs`.
+
+**Concepts to learn.** None new; see D-090.
+
 ---
 
 ## Still open
