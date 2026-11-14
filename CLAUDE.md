@@ -137,7 +137,7 @@ M8 (tag `m8` locally; `docs/milestones/M8-first-user.md`) is the work after the 
 - What a first user needs (D-088): clearer first messages and an early check for the LLM server (D-089); a patch that lists what it cannot carry (D-090, D-095); packages from outside the repo (D-091, D-092; `tests/deps.rs`); an AppArmor profile and a startup probe that tries (D-093, D-096; `packaging/apparmor/agentos`).
 - First trial on a project that is not the demo: `docs/results/real-repo-trial-nix.md` (the test project is in `~/Temp/AgentOS_temp/`, outside this repository). Ideas it raised are parked in the spec, §22.
 - On `nix`: `make test` 105 passed; 200-kill run 4,800 + 1,600 runs with 0 violations (`docs/results/recovery-200-nix-m8.md`); benchmarks re-run (`docs/results/bench-nix-m8/`).
-- On `fhs`: everything up to `366c986` is verified by CI run 43590153676 (D-094), both jobs: `fhs` and `fhs-apparmor`. **Not yet verified on `fhs`:** the commits after it (`bb60f5b` to tag `m8`): B-012, B-013 with the new probe (D-096), and two new CI steps (`make demo`; the profile installed at `/usr/local/bin/agentos`). They need a push and a green run.
+- On `fhs`: CI run 43612319559 on `69cdbf0` (D-097), both jobs green: `fhs` (105 tests, `make demo`, the 200-kill run) and `fhs-apparmor` (restriction on; refuses without the profile; runs with the profile installed at `/usr/local/bin/agentos` as the README says, and four suites). Earlier M8 runs: 43573592353 (D-087), 43590153676 (D-094). Not run on Ubuntu: benchmarks.
 
 Open, and only Prince can close them:
 

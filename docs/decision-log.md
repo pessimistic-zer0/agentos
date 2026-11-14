@@ -2323,6 +2323,32 @@ What a policy author must know: everything under a read-only mount can be read b
 
 **Concepts to learn.** `fork` and `exec` as two steps; async-signal-safety; why a library must not assume which program it is in.
 
+### D-097 — M8 counts as verified on `fhs` by CI run 43612319559
+- **Date:** 2026-11-14
+- **Status:** Taken (same rule as D-072, D-082, D-087, D-094)
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** The last part of M8 (the empty-file note, the rewritten startup probe, two new CI steps) had only run on NixOS. Prince pushed tag commit `69cdbf0`; both CI jobs on Ubuntu 24.04 are green. So all of M8 now passes on both systems, and the two things D-094 listed as never tried on Ubuntu have been tried: the demo script, and the profile installed at the path the README gives.
+
+**The problem.** The M8 document and CLAUDE.md say "not yet verified on `fhs`" for the commits after `366c986`. The probe in particular had been rewritten (D-096) after the run that verified the profile.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Record the green run on `69cdbf0`; update CLAUDE.md; add a dated note to the M8 document | Taken | The rule from D-072; milestone documents keep their text |
+| Replace the `fhs` results of record with this run's reports | Discarded | As in D-087: this run confirms that nothing regressed |
+
+**What this means for the code.** No code change.
+
+**Evidence.** <https://github.com/pessimistic-zer0/agentos/actions/runs/43612319559>, commit `69cdbf0`, both jobs `success`, read with `gh run view --log` on 2026-11-14.
+- Job `fhs-apparmor` (restriction on): with the rewritten probe and no profile, agentos stopped with `user namespaces cannot be used (writing /proc/self/setgroups: Permission denied (os error 13))`, the same step as before the rewrite. Then the program and the profile were installed exactly as the README says (`/usr/local/bin/agentos`, `/etc/apparmor.d/agentos`) and the demo task `COMPLETED … after 7 steps` from there; then again with the profile bound to the test binary; `vertical_slice` 4, `security` 32, `benign` 1, `deps` 5 passed.
+- Job `fhs`: lint clean; `make test` 25 + 1 + 5 + 14 + 17 + 3 + 4 + 32 + 4 = 105 passed, 0 failed; `make demo` ran through, including the kill, `RECOVERED`, `#6 fs.write … APPLIED` and the resumed run; 200-kill step 4,800 runs, 4,800 killed, 0 violations, 0 duplicated effects; external cells 1,600 runs, 0 violations, 0 duplicated effects.
+- The 200-kill step took 1,672 s, against about 1,010 s in the two runs before, and recovery's p50 was 31.3 ms against 21 to 26 ms. Everything in the job was slower in the same proportion (the quick recovery test took 26 s against 18 s), so this looks like a slower runner; it was not looked into further.
+- Not run on Ubuntu, as before: the benchmarks. Ubuntu versions other than 24.04: not tested.
+
+**Concepts to learn.** None new; see D-072.
+
 ---
 
 ## Still open

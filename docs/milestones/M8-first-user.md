@@ -9,6 +9,8 @@
 
 Written for a reader new to Rust and Linux internals. Plain words first, the real term next to it.
 
+> **Note, added 2026-11-14 after the tag:** Prince pushed `69cdbf0` and CI run 43612319559 is green on both jobs (D-097). The rows in §2 and the first line of §10 that say "not yet verified" describe the state when this document was written; they are now verified, including `make demo` on Ubuntu and the profile at `/usr/local/bin/agentos`.
+
 ## 1. Aim
 
 M0 to M7 built the thing and proved its claims with suites. This milestone asks two different questions. First: is it really finished, if someone tries what the suites do not? Second: could a person other than its author use it on their own project?
