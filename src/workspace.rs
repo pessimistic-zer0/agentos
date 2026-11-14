@@ -105,6 +105,8 @@ pub struct CopyReport {
     pub files_copied: u64,
     /// Paths left out because a deny glob matched them.
     pub denied: Vec<String>,
+    /// Paths left out because a skip glob matched them (D-099).
+    pub skipped: Vec<String>,
     /// Sockets, FIFOs and device files: not copied (a source repo has no use for them).
     pub skipped_special: Vec<String>,
 }
@@ -123,6 +125,7 @@ pub fn create(repo: &Path, dest: &Path, policy: &Policy) -> Result<CopyReport> {
     let mut report = CopyReport::default();
     copy_dir(repo, dest, "", policy, &mut report)?;
     report.denied.sort();
+    report.skipped.sort();
     Ok(report)
 }
 
@@ -138,6 +141,10 @@ fn copy_dir(src: &Path, dst: &Path, rel: &str, policy: &Policy, report: &mut Cop
         let child_rel = if rel.is_empty() { name.to_string() } else { format!("{rel}/{name}") };
         if policy.denied(&child_rel).is_some() {
             report.denied.push(child_rel);
+            continue;
+        }
+        if policy.skipped(&child_rel).is_some() {
+            report.skipped.push(child_rel);
             continue;
         }
         let from = entry.path();

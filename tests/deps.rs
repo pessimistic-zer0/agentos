@@ -178,3 +178,130 @@ fn the_shipped_policies_leave_no_compiled_python_files_behind() {
     let digest = tree_digest(&t.exec_dir(&id).join("work")).join("\n");
     assert!(!digest.contains("__pycache__"), "{digest}");
 }
+
+// ---------------------------------------------------------------------------
+// M9: deny exceptions, skip, scratch, and the virtualenv note (D-099 to D-101).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_mounted_virtualenv_that_is_not_active_gets_a_note() {
+    let t = TestEnv::new("deps-venv-inactive");
+    let venv = make_venv(&t);
+    let repo = repo_needing_fakedep(&t);
+    let t = t.with_policy_text(&policy_with(Some(&venv), &[]));
+    let script = t.write_script("s.toml", STEPS);
+    let out = run(&t, &repo, &script, None); // mounted, but its bin is not on PATH
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "the note must not stop the run: {err}");
+    for needle in ["note:", "activate it", venv.join("bin/pytest").to_str().unwrap()] {
+        assert!(err.contains(needle), "`{needle}` is missing from:\n{err}");
+    }
+    // And with the virtualenv active there is nothing to say.
+    let t2 = TestEnv::new("deps-venv-active-quiet");
+    let venv2 = make_venv(&t2);
+    let repo2 = repo_needing_fakedep(&t2);
+    let t2 = t2.with_policy_text(&policy_with(Some(&venv2), &[]));
+    let script2 = t2.write_script("s.toml", STEPS);
+    let out2 = run(&t2, &repo2, &script2, Some(&venv2.join("bin")));
+    assert!(!String::from_utf8_lossy(&out2.stderr).contains("note:"), "{}", String::from_utf8_lossy(&out2.stderr));
+}
+
+#[test]
+fn a_virtualenv_inside_the_repo_is_skipped_in_the_copy_and_still_used() {
+    let t = TestEnv::new("deps-skip");
+    let repo = repo_needing_fakedep(&t);
+    // The usual place: <repo>/.venv
+    let made = make_venv(&t);
+    let venv = repo.join(".venv");
+    std::fs::remove_dir_all(&made).unwrap();
+    let out = std::process::Command::new("python3").args(["-m", "venv", "--without-pip", "--system-site-packages"]).arg(&venv).output().unwrap();
+    assert!(out.status.success());
+    let lib = std::fs::read_dir(venv.join("lib")).unwrap().next().unwrap().unwrap().path();
+    std::fs::write(lib.join("site-packages/fakedep.py"), "V = 1\n").unwrap();
+    let launcher = venv.join("bin/pytest");
+    std::fs::write(&launcher, format!("#!{}/bin/python3\nimport sys, pytest\nsys.exit(pytest.main())\n", venv.display())).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let policy = policy_with(Some(&venv), &[]).replace("skip = []", "skip = [\".venv/**\"]");
+    assert!(policy.contains("skip = [\".venv/**\"]"), "the preset has no skip line");
+    let t = t.with_policy_text(&policy);
+    let script = t.write_script("s.toml", STEPS);
+    let out = run(&t, &repo, &script, Some(&venv.join("bin")));
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let id = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    let events = t.events(&id);
+    let created = events.iter().find(|e| e["type"] == "workspace.created").unwrap();
+    assert_eq!(created["skipped"], serde_json::json!([".venv"]));
+    assert!(!t.exec_dir(&id).join("work/.venv").exists(), "the virtualenv was copied");
+    assert!(!t.exec_dir(&id).join("checkpoints/cp-0000/.venv").exists());
+    for call in [1, 2] {
+        let (exit, text) = stdout_of(&t, &id, &events, call);
+        assert_eq!(exit, Some(0), "call {call}:\n{text}");
+        assert!(text.contains(&format!("FAKEDEP {}", venv.display())), "call {call}:\n{text}");
+    }
+    assert!(t.agentos(&["trace", &id]).contains("left out by skip rules: .venv"));
+}
+
+/// The demo repo with pytest's cache switched back on.
+fn repo_with_pytest_cache(t: &TestEnv) -> PathBuf {
+    let repo = t.root.join("repo");
+    assert!(std::process::Command::new("cp").arg("-a").arg(repo_root().join("examples/demo-repo")).arg(&repo).status().unwrap().success());
+    std::fs::write(repo.join("pytest.ini"), "[pytest]\npythonpath = src\ntestpaths = tests\n").unwrap();
+    std::fs::write(repo.join(".env.example"), "TOKEN=put-yours-here\n").unwrap();
+    repo
+}
+
+const CACHE_STEPS: &str = "task = \"cache\"\n\
+    [[step]]\ntool = \"exec\"\nargv = [\"pytest\", \"-q\"]\n\
+    [[step]]\ntool = \"fs.write\"\npath = \"src/extra.py\"\ncontent = \"x = 1\\n\"\n\
+    [[step]]\ntool = \"exec\"\nargv = [\"pytest\", \"-q\"]\n\
+    [[step]]\ntool = \"fs.read\"\npath = \".env.example\"\n\
+    [[step]]\ntool = \"fs.read\"\npath = \".env\"\n\
+    [[step]]\ntool = \"fs.write\"\npath = \".pytest_cache/mine\"\ncontent = \"x\"\n";
+
+#[test]
+fn a_cache_is_scratch_and_an_example_env_file_is_not_a_secret() {
+    let t = TestEnv::new("deps-scratch");
+    let repo = repo_with_pytest_cache(&t);
+    let script = t.write_script("s.toml", CACHE_STEPS);
+    let out = run(&t, &repo, &script, None); // the shipped policy
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let id = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    let events = t.events(&id);
+    let work = t.exec_dir(&id).join("work");
+    assert!(work.join(".pytest_cache").is_dir(), "pytest wrote its cache, which is what this test is about");
+    assert!(!events.iter().any(|e| e["type"] == "policy.violation"), "a cache is not a violation: {events:#?}");
+    let patch = std::fs::read_to_string(t.exec_dir(&id).join("result.patch")).unwrap();
+    assert!(patch.contains("b/src/extra.py"));
+    assert!(!patch.contains("pytest_cache") && !patch.contains("# agentos:"), "the cache leaked into the patch:\n{patch}");
+    // The template is readable; the real file is still denied and absent.
+    let read = t.output_of(&id, &events, 4).expect(".env.example can be read");
+    assert_eq!(read["content"], "TOKEN=put-yours-here\n");
+    let denied = |call: u64| events.iter().find(|e| e["type"] == "tool.denied" && e["call_id"] == call).map(|e| e["rule"].to_string());
+    assert!(denied(5).is_some_and(|r| r.contains("filesystem.deny")), "{:?}", denied(5));
+    assert!(!work.join(".env").exists());
+    // Scratch is for commands. The agent's own fs.write still needs a write glob.
+    assert_eq!(denied(6).as_deref(), Some("\"no matching rule\""));
+    // A cache change alone is not a change: the workspace still matches its checkpoint.
+    let last = t.exec_dir(&id).join("checkpoints/cp-0003");
+    assert_eq!(tree_digest(&work), tree_digest(&last));
+}
+
+#[test]
+fn without_a_scratch_rule_the_cache_is_reverted_and_reported() {
+    // The control for the test above: the same run with `scratch = []`.
+    let t = TestEnv::new("deps-no-scratch");
+    let repo = repo_with_pytest_cache(&t);
+    let policy = std::fs::read_to_string(preset_policy()).unwrap().replace("scratch = [\".pytest_cache/**\"]", "scratch = []");
+    assert!(policy.contains("scratch = []"));
+    let t = t.with_policy_text(&policy);
+    let script = t.write_script("s.toml", CACHE_STEPS);
+    let out = run(&t, &repo, &script, None);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let id = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    let events = t.events(&id);
+    let violation = events.iter().find(|e| e["type"] == "policy.violation").expect("the cache is reverted without the rule");
+    assert!(violation["reverted"].to_string().contains(".pytest_cache"), "{violation}");
+    assert!(!t.exec_dir(&id).join("work/.pytest_cache").exists());
+}

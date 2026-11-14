@@ -15,6 +15,8 @@ use crate::policy::Policy;
 pub struct Programs {
     /// Program name (argv[0] in the policy) -> real path on the host.
     resolved: Vec<(String, PathBuf)>,
+    /// Things the user should be told before the run starts (D-101).
+    pub notes: Vec<String>,
 }
 
 impl Programs {
@@ -31,6 +33,7 @@ impl Programs {
     /// through that link (D-091).
     pub fn resolve(policy: &Policy, host_path: &str) -> Result<Programs> {
         let mut resolved = Vec::new();
+        let mut notes = Vec::new();
         for prog in policy.programs() {
             if prog.contains('/') {
                 bail!("exec rule program `{prog}` must be a bare name, not a path");
@@ -57,10 +60,28 @@ impl Programs {
                 );
             }
             let found = found.expect("checked above");
-            let as_found = link_chain_visible(&found, &mounts).unwrap_or(real);
+            let as_found = link_chain_visible(&found, &mounts).unwrap_or_else(|| real.clone());
+            // A mounted folder that has this program in its own `bin`, while
+            // the one found on PATH is another: almost always a virtualenv
+            // that was mounted but not activated. The run would use the
+            // other program and fail in ways that do not point here.
+            for m in &mounts {
+                let own = m.join("bin").join(&prog);
+                let same = |a: &Path, b: &Path| std::fs::canonicalize(a).ok() == std::fs::canonicalize(b).ok();
+                if is_executable(&own) && !same(&own, &as_found) && !same(&own, &real) {
+                    notes.push(format!(
+                        "sandbox.ro_mounts has {}, which holds its own `{prog}` ({}), but the `{prog}` found on PATH is {}. \
+                         If that folder is a virtualenv, activate it before starting agentos (its bin folder must come first on PATH); \
+                         otherwise its packages will not be used.",
+                        m.display(),
+                        own.display(),
+                        as_found.display()
+                    ));
+                }
+            }
             resolved.push((prog.clone(), as_found));
         }
-        Ok(Programs { resolved })
+        Ok(Programs { resolved, notes })
     }
 
     pub fn lookup(&self, name: &str) -> Option<&Path> {

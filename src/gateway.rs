@@ -425,7 +425,7 @@ impl Gateway {
         // D-009: whatever the command changed outside the write globs is put back.
         let base = self.dir.checkpoints().join(&self.last_checkpoint);
         let policy = &self.policy;
-        let reverted = match checkpoint::revert_outside(&work, &base, |rel| policy.writable(rel)) {
+        let reverted = match checkpoint::revert_outside(&work, &base, |rel| policy.command_may_change(rel)) {
             Ok(reverted) => reverted,
             Err(e) => return Ok(Err(self.undo_exec(e)?)),
         };

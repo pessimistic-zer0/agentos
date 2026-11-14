@@ -67,6 +67,22 @@ pub struct FsRules {
     /// Paths that are never copied into the workspace and never opened.
     #[serde(default)]
     pub deny: Vec<String>,
+    /// Paths that `deny` would match but that are not secrets, for example
+    /// `.env.example` next to a `.env.*` deny rule. The glob language has
+    /// no "not", so exceptions are their own list (D-100).
+    #[serde(default)]
+    pub deny_except: Vec<String>,
+    /// Paths that are not copied into the workspace because they are big
+    /// and not needed there (a virtualenv that is mounted read-only, a
+    /// build folder). Unlike `deny` this says nothing about secrecy: it
+    /// only shapes the copy (D-099).
+    #[serde(default)]
+    pub skip: Vec<String>,
+    /// Paths where commands may leave files without it counting as a
+    /// change: caches such as `.pytest_cache`. They are not reverted, not
+    /// reported, and not in the patch (D-099).
+    #[serde(default)]
+    pub scratch: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -218,6 +234,9 @@ impl Policy {
             ("filesystem.read", &self.filesystem.read),
             ("filesystem.write", &self.filesystem.write),
             ("filesystem.deny", &self.filesystem.deny),
+            ("filesystem.deny_except", &self.filesystem.deny_except),
+            ("filesystem.skip", &self.filesystem.skip),
+            ("filesystem.scratch", &self.filesystem.scratch),
         ] {
             for g in globs {
                 check_glob(g).map_err(|reason| PolicyError::Glob { field, glob: g.clone(), reason })?;
@@ -286,7 +305,27 @@ impl Policy {
     /// Is `rel` (a workspace-relative path with `/` separators, `""` for the
     /// root) denied outright? Used when the workspace is copied (D-008).
     pub fn denied(&self, rel: &str) -> Option<String> {
-        first_match("filesystem.deny", &self.filesystem.deny, rel)
+        let rule = first_match("filesystem.deny", &self.filesystem.deny, rel)?;
+        match first_match("filesystem.deny_except", &self.filesystem.deny_except, rel) {
+            Some(_) => None,
+            None => Some(rule),
+        }
+    }
+
+    /// Is `rel` left out of the workspace copy by a `skip` rule?
+    pub fn skipped(&self, rel: &str) -> Option<String> {
+        first_match("filesystem.skip", &self.filesystem.skip, rel)
+    }
+
+    /// Is `rel` a scratch path (a cache)? A denied path never is.
+    pub fn scratch(&self, rel: &str) -> bool {
+        self.denied(rel).is_none() && first_match("filesystem.scratch", &self.filesystem.scratch, rel).is_some()
+    }
+
+    /// May a *command* leave this path changed? The write globs, plus the
+    /// scratch paths. (`fs.write` by the agent needs a write glob.)
+    pub fn command_may_change(&self, rel: &str) -> bool {
+        self.writable(rel) || self.scratch(rel)
     }
 
     /// Decide a file access. Deny rules win over allow rules; no allow rule
@@ -463,6 +502,27 @@ max_tool_calls = 20
         assert_eq!(d.rule, r#"filesystem.deny[0] ".env""#);
         assert!(!p.check_path(Access::Read, "secrets/key.pem").allowed);
         assert!(p.check_path(Access::Read, "src/stats.py").allowed);
+    }
+
+    #[test]
+    fn deny_exceptions_skip_and_scratch() {
+        let p = Policy::parse(&DEMO.replace(
+            "[exec]",
+            "deny_except = [\".env.example\", \"**/.env.example\"]\nskip = [\".venv/**\"]\nscratch = [\".pytest_cache/**\", \"secrets/cache/**\"]\n[exec]",
+        ))
+        .unwrap();
+        assert!(p.denied(".env.local").is_some());
+        assert!(p.denied(".env.example").is_none(), "an exception lifts the deny rule");
+        assert!(p.check_path(Access::Read, ".env.example").allowed);
+        assert!(p.denied(".env").is_some(), "only what the exception names");
+        assert!(p.skipped(".venv").is_some() && p.skipped(".venv/lib/x.py").is_some());
+        assert!(p.skipped("src/a.py").is_none());
+        assert!(p.denied(".venv/lib/x.py").is_none(), "skipped is not denied");
+        assert!(p.scratch(".pytest_cache/v/cache/lastfailed"));
+        assert!(!p.scratch("secrets/cache/x"), "deny wins over scratch");
+        assert!(p.command_may_change(".pytest_cache/x") && !p.writable(".pytest_cache/x"));
+        assert!(!p.check_path(Access::Write, ".pytest_cache/x").allowed, "fs.write still needs a write glob");
+        assert!(demo().filesystem.skip.is_empty() && demo().filesystem.scratch.is_empty() && demo().filesystem.deny_except.is_empty());
     }
 
     #[test]

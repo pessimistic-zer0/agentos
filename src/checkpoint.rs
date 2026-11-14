@@ -444,7 +444,10 @@ fn restore_entry(work_root: &OwnedFd, base: &Path, rel: &str, want: &Entry, now:
 /// skip what they do not understand without a word. So everything the patch
 /// leaves out is found here, listed at the top of the patch as comment
 /// lines, and returned, so the run can say so (D-090).
-pub fn write_patch(base: &Path, work: &Path, out: &Path) -> Result<PatchReport> {
+///
+/// `scratch` says which paths are caches (`filesystem.scratch`): changes
+/// there are left out of the patch and of its notes (D-099).
+pub fn write_patch(base: &Path, work: &Path, out: &Path, scratch: impl Fn(&str) -> bool) -> Result<PatchReport> {
     let parent = base.parent().context("checkpoint has no parent folder")?;
     let output = Command::new("diff")
         .args(["-ruN", "--no-dereference"])
@@ -460,11 +463,17 @@ pub fn write_patch(base: &Path, work: &Path, out: &Path) -> Result<PatchReport> 
     let (a, b) = (scan(base)?, scan(work)?);
     let mut notes = Vec::new();
     for (rel, e) in &b {
+        if scratch(rel) {
+            continue;
+        }
         if let (Kind::Symlink(target), None) = (&e.kind, a.get(rel)) {
             notes.push(format!("# agentos: symlink added: {rel} -> {}\n", target.display()));
         }
     }
     for (rel, e) in &a {
+        if scratch(rel) {
+            continue;
+        }
         if let (Kind::Symlink(target), None) = (&e.kind, b.get(rel)) {
             notes.push(format!("# agentos: symlink removed: {rel} (was -> {})\n", target.display()));
         }
@@ -489,10 +498,35 @@ pub fn write_patch(base: &Path, work: &Path, out: &Path) -> Result<PatchReport> 
             patched.push_str(n);
         }
     }
+    // The diff is a run of sections, one per file. A text file's section
+    // starts with a `diff …` line; a binary file's is one `Binary files …`
+    // line. Sections for scratch paths are dropped.
+    // Both header forms name the path twice: `a/<rel> … b/<rel>`.
+    let same_path_twice = |s: &str, between: &str| s[..s.len().saturating_sub(between.len()) / 2].to_string();
+    let mut dropping = false;
+    let mut kept_any = false;
     for line in text.split_inclusive('\n') {
-        if line.starts_with("diff ") || line.starts_with("--- ") || line.starts_with("+++ ") || line.starts_with("Binary files ") || line.starts_with("Symbolic links ") {
-            patched.push_str(&line.replace(&base_s, "a/").replace(&work_s, "b/"));
-        } else {
+        let is_header = line.starts_with("diff ") || line.starts_with("Binary files ");
+        if is_header || line.starts_with("--- ") || line.starts_with("+++ ") || line.starts_with("Symbolic links ") {
+            let line = line.replace(&base_s, "a/").replace(&work_s, "b/");
+            if is_header {
+                let body = line.trim_end();
+                let rel = if let Some(rest) = body.strip_prefix("Binary files a/").and_then(|l| l.strip_suffix(" differ")) {
+                    same_path_twice(rest, " and b/")
+                } else {
+                    body.split_once(" a/").map(|(_, rest)| same_path_twice(rest, " b/")).unwrap_or_default()
+                };
+                dropping = scratch(&rel);
+                if dropping && line.starts_with("Binary files ") {
+                    dropping = false; // a binary section is this one line
+                    continue;
+                }
+            }
+            if !dropping {
+                kept_any = true;
+                patched.push_str(&line);
+            }
+        } else if !dropping {
             patched.push_str(line);
         }
     }
@@ -510,6 +544,9 @@ pub fn write_patch(base: &Path, work: &Path, out: &Path) -> Result<PatchReport> 
         });
     }
     for (rel, e) in &b {
+        if scratch(rel) {
+            continue;
+        }
         match (&e.kind, a.get(rel)) {
             (Kind::File, Some(old)) if old.kind == Kind::File && old.mode != e.mode => {
                 left_out.modes += 1;
@@ -534,7 +571,7 @@ pub fn write_patch(base: &Path, work: &Path, out: &Path) -> Result<PatchReport> 
         }
     }
     for (rel, e) in &a {
-        if e.kind == Kind::File && e.size == 0 && !b.contains_key(rel) {
+        if e.kind == Kind::File && e.size == 0 && !b.contains_key(rel) && !scratch(rel) {
             left_out.empty_files += 1;
             extra.push(format!("# agentos: empty file was deleted, which this patch cannot do: {rel}\n"));
         }
@@ -544,7 +581,7 @@ pub fn write_patch(base: &Path, work: &Path, out: &Path) -> Result<PatchReport> 
         let head = format!("# agentos: this patch leaves out {} thing(s) a unified diff cannot carry; apply them by hand:\n{}", extra.len(), extra.concat());
         patched.insert_str(0, &head);
     }
-    let changed = code != Some(0) || !left_out.is_empty();
+    let changed = kept_any || !left_out.is_empty();
     std::fs::write(out, patched.as_bytes())?;
     Ok(PatchReport { changed, left_out })
 }

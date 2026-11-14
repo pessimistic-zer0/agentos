@@ -49,6 +49,9 @@ pub enum EventBody {
         files_copied: u64,
         /// Workspace-relative paths left out because a deny rule matched (D-008).
         denied: Vec<String>,
+        /// Left out by `filesystem.skip` (absent in logs written before D-099).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        skipped: Vec<String>,
         /// The first checkpoint, used as the base of the output patch.
         checkpoint: String,
     },

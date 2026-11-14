@@ -99,6 +99,9 @@ pub fn create(opts: &RunOptions, agent: &dyn Agent) -> Result<(Gateway, File)> {
     let (policy, policy_text) = Policy::load(&opts.policy)?;
     let host_path = std::env::var("PATH").unwrap_or_default();
     let programs = Programs::resolve(&policy, &host_path)?;
+    for note in &programs.notes {
+        eprintln!("note: {note}");
+    }
     let sandbox = prepare_sandbox()?;
 
     let id = workspace::new_execution_id();
@@ -125,10 +128,18 @@ pub fn create(opts: &RunOptions, agent: &dyn Agent) -> Result<(Gateway, File)> {
     log.append(EventBody::WorkspaceCreated {
         files_copied: report.files_copied,
         denied: report.denied.clone(),
+        skipped: report.skipped.clone(),
         checkpoint: base.clone(),
     })?;
-    if opts.verbose && !report.denied.is_empty() {
-        println!("  workspace: {} files copied, left out by deny rules: {}", report.files_copied, report.denied.join(", "));
+    if opts.verbose && !(report.denied.is_empty() && report.skipped.is_empty()) {
+        let mut line = format!("  workspace: {} files copied", report.files_copied);
+        if !report.denied.is_empty() {
+            line.push_str(&format!(", left out by deny rules: {}", report.denied.join(", ")));
+        }
+        if !report.skipped.is_empty() {
+            line.push_str(&format!(", left out by skip rules: {}", report.skipped.join(", ")));
+        }
+        println!("{line}");
     }
 
     // Whatever the agent needs to be rebuilt after a crash (the script).
@@ -195,6 +206,9 @@ pub fn resume(state_dir: &Path, id: &str, agent: &mut dyn Agent, verbose: bool) 
     let (policy, _) = Policy::load(&dir.policy())?;
     let host_path = std::env::var("PATH").unwrap_or_default();
     let programs = Programs::resolve(&policy, &host_path)?;
+    for note in &programs.notes {
+        eprintln!("note: {note}");
+    }
     let sandbox = prepare_sandbox()?;
     let calls = crate::log::calls(&events)?;
     let next_call_id = calls.iter().map(|c| c.call_id).max().unwrap_or(0) + 1;
@@ -243,7 +257,8 @@ pub fn drive(gw: &mut Gateway, agent: &mut dyn Agent, mut last: Option<ToolResul
 
 fn finish(gw: &mut Gateway, status: &str, summary: &str, verbose: bool) -> Result<()> {
     let base = gw.dir.checkpoints().join(checkpoint::name(0));
-    let report = checkpoint::write_patch(&base, &gw.dir.work(), &gw.dir.patch())?;
+    let policy = &gw.policy;
+    let report = checkpoint::write_patch(&base, &gw.dir.work(), &gw.dir.patch(), |rel| policy.scratch(rel))?;
     gw.log.append(EventBody::ExecutionFinished {
         status: status.into(),
         summary: summary.into(),

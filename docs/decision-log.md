@@ -2349,6 +2349,101 @@ What a policy author must know: everything under a read-only mount can be read b
 
 **Concepts to learn.** None new; see D-072.
 
+### D-098 — M9: Prince opens scope for the parked conveniences, except `apply` and binary file tools
+- **Date:** 2026-11-14
+- **Status:** Taken (Prince's decision)
+- **Area:** scope
+- **ADR:** none
+
+**In plain words.** After M8 the parking lot held twelve ideas from the walk-through and the real-project trial. Prince asked why not build all of them. Nothing technical stood in the way; the reason was the scope rule, which is his to change. Claude recommended building ten, and holding two; Prince answered "as you wish". So M9 builds those ten. No tool is added: the tool list stays at four plus the bonus.
+
+**The problem.** Each parked item is small, but together they are about as much work as M8, and each is a guess about what a user needs, made without a user.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Build: a clean-up command, self-start under `systemd-run`, a message on Ctrl-C, a check command, reading part of a file, a note for an inactive virtualenv, a clearer end when the model gives up, a skip list and a scratch list in the policy, exceptions to deny rules | Taken | Each removes a block or a daily annoyance that was seen, not imagined (Findings, 2026-11-14, two rows) |
+| `agentos apply` | Held | It writes into the original repository. Design rule 10 says the original repo is never modified; Claude asked Prince to confirm that an explicit command by the user is within that rule, and proposed to hold it until then. "As you wish" is taken as agreement with the proposal, not as that confirmation |
+| Binary files and file modes through the file tools | Held | Useless before `apply` exists (the patch cannot carry the result), and it widens what the agent can ask for |
+| A git-format patch | Discarded | Makes `git` a runtime dependency; `apply` would solve the same thing better |
+| A read-only mount *inside* the workspace (for `node_modules`) | Discarded for now | Changes how the workspace, the checkpoints and the revert see `/work`; the skip list covers what was actually met (a virtualenv, which works from its own path) |
+
+**What this means for the code.** D-099 to D-107. CLAUDE.md's scope paragraph and the v1 document name M9. The spec's parking lot marks what was built.
+
+**Evidence.** Prince's messages of 2026-11-14 in the session that built M8 and M9: the list pasted back with "why not implement all of this?", then "as you wish" to Claude's recommendation.
+
+**Concepts to learn.** None new.
+
+### D-099 — Two more lists in the policy: `skip` (not copied) and `scratch` (a cache, not a change)
+- **Date:** 2026-11-14
+- **Status:** Taken
+- **Area:** policy
+- **ADR:** none
+
+**In plain words.** Until now a path was either allowed, or denied because it is a secret. Two everyday cases fit neither. A virtualenv inside the repo is big and already visible to commands through its read-only mount, so copying it into the workspace only costs time and disk; in the trial the trick was to *deny* it, which says "secret" and means "big". And a test runner's cache (`.pytest_cache`) is rewritten on every run; the runtime put it back each time and reported a policy violation. `skip` says "leave this out of the copy". `scratch` says "commands may write here; it is not a change".
+
+**The problem.** Trial on the inventory project: 2,779 files and 140 MB with the virtualenv copied, 73 files and 8.3 MB without; and `2 change(s) outside write globs reverted` on every `pytest`.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| `filesystem.skip`: globs that only shape the copy | Taken | One meaning. A skipped path is not secret; the agent may still be refused there by the other rules |
+| Keep using `deny` for it | Discarded | Mixes two meanings; the copy report then lists a virtualenv among the secrets |
+| `filesystem.scratch`: globs where a command's changes are kept, not reported, and left out of the patch and its notes | Taken | The cache keeps working (`--lf` and the like), and a violation means something again |
+| Put caches into the write globs | Discarded | Then they are in the patch, and the agent's `fs.write` may write there |
+| Leave scratch paths out of checkpoints too | Discarded | A checkpoint is a full copy of the workspace (D-007); an exception there is a new invariant to test. Caches are small |
+| Deny wins over scratch | Taken | A denied path stays denied whatever else matches |
+
+**What this means for the code.** `policy.rs`: `FsRules.skip`, `scratch`; `Policy::skipped`, `scratch`, `command_may_change`. `workspace.rs`: `CopyReport.skipped`; the `workspace.created` event gains `skipped` (absent in older logs). `gateway.rs`: the revert after a command uses `command_may_change`. `checkpoint::write_patch` takes a scratch test and drops those sections and notes; "changed" now means "something is left after that". The agent's `fs.write` still needs a write glob. The shipped policies have `skip = []` and `scratch = [".pytest_cache/**"]`.
+
+**Evidence.** `nix` preset, 2026-11-14. `tests/deps.rs`: `a_virtualenv_inside_the_repo_is_skipped_in_the_copy_and_still_used`, `a_cache_is_scratch_and_an_example_env_file_is_not_a_secret`, and the control `without_a_scratch_rule_the_cache_is_reverted_and_reported` pass. `policy::tests::deny_exceptions_skip_and_scratch` passes. All older suites pass unchanged. Not yet run on `fhs`.
+
+**Concepts to learn.** Why one word should not carry two meanings in a security rule.
+
+### D-100 — `filesystem.deny_except`: names a deny rule matches that are not secrets
+- **Date:** 2026-11-14
+- **Status:** Taken
+- **Area:** policy
+- **ADR:** none
+
+**In plain words.** The shipped rule `.env.*` keeps `.env.local` and `.env.production` away from the agent. It also catches `.env.example`, the template that holds no secret and that an agent should read to learn which settings exist. The pattern language has no "not", so the exceptions get their own list.
+
+**The problem.** Trial: `fs.read .env.example` was denied, and the file was not even in the workspace.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| A list `deny_except`; a path that matches it is not denied. Shipped: `.env.example`, `.env.sample`, `.env.template`, at any depth | Taken | The deny rules stay as wide as they were. An exception is a name someone wrote down on purpose |
+| Narrow the deny rule to known secret names (`.env.local`, `.env.production`, …) | Discarded | Misses the next name (`.env.staging`). A false denial costs a question; a missed secret is a leak |
+| Add `!pattern` to the glob language | Discarded | Order-dependent rules are how deny lists go wrong; and D-032 keeps the matcher small |
+
+**What this means for the code.** `Policy::denied` returns nothing when an exception matches. Everything that asks "is this denied?" goes through it: the copy, the file tools, the revert. A real secret named `.env.example` would now be copied; that is the policy author's risk and is said in the policy file's comment.
+
+**Evidence.** Same tests as D-099: `.env.example` is read with its content, `.env` is still denied and absent. Not yet run on `fhs`.
+
+**Concepts to learn.** Allow-list versus deny-list, and why exceptions should be explicit.
+
+### D-101 — A note when a mounted folder has its own copy of an allowed program and another one was found
+- **Date:** 2026-11-14
+- **Status:** Taken
+- **Area:** tooling
+- **ADR:** none
+
+**In plain words.** In the trial, the virtualenv was mounted but not activated. The run used the system's `pytest`, which knew none of the project's packages, and ended with "exit 4" and nothing pointing at the cause. Now the runtime notices: a folder in `sandbox.ro_mounts` has `bin/pytest`, but the `pytest` on `PATH` is a different file. It prints a note saying so and what to do, and carries on.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Print a note on stderr and continue | Taken | It may be intended (a tools folder that happens to have the program) |
+| Refuse to start | Discarded | Not every such set-up is a mistake |
+| Activate the virtualenv automatically (prefer a mount's `bin`) | Discarded | The runtime would be choosing programs the user did not put on `PATH` |
+
+**What this means for the code.** `tools/exec.rs`: `Programs.notes`, filled in `resolve`; printed by `runtime::create` and `resume` as `note: …`.
+
+**Evidence.** `tests/deps.rs::a_mounted_virtualenv_that_is_not_active_gets_a_note`: the note appears and the run goes on; with the virtualenv active there is no note. `nix` preset, 2026-11-14. Not yet run on `fhs`.
+
+**Concepts to learn.** None new; see D-091.
+
 ---
 
 ## Still open

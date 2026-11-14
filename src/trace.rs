@@ -31,10 +31,13 @@ pub fn render_calls(events: &[Event]) -> Result<String> {
             writeln!(out, "execution {execution_id}")?;
             writeln!(out, "  repo    {repo}\n  policy  {policy_name}\n  agent   {agent}\n  task    {}", truncate(task, 70))?;
         }
-        if let EventBody::WorkspaceCreated { files_copied, denied, checkpoint } = &ev.body {
+        if let EventBody::WorkspaceCreated { files_copied, denied, skipped, checkpoint } = &ev.body {
             writeln!(out, "  workspace: {files_copied} files copied, base checkpoint {checkpoint}")?;
             if !denied.is_empty() {
                 writeln!(out, "  left out by deny rules: {}", denied.join(", "))?;
+            }
+            if !skipped.is_empty() {
+                writeln!(out, "  left out by skip rules: {}", skipped.join(", "))?;
             }
         }
     }

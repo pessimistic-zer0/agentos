@@ -16,6 +16,13 @@ read  = ["**"]
 write = ["src/**", "tests/**", "**/__pycache__/**"]
 # Denied paths are never copied into the workspace (D-008) and never opened.
 deny  = [".env", ".env.*", "**/.env", "**/.env.*", "secrets/**", ".git/**", "**/*.pem", "**/id_rsa*"]
+# Names the deny rules match but that hold no secrets (the template of a .env file).
+deny_except = [".env.example", ".env.sample", ".env.template", "**/.env.example", "**/.env.sample", "**/.env.template"]
+# Not copied into the workspace (big, and not needed there). For a virtualenv
+# that is mounted in [sandbox] ro_mounts, put its folder here: skip = [".venv/**"]
+skip = []
+# Caches: commands may write here; it is not reported and not in the patch.
+scratch = [".pytest_cache/**"]
 
 [exec]
 # argv prefixes. Arguments after the prefix are allowed and logged.
