@@ -128,7 +128,7 @@ The bonus (M7, tag `m7` locally) is built on top of v0.1: the tool `ext.call`, t
 
 `main` and the tags `m0`–`m7`, `v0.1` are on GitHub (`pessimistic-zer0/agentos`). They were pushed once by the agent at Prince's direct request (D-083); the rule above is unchanged: the agent does not push.
 
-After M7, a hand check found two bugs that no suite covered, B-009 and B-010 (`docs/bugs.md`). Both are fixed (D-085, D-086), and `fs.write` now makes missing folders (D-084, which replaces the last rule of D-040). Tests: `tests/hardening.rs`, 9 tests, passing on `nix` (2026-11-14). **Not yet verified on `fhs`**: these commits are local, and CI runs only after Prince pushes.
+After M7, a hand check found two bugs that no suite covered, B-009 and B-010 (`docs/bugs.md`). Both are fixed (D-085, D-086), and `fs.write` now makes missing folders (D-084, which replaces the last rule of D-040). Tests: `tests/hardening.rs`, 9 tests, passing on `nix` (2026-11-14) and on `fhs` in CI run 43573592353 on `7d0ac1b` (D-087), together with every other suite and the 200-kill run.
 
 Open, and only Prince can close them:
 

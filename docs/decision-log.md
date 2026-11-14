@@ -2076,6 +2076,28 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 **Concepts to learn.** Permission bits on a folder: read = list names, write = add and remove names, execute = "search" (use a name inside it). Why the owner is still bound by them (only root is not).
 
+### D-087 — The post-M7 fixes count as verified on `fhs` by one green CI run on `7d0ac1b`
+- **Date:** 2026-11-14
+- **Status:** Taken (same rule as D-072 and D-082)
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** The fixes for B-009 and B-010 and the folder-making `fs.write` were built and tested on NixOS only. Prince pushed the commit, and GitHub's CI ran every suite on Ubuntu 24.04. The run is green, so the documents now say these changes pass on both systems and name the run.
+
+**The problem.** D-084, D-085 and D-086 each end with "Not yet run on `fhs`". By D-072 that stays true until a CI run on that commit is green.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Record the green run on `7d0ac1b` in a new entry and update the status lines that said "not yet verified" | Taken | The rule from D-072, unchanged. D-084 to D-086 keep their text |
+| Replace the results of record in `docs/results/` with this run's reports | Discarded | The existing files record v0.1 and M7. This run confirms that nothing regressed; its numbers are in the run's log and artifacts |
+
+**What this means for the code.** No code change. `CLAUDE.md` ("Current status") and `docs/threat-model.md` §5 cite the run.
+
+**Evidence.** <https://github.com/pessimistic-zer0/agentos/actions/runs/43573592353>, commit `7d0ac1b`, image `ubuntu-24.04`, conclusion `success`, read with `gh run view --log` on 2026-11-14. `tests/hardening.rs`: 9 passed, 0 failed. The other test files: 24, 1, 14, 2, 4, 32 and 4 passed, 0 failed. The 200-kill step: 4,800 runs, 4,798 killed, 0 invariant violations, 0 duplicated effects; external cells 1,600 runs, 0 violations, 0 duplicated effects. First CI run on these changes; it needed no fix. Not run on Ubuntu, as before: benchmarks, `make demo`.
+
+**Concepts to learn.** None new; see D-072.
+
 ---
 
 ## Still open
