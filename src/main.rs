@@ -84,7 +84,10 @@ fn main() -> Result<()> {
         agentos::sandbox::ns::helper_main(&args[2]);
     }
     let cli = Cli::parse();
-    let state_dir = cli.state_dir.clone().unwrap_or_else(runtime::default_state_dir);
+    // Made absolute once, here: later steps run helper programs (`diff`,
+    // `cp`) from other folders, where a relative path means something else
+    // (bug B-011).
+    let state_dir = std::path::absolute(cli.state_dir.clone().unwrap_or_else(runtime::default_state_dir))?;
     match cli.cmd {
         Cmd::Run { resume: Some(id), quiet, .. } => {
             let summary = match runtime::agent_kind(&state_dir, &id)?.as_str() {

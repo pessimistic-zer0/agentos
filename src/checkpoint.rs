@@ -438,7 +438,13 @@ fn restore_entry(work_root: &OwnedFd, base: &Path, rel: &str, want: &Entry, now:
 /// `--no-dereference` matters: without it `diff` follows symlinks, and a link
 /// in the workspace pointing at, say, `~/.ssh/id_ed25519` would copy that
 /// file's content into the patch (see D-034).
-pub fn write_patch(base: &Path, work: &Path, out: &Path) -> Result<bool> {
+///
+/// A unified diff is text. It cannot carry a binary file's content, a file's
+/// permission bits, an empty folder or a symlink, and `patch` and `git apply`
+/// skip what they do not understand without a word. So everything the patch
+/// leaves out is found here, listed at the top of the patch as comment
+/// lines, and returned, so the run can say so (D-090).
+pub fn write_patch(base: &Path, work: &Path, out: &Path) -> Result<PatchReport> {
     let parent = base.parent().context("checkpoint has no parent folder")?;
     let output = Command::new("diff")
         .args(["-ruN", "--no-dereference"])
@@ -490,7 +496,76 @@ pub fn write_patch(base: &Path, work: &Path, out: &Path) -> Result<bool> {
             patched.push_str(line);
         }
     }
-    let changed = code != Some(0) || !notes.is_empty();
+    // What the diff above does not carry (symlinks were handled before it).
+    let mut left_out = LeftOut::default();
+    let mut extra = Vec::new();
+    for line in patched.lines() {
+        // "Binary files a/<rel> and b/<rel> differ": the same path twice.
+        let Some(both) = line.strip_prefix("Binary files a/").and_then(|l| l.strip_suffix(" differ")) else { continue };
+        let rel = &both[..both.len().saturating_sub(" and b/".len()) / 2];
+        left_out.binary += 1;
+        extra.push(match b.get(rel) {
+            Some(_) => format!("# agentos: binary file not in this patch: {rel} (copy it from {})\n", work.join(rel).display()),
+            None => format!("# agentos: binary file was deleted, which this patch cannot do: {rel}\n"),
+        });
+    }
+    for (rel, e) in &b {
+        match (&e.kind, a.get(rel)) {
+            (Kind::File, Some(old)) if old.kind == Kind::File && old.mode != e.mode => {
+                left_out.modes += 1;
+                extra.push(format!("# agentos: mode changed, which this patch cannot do: {rel} ({:o} -> {:o})\n", old.mode, e.mode));
+            }
+            (Kind::File, None) if e.mode & 0o111 != 0 => {
+                left_out.modes += 1;
+                extra.push(format!("# agentos: new file is executable, but a patch creates plain files: {rel} (chmod {:o})\n", e.mode));
+            }
+            (Kind::Dir, None) if !b.keys().any(|k| k.strip_prefix(rel.as_str()).is_some_and(|rest| rest.starts_with('/'))) => {
+                left_out.empty_dirs += 1;
+                extra.push(format!("# agentos: empty folder not in this patch: {rel}\n"));
+            }
+            _ => {}
+        }
+    }
+    left_out.symlinks = notes.len();
+    if !extra.is_empty() {
+        let head = format!("# agentos: this patch leaves out {} thing(s) a unified diff cannot carry; apply them by hand:\n{}", extra.len(), extra.concat());
+        patched.insert_str(0, &head);
+    }
+    let changed = code != Some(0) || !left_out.is_empty();
     std::fs::write(out, patched.as_bytes())?;
-    Ok(changed)
+    Ok(PatchReport { changed, left_out })
+}
+
+/// What `write_patch` found.
+#[derive(Debug, Default)]
+pub struct PatchReport {
+    /// The workspace differs from the base checkpoint in some way.
+    pub changed: bool,
+    pub left_out: LeftOut,
+}
+
+/// Counts of the changes a patch cannot carry. Each one is a comment line
+/// at the top of the patch.
+#[derive(Debug, Default, PartialEq)]
+pub struct LeftOut {
+    pub binary: usize,
+    pub modes: usize,
+    pub empty_dirs: usize,
+    pub symlinks: usize,
+}
+
+impl LeftOut {
+    pub fn is_empty(&self) -> bool {
+        *self == LeftOut::default()
+    }
+
+    /// For example `2 binary files, 1 file mode`.
+    pub fn describe(&self) -> String {
+        [(self.binary, "binary file"), (self.modes, "file mode"), (self.empty_dirs, "empty folder"), (self.symlinks, "symlink")]
+            .iter()
+            .filter(|(n, _)| *n > 0)
+            .map(|(n, what)| format!("{n} {what}{}", if *n == 1 { "" } else { "s" }))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
 }

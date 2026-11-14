@@ -360,3 +360,79 @@ fn without_a_delegated_cgroup_the_message_starts_with_what_to_do() {
     assert!(fix < found, "the fix must come before the finding:\n{err}");
     assert!(!t.state.join("executions").exists());
 }
+
+// ---------------------------------------------------------------------------
+// D-090: the patch says what it cannot carry.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_patch_lists_what_it_cannot_carry() {
+    let t = TestEnv::new("hard-patch-left-out").with_policy_text(&policy_with_python());
+    let code = r##"open("/work/src/run.sh", "w").write("#!/bin/sh\necho hi\n"); os.chmod("/work/src/run.sh", 0o755)
+open("/work/src/blob.bin", "wb").write(bytes(range(256)))
+os.chmod("/work/src/stats.py", 0o600)
+os.mkdir("/work/src/empty")
+open("/work/src/plain.py", "w").write("y = 2\n")"##;
+    let script = t.write_script("s.toml", &format!("task = \"left out\"\n{}", exec_step(code)));
+    let args = run_args(&t, &script, &demo_repo());
+    let args: Vec<&str> = args.iter().map(String::as_str).filter(|a| *a != "--quiet").collect();
+    let shown = t.agentos(&args);
+    assert!(shown.contains("NOT in the patch: 1 binary file, 2 file modes, 1 empty folder."), "{shown}");
+    let id = only_execution(&t);
+    let patch_path = t.exec_dir(&id).join("result.patch");
+    let patch = std::fs::read_to_string(&patch_path).unwrap();
+    let work = t.exec_dir(&id).join("work");
+    for line in [
+        "# agentos: this patch leaves out 4 thing(s)".to_string(),
+        format!("# agentos: binary file not in this patch: src/blob.bin (copy it from {})", work.join("src/blob.bin").display()),
+        "# agentos: new file is executable, but a patch creates plain files: src/run.sh (chmod 755)".to_string(),
+        "# agentos: empty folder not in this patch: src/empty".to_string(),
+    ] {
+        assert!(patch.contains(&line), "missing `{line}` in:\n{patch}");
+    }
+    assert!(patch.lines().any(|l| l.starts_with("# agentos: mode changed") && l.contains("src/stats.py") && l.ends_with("-> 600)")), "{patch}");
+    assert!(!patch.lines().any(|l| l.starts_with("# agentos:") && l.contains("plain.py")), "an ordinary new file needs no note");
+    // The comment lines do not get in the way: the text part still applies.
+    let target = t.root.join("apply");
+    assert!(std::process::Command::new("cp").arg("-a").arg(demo_repo()).arg(&target).status().unwrap().success());
+    let st = std::process::Command::new("patch").args(["-p1", "--quiet", "-i"]).arg(&patch_path).current_dir(&target).output().unwrap();
+    assert!(st.status.success(), "{}{}", String::from_utf8_lossy(&st.stdout), String::from_utf8_lossy(&st.stderr));
+    assert_eq!(std::fs::read_to_string(target.join("src/plain.py")).unwrap(), "y = 2\n");
+    assert!(!target.join("src/blob.bin").exists(), "this is the gap the note is about");
+}
+
+#[test]
+fn a_run_that_changes_only_text_gets_no_note() {
+    let t = TestEnv::new("hard-patch-clean");
+    let script = t.write_script("s.toml", &format!("task = \"text only\"\n{}", write_step("src/newpkg/mod.py")));
+    let args = run_args(&t, &script, &demo_repo());
+    let args: Vec<&str> = args.iter().map(String::as_str).filter(|a| *a != "--quiet").collect();
+    let shown = t.agentos(&args);
+    assert!(!shown.contains("NOT in the patch"), "{shown}");
+    let patch = std::fs::read_to_string(t.exec_dir(&only_execution(&t)).join("result.patch")).unwrap();
+    assert!(!patch.contains("# agentos:"), "{patch}");
+}
+
+#[test]
+fn a_relative_state_dir_works() {
+    // B-011: `--state-dir state` made the run fail at its last step.
+    let t = TestEnv::new("hard-relative-state");
+    let script = t.write_script("s.toml", &format!("task = \"relative\"\n{}[[step]]\ntool = \"exec\"\nargv = [\"pytest\", \"-q\"]\n", write_step("src/extra.py")));
+    let repo = demo_repo();
+    let run = |args: &[&str], env: Option<&str>| {
+        let mut c = std::process::Command::new(agentos_bin());
+        c.current_dir(&t.root).args(args);
+        if let Some(dir) = env {
+            c.env("AGENTOS_STATE_DIR", dir);
+        }
+        let out = c.output().unwrap();
+        assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let tail = ["run", "--quiet", "--repo", repo.to_str().unwrap(), "--policy", t.policy.to_str().unwrap(), "--script", script.to_str().unwrap()];
+    let id = run(&[&["--state-dir", "state"], &tail[..]].concat(), None).trim().to_string();
+    assert!(t.root.join("state/executions").join(&id).join("result.patch").exists());
+    assert!(run(&["--state-dir", "state", "trace", &id], None).contains("fs.write"));
+    let id2 = run(&tail, Some("./by-env")).trim().to_string();
+    assert!(t.root.join("by-env/executions").join(&id2).join("result.patch").exists());
+}

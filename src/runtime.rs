@@ -243,15 +243,18 @@ pub fn drive(gw: &mut Gateway, agent: &mut dyn Agent, mut last: Option<ToolResul
 
 fn finish(gw: &mut Gateway, status: &str, summary: &str, verbose: bool) -> Result<()> {
     let base = gw.dir.checkpoints().join(checkpoint::name(0));
-    let changed = checkpoint::write_patch(&base, &gw.dir.work(), &gw.dir.patch())?;
+    let report = checkpoint::write_patch(&base, &gw.dir.work(), &gw.dir.patch())?;
     gw.log.append(EventBody::ExecutionFinished {
         status: status.into(),
         summary: summary.into(),
         patch: Some(gw.dir.patch().display().to_string()),
     })?;
     if verbose {
-        let what = if changed { "patch" } else { "no changes; empty patch" };
+        let what = if report.changed { "patch" } else { "no changes; empty patch" };
         println!("{}  {}  {}\n  {what}: {}", gw.dir.id, status.to_uppercase(), truncate(summary, 200), gw.dir.patch().display());
+        if !report.left_out.is_empty() {
+            println!("  NOT in the patch: {}. They are listed at the top of the patch, to apply by hand.", report.left_out.describe());
+        }
     }
     Ok(())
 }

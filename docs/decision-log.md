@@ -2147,6 +2147,30 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 **Concepts to learn.** Error chains (`source`) in Rust; "fail fast".
 
+### D-090 — The patch lists what it cannot carry
+- **Date:** 2026-11-14
+- **Status:** Taken
+- **Area:** durability
+- **ADR:** none
+
+**In plain words.** The result of a run is a patch: a text file of changed lines. Text cannot hold a picture or a compiled file, cannot say "this file is now executable", and cannot make an empty folder. `patch` and `git apply` skip all of that silently, so a user who applied the patch got less than the agent made and was not told. Now the runtime finds every such change, writes one comment line per change at the top of the patch, and prints one line at the end of the run.
+
+**The problem.** In the walk-through a run added a binary file, made a script executable and changed a mode. `git apply` accepted the patch without a message; the binary file was missing and both modes were lost (Findings, 2026-11-14). Design rule 10 says the output is a patch, so the patch has to be honest about its limits.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Keep the unified diff; list binary files, mode changes, new executable files, empty folders (and, as before, symlinks) as `# agentos:` lines at the top, with where to copy a binary file from; print a one-line count after the run | Taken | No new dependency and no new command. Both `patch` and `git apply` ignore text before the first file header |
+| A git-format patch (`git diff --binary`), which carries binary files and modes | Discarded | Makes `git` a runtime dependency, which the v1 stack does not list, and the result would only apply with git |
+| An `agentos apply` command that copies the files itself | Discarded | A feature; parked (spec §22) |
+| Say nothing in the run's output, only in the patch | Discarded | The comment lines are easy to miss; one line at the end is not |
+
+**What this means for the code.** `checkpoint::write_patch` returns a `PatchReport` (`changed`, and `LeftOut` with four counts) instead of a bool. `runtime::finish` prints `NOT in the patch: …`. A run that changed only a mode now counts as changed. Python's `.pyc` files are binary, so under the shipped policies every run that starts `pytest` would get the note; D-092 stops them being written.
+
+**Evidence.** `tests/hardening.rs`, `nix` preset, 2026-11-14: `the_patch_lists_what_it_cannot_carry` (binary file, executable new file, changed mode, empty folder; the text part still applies with `patch -p1`, and the binary file is then indeed absent) and `a_run_that_changes_only_text_gets_no_note` pass. The demo run printed `NOT in the patch: 2 binary files` for two `.pyc` files. While looking at that output a separate bug appeared: B-011, a relative state folder (`docs/bugs.md`). Not yet run on `fhs`.
+
+**Concepts to learn.** What a unified diff is; file modes; why "silently skipped" is worse than "refused".
+
 ---
 
 ## Still open
