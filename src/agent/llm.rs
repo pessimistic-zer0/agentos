@@ -46,6 +46,50 @@ impl LlmConfig {
             api_key: std::env::var("AGENTOS_LLM_API_KEY").ok().filter(|k| !k.is_empty()),
         }
     }
+
+    /// Can a connection to the server be opened at all? Called before an
+    /// execution is created, so that "no server is running" is reported at
+    /// once, with the variables that decide where the server is, and not
+    /// after the workspace was copied, leaving a half-started execution.
+    ///
+    /// Only a TCP connection is tried: every OpenAI-compatible server
+    /// accepts that, while a harmless request that all of them answer does
+    /// not exist. Skipped when a proxy variable is set, because the request
+    /// then does not go to this address directly.
+    pub fn check_reachable(&self) -> Result<()> {
+        use std::net::ToSocketAddrs;
+        if ["http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"].iter().any(|v| std::env::var_os(v).is_some()) {
+            return Ok(());
+        }
+        let set = |v: &str| if std::env::var_os(v).is_some() { "set" } else { "not set" };
+        let help = format!(
+            "The LLM agent finds its server through the environment:\n    \
+             AGENTOS_LLM_BASE_URL  ({}; in use: {})\n    \
+             AGENTOS_LLM_MODEL     ({}; in use: {})\n    \
+             AGENTOS_LLM_API_KEY   ({}; only needed for a hosted API)\n  \
+             For a local model, start a server first, for example:\n    \
+             llama-server -m <model>.gguf --jinja --port 8080",
+            set("AGENTOS_LLM_BASE_URL"),
+            self.base_url,
+            set("AGENTOS_LLM_MODEL"),
+            self.model,
+            set("AGENTOS_LLM_API_KEY"),
+        );
+        let uri: ureq::http::Uri = self.base_url.parse().map_err(|e| anyhow::anyhow!("AGENTOS_LLM_BASE_URL `{}` is not a URL ({e}).\n  {help}", self.base_url))?;
+        let (Some(host), Some(scheme)) = (uri.host(), uri.scheme_str()) else {
+            bail!("AGENTOS_LLM_BASE_URL `{}` must look like http://host:port/v1.\n  {help}", self.base_url);
+        };
+        let port = uri.port_u16().unwrap_or(if scheme == "https" { 443 } else { 80 });
+        let host = host.trim_start_matches('[').trim_end_matches(']'); // IPv6 literal
+        let mut last = String::from("the name did not resolve to an address");
+        for addr in (host, port).to_socket_addrs().map_err(|e| anyhow::anyhow!("cannot look up `{host}` ({e}).\n  {help}"))? {
+            match std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(5)) {
+                Ok(_) => return Ok(()),
+                Err(e) => last = e.to_string(),
+            }
+        }
+        bail!("no LLM server answers at {} ({last}). Nothing was started.\n  {help}", self.base_url)
+    }
 }
 
 const SYSTEM_PROMPT: &str = "You are a coding agent working on a copy of a code repository. \

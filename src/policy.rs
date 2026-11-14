@@ -13,10 +13,13 @@ use serde::{Deserialize, Serialize};
 /// check that a bad file is refused for the right reason), so they are typed.
 #[derive(Debug, thiserror::Error)]
 pub enum PolicyError {
-    #[error("cannot read policy file {path}: {source}")]
-    Read { path: PathBuf, source: std::io::Error },
-    #[error("policy file {path} is not valid: {source}")]
-    Parse { path: PathBuf, source: toml::de::Error },
+    // The inner error is named `error`, not `source`: a field called
+    // `source` is also reported as the error's cause, and the command line
+    // then printed the same text twice.
+    #[error("cannot read policy file {path}: {error}")]
+    Read { path: PathBuf, error: std::io::Error },
+    #[error("policy file {path} is not valid: {error}")]
+    Parse { path: PathBuf, error: toml::de::Error },
     #[error("policy_version {0} is not supported (this runtime reads version 1)")]
     Version(u32),
     #[error("invalid glob `{glob}` in {field}: {reason}")]
@@ -176,9 +179,9 @@ pub enum Access {
 impl Policy {
     pub fn load(path: &Path) -> Result<(Policy, String), PolicyError> {
         let text = std::fs::read_to_string(path)
-            .map_err(|source| PolicyError::Read { path: path.to_path_buf(), source })?;
+            .map_err(|error| PolicyError::Read { path: path.to_path_buf(), error })?;
         let policy = Policy::parse(&text).map_err(|e| match e {
-            PolicyError::Parse { source, .. } => PolicyError::Parse { path: path.to_path_buf(), source },
+            PolicyError::Parse { error, .. } => PolicyError::Parse { path: path.to_path_buf(), error },
             other => other,
         })?;
         Ok((policy, text))
@@ -186,7 +189,7 @@ impl Policy {
 
     pub fn parse(text: &str) -> Result<Policy, PolicyError> {
         let policy: Policy = toml::from_str(text)
-            .map_err(|source| PolicyError::Parse { path: PathBuf::from("<text>"), source })?;
+            .map_err(|error| PolicyError::Parse { path: PathBuf::from("<text>"), error })?;
         policy.validate()?;
         Ok(policy)
     }

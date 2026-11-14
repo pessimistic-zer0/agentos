@@ -315,3 +315,48 @@ fn a_folder_making_write_is_recovered_at_every_crash_point() {
     }
     assert!(applied >= 2, "P4 and P6 must both be APPLIED");
 }
+
+// ---------------------------------------------------------------------------
+// Messages a newcomer meets first (Findings, 2026-11-14).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_policy_mistake_is_reported_once_and_before_anything_is_started() {
+    let t = TestEnv::new("hard-policy-typo");
+    let text = std::fs::read_to_string(preset_policy()).unwrap().replace("memory_mb", "memory");
+    let t = t.with_policy_text(&text);
+    let script = repo_root().join("examples/scripts/fix-demo.toml");
+    let out = t.output(&run_args(&t, &script, &demo_repo()).iter().map(String::as_str).collect::<Vec<_>>());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert_eq!(err.matches("unknown field `memory`").count(), 1, "the mistake must be named exactly once:\n{err}");
+    assert!(err.contains("memory_mb"), "the right name is offered:\n{err}");
+    assert!(!t.state.join("executions").exists());
+}
+
+#[test]
+fn a_wrong_repo_path_is_reported_as_that() {
+    let t = TestEnv::new("hard-bad-repo");
+    let script = repo_root().join("examples/scripts/fix-demo.toml");
+    // An empty PATH would also be a problem (no pytest); the repo comes first.
+    let args = run_args(&t, &script, Path::new("/no/such/repo"));
+    let out = t.cmd(&args.iter().map(String::as_str).collect::<Vec<_>>()).env("PATH", "").output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success() && err.contains("--repo /no/such/repo"), "{err}");
+}
+
+#[test]
+fn without_a_delegated_cgroup_the_message_starts_with_what_to_do() {
+    // A plain scope (no Delegate=yes) is what a newcomer's terminal is.
+    let t = TestEnv::new("hard-not-delegated");
+    let script = repo_root().join("examples/scripts/fix-demo.toml");
+    let mut args = vec!["--user".to_string(), "--scope".into(), "-q".into(), agentos_bin().display().to_string(), "--state-dir".into(), t.state.display().to_string()];
+    args.extend(run_args(&t, &script, &demo_repo()));
+    let out = std::process::Command::new("systemd-run").args(&args).current_dir(repo_root()).output().expect("systemd-run");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "it ran in a scope that was not delegated:\n{err}");
+    let fix = err.find("systemd-run --user --scope -p Delegate=yes").unwrap_or_else(|| panic!("the command to use is missing:\n{err}"));
+    let found = err.find("what was found").unwrap_or_else(|| panic!("the finding is missing:\n{err}"));
+    assert!(fix < found, "the fix must come before the finding:\n{err}");
+    assert!(!t.state.join("executions").exists());
+}

@@ -169,7 +169,7 @@ pub fn check_host() -> Vec<String> {
         Err(e) => problems.push(format!("cannot open /: {e}")),
     }
     if let Err(e) = cgroup::CgroupRoot::init() {
-        problems.push(format!("cgroup delegation: {e:#}"));
+        problems.push(format!("{e:#}"));
     }
     problems
 }

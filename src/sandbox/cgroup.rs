@@ -35,8 +35,15 @@ fn own_cgroup() -> Result<PathBuf> {
     Ok(Path::new(CGROUP_FS).join(line[3..].trim_start_matches('/')))
 }
 
-fn delegation_help() -> &'static str {
-    "run agentos under a delegated cgroup, e.g.\n    systemd-run --user --scope -p Delegate=yes agentos run ..."
+/// The error for "not in a delegated cgroup". It says what to do first and
+/// what was found second: the finding (a missing `cpu` controller, say)
+/// means nothing to someone who has not met cgroups, the command does.
+fn not_delegated(found: String) -> anyhow::Error {
+    anyhow::anyhow!(
+        "agentos must be started inside a cgroup that systemd has handed over to it, \
+         because it sets memory, process and CPU limits for the commands it runs. Start it like this:\n      \
+         systemd-run --user --scope -p Delegate=yes agentos run ...\n    (what was found: {found})"
+    )
 }
 
 /// True only if `systemctl` clearly answers `Delegate=no` for the unit, in
@@ -70,12 +77,7 @@ impl CgroupRoot {
         let controllers = fs::read_to_string(dir.join("cgroup.controllers")).unwrap_or_default();
         let missing: Vec<&str> = NEEDED.iter().copied().filter(|c| !controllers.split_whitespace().any(|x| x == *c)).collect();
         if !missing.is_empty() {
-            bail!(
-                "cgroup {} does not offer the {} controller(s); {}",
-                dir.display(),
-                missing.join(", "),
-                delegation_help()
-            );
+            return Err(not_delegated(format!("cgroup {} does not offer the {} controller(s)", dir.display(), missing.join(", "))));
         }
         // Ask systemd whether this unit was delegated to us, *before* changing
         // anything. Without this, running in a normal (not delegated) scope
@@ -84,7 +86,7 @@ impl CgroupRoot {
         // If systemd cannot be asked (no systemctl), the probe below decides.
         if let Some(unit) = dir.file_name().and_then(|n| n.to_str()) {
             if systemd_says_not_delegated(unit) {
-                bail!("cgroup {} is not delegated (systemd reports Delegate=no for {unit}); {}", dir.display(), delegation_help());
+                return Err(not_delegated(format!("systemd reports Delegate=no for {unit}")));
             }
         }
         let leaf = dir.join(LEAF);
@@ -92,7 +94,7 @@ impl CgroupRoot {
             Ok(()) => {}
             // Another agentos process in this scope got there first: fine.
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(e) => bail!("cannot create a child cgroup in {} ({e}); {}", dir.display(), delegation_help()),
+            Err(e) => return Err(not_delegated(format!("cannot create a child cgroup in {}: {e}", dir.display()))),
         }
         let enabled = |dir: &Path| {
             let on = fs::read_to_string(dir.join("cgroup.subtree_control")).unwrap_or_default();
@@ -128,7 +130,7 @@ impl CgroupRoot {
             }
         }
         if let Some(e) = last_err {
-            bail!("cannot enable controllers in {} ({e}); {}", dir.display(), delegation_help());
+            return Err(not_delegated(format!("cannot enable controllers in {}: {e}", dir.display())));
         }
         let root = CgroupRoot { dir };
         root.probe()?;
@@ -142,7 +144,7 @@ impl CgroupRoot {
         let name = format!("agentos-probe-{}", std::process::id());
         let cg = self
             .create(&name, &limits)
-            .map_err(|e| anyhow::anyhow!("cannot set limits in a child of {} ({e:#}); {}", self.dir.display(), delegation_help()))?;
+            .map_err(|e| not_delegated(format!("cannot set limits in a child of {}: {e:#}", self.dir.display())))?;
         cg.destroy()
     }
 

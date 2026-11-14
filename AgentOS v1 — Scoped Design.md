@@ -313,6 +313,16 @@ Each gets a short ADR in `docs/decisions/`, revisited only if a measurement says
 | 0010 | Workspace on tmpfs (hard size cap) or on disk? | On disk; a tmpfs is lost when the runtime is killed. Disk fill is a known limit |
 | 0011 | Which system folders does the sandbox see? | Set in policy; `fhs` and `nix` presets |
 
+## After the bonus: what a first user needs (2026-11-14)
+
+Decided by Prince after a walk-through as a new user (D-088). The five parts and the tool list do not change.
+
+1. **Defects and wording inside v1** are fixed: clearer first messages (D-089); the patch says what it cannot carry (D-090).
+2. **Dependencies in the sandbox** (new): a command can use packages installed outside the repository, through a read-only mount named in the policy and, where needed, environment variables named in the policy (D-091, D-092).
+3. **An AppArmor profile for Ubuntu** (new): so that user namespaces need not be allowed for the whole system (D-093).
+
+Everything else the walk-through raised is in the parking lot of `AgentOS_Project_Spec.md` (§22).
+
 ## Bonus, only after everything above is done
 
 One fake external tool: a small local service with injectable timeouts, called through the gateway with an idempotency key. It gives the "uncertain call that cannot be rolled back" path something real to do. It is not part of the definition of done and must not start before v0.1 is tagged.

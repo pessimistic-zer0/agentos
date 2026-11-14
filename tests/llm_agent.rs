@@ -65,6 +65,11 @@ fn start_mock() -> (String, Arc<Mutex<Vec<Value>>>) {
                     auth = line.trim().to_string();
                 }
             }
+            // A connection that sends nothing is the runtime checking that a
+            // server is there (`LlmConfig::check_reachable`); it is not a request.
+            if len == 0 {
+                continue;
+            }
             let mut body = vec![0u8; len];
             if reader.read_exact(&mut body).is_err() {
                 continue;
@@ -152,4 +157,23 @@ fn llm_run_resumes_after_a_crash_with_the_conversation_from_the_log() {
     let last = msgs.last().unwrap();
     assert_eq!(last["role"], "tool");
     assert_eq!(last["tool_call_id"], "call_4");
+}
+
+#[test]
+fn no_server_is_reported_before_anything_is_started() {
+    let t = TestEnv::new("llm-no-server");
+    // A port nobody listens on: take one from the kernel, then give it back.
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let out = run_llm(&t, &format!("http://127.0.0.1:{port}/v1"), &[]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    for needle in ["no LLM server answers", "AGENTOS_LLM_BASE_URL", "AGENTOS_LLM_MODEL", "AGENTOS_LLM_API_KEY", "llama-server", "Nothing was started"] {
+        assert!(err.contains(needle), "`{needle}` is missing from:\n{err}");
+    }
+    assert!(!err.contains("KEY-CANARY-123"), "the API key was printed");
+    assert!(!t.state.join("executions").exists(), "an execution was created although no server was reachable");
+
+    let bad = run_llm(&t, "not a url", &[]);
+    let err = String::from_utf8_lossy(&bad.stderr);
+    assert!(!bad.status.success() && err.contains("AGENTOS_LLM_BASE_URL"), "{err}");
 }

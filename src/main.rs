@@ -97,6 +97,7 @@ fn main() -> Result<()> {
                     let mut cfg: LlmConfig = serde_json::from_str(&text)?;
                     // The key is never saved; take it from the environment again.
                     cfg.api_key = LlmConfig::from_env(String::new()).api_key;
+                    cfg.check_reachable()?;
                     runtime::resume(&state_dir, &id, &mut LlmAgent::new(cfg), !quiet)?
                 }
                 other => bail!("execution {id} was started with agent `{other}`, which this build cannot resume"),
@@ -116,7 +117,9 @@ fn main() -> Result<()> {
                 }
                 AgentKind::Llm => {
                     let Some(task) = task else { bail!("--agent llm needs --task \"...\"") };
-                    runtime::start(&opts, &mut LlmAgent::new(LlmConfig::from_env(task)))?
+                    let cfg = LlmConfig::from_env(task);
+                    cfg.check_reachable()?;
+                    runtime::start(&opts, &mut LlmAgent::new(cfg))?
                 }
             };
             if quiet {

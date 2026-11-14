@@ -2098,6 +2098,55 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 **Concepts to learn.** None new; see D-072.
 
+### D-088 — After M7: fix what a newcomer trips over, and open scope for exactly two features
+- **Date:** 2026-11-14
+- **Status:** Taken (Prince's decision)
+- **Area:** scope
+- **ADR:** none
+
+**In plain words.** Prince asked where a real user would struggle. A walk-through with the built binary gave a list (Findings, 2026-11-14). Part of the list is mistakes and unclear wording in what v1 already has; those are fixed. The rest would be new features. Prince approved two of them, because without them a real project cannot get past its first test run: tests that need installed packages, and running on Ubuntu without switching off a system-wide protection. Everything else stays in the parking lot.
+
+**The problem.** "Scope is fixed" (CLAUDE.md, the v1 document) and "make it usable by someone else" pull in opposite directions. Fixing defects is not new scope; new features are, and only Prince can open it.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Fix the defects inside v1; add two features: dependencies in the sandbox, and an AppArmor profile for Ubuntu | Taken | Claude's recommendation, approved by Prince on 2026-11-14 ("go on with your rec"). The two features are the ones that stop a user completely |
+| Fix the defects only | Discarded | The tool would stay correct and unusable on any project with dependencies |
+| Build the whole list (clean-up command, leaving folders out of the copy, starting itself under `systemd-run`, a Ctrl-C message, a check command, an apply command) | Discarded for now | Each is an inconvenience, not a wall. They are in the spec's parking lot (§22) |
+
+**What this means for the code.** Inside v1: D-089 (first messages), D-090 (what the patch leaves out). New: D-091 and D-092 (dependencies), D-093 (AppArmor profile). The v1 document gets a section "After the bonus". CLAUDE.md's scope paragraph names the two additions. No tool is added and the five parts stay as they are.
+
+**Evidence.** The walk-through: Findings row of 2026-11-14 and commit `b20e809`. Web reading on what users of similar sandboxes report (bug trackers and posts about bubblewrap, Claude Code, Cursor and Codex on Ubuntu 24.04; git-worktree set-ups): read through search summaries on 2026-11-14, not checked against each primary page.
+
+**Concepts to learn.** Defect versus feature; why a scope rule needs an owner who can change it.
+
+### D-089 — First messages: check the user's input first, say the fix first, start nothing before the checks pass
+- **Date:** 2026-11-14
+- **Status:** Taken
+- **Area:** tooling
+- **ADR:** none
+
+**In plain words.** Four things a newcomer sees early were wrong or unclear. A mistake in the policy file was printed twice. A mistyped `--repo` could be hidden behind an unrelated complaint. Without the `systemd-run` prefix the message began with cgroup words and ended with the command to use. And `--agent llm` with no model server copied the whole workspace, then failed with "Connection refused", named no setting, and left a half-started execution behind.
+
+**The problem.** None of these is wrong in the sense the suites test, and all of them cost a new user time.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Rename the inner error field of `PolicyError::Read` and `Parse` from `source` to `error` | Taken | `thiserror` treats a field called `source` as the cause; the message already contains it, so `anyhow` printed it twice |
+| Check `--repo` before the policy's programs | Taken | The user's own argument first |
+| One function for every "not delegated" error: the command to use, then what was found | Taken | The finding ("no `cpu` controller") means nothing without knowing cgroups |
+| Before creating an execution with the LLM agent, open a TCP connection to the server; on failure name the three variables and their current values (never the key) | Taken | Fails in milliseconds, creates nothing |
+| Send a real request (`GET /models`) instead | Discarded | Not every OpenAI-compatible server has it; a TCP connection is the one thing all accept |
+| Start itself under `systemd-run` when it is not delegated | Discarded | A feature; parked (spec §22) |
+
+**What this means for the code.** `policy.rs` (field rename), `sandbox/cgroup.rs::not_delegated`, `runtime.rs::create` (order; heading "the AgentOS sandbox cannot start"), `agent/llm.rs::LlmConfig::check_reachable`, called in `main.rs` for a new and a resumed LLM run. The check is skipped when a proxy variable is set, because the request then goes elsewhere. The mock server in `tests/llm_agent.rs` now ignores a connection that sends nothing.
+
+**Evidence.** `nix` preset, 2026-11-14: `tests/llm_agent.rs::no_server_is_reported_before_anything_is_started`; `tests/hardening.rs`: `a_policy_mistake_is_reported_once_and_before_anything_is_started`, `a_wrong_repo_path_is_reported_as_that`, `without_a_delegated_cgroup_the_message_starts_with_what_to_do` pass. The two older LLM tests failed once after the change, because the mock counted the empty connection as a request; they pass with the mock corrected, assertions unchanged. Not yet run on `fhs`.
+
+**Concepts to learn.** Error chains (`source`) in Rust; "fail fast".
+
 ---
 
 ## Still open

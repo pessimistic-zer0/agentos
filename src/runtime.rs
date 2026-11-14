@@ -74,7 +74,7 @@ pub fn is_locked(dir: &ExecDir) -> bool {
 pub fn prepare_sandbox() -> Result<SandboxCtx> {
     let problems = crate::sandbox::check_host();
     if !problems.is_empty() {
-        bail!("this machine cannot run the AgentOS sandbox:\n  - {}", problems.join("\n  - "));
+        bail!("the AgentOS sandbox cannot start:\n  - {}", problems.join("\n  - "));
     }
     let cgroups = crate::sandbox::cgroup::CgroupRoot::init()?;
     let helper = std::env::current_exe().context("finding the agentos binary")?;
@@ -90,11 +90,16 @@ pub fn start(opts: &RunOptions, agent: &mut dyn Agent) -> Result<RunSummary> {
 /// return its gateway and the lock that must be held while it is used.
 /// `start` drives an agent on it; the benchmarks call the gateway directly.
 pub fn create(opts: &RunOptions, agent: &dyn Agent) -> Result<(Gateway, File)> {
+    // The user's own arguments are checked first, so a mistyped path is
+    // reported as that and not hidden behind a later, unrelated problem.
+    let repo = std::fs::canonicalize(&opts.repo).with_context(|| format!("--repo {}", opts.repo.display()))?;
+    if !repo.is_dir() {
+        bail!("--repo {} is not a folder", opts.repo.display());
+    }
     let (policy, policy_text) = Policy::load(&opts.policy)?;
     let host_path = std::env::var("PATH").unwrap_or_default();
     let programs = Programs::resolve(&policy, &host_path)?;
     let sandbox = prepare_sandbox()?;
-    let repo = std::fs::canonicalize(&opts.repo).with_context(|| format!("repo {}", opts.repo.display()))?;
 
     let id = workspace::new_execution_id();
     let dir = ExecDir::new(&opts.state_dir, &id);

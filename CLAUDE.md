@@ -23,7 +23,7 @@ Follow the entry template in that file. Write "In plain words" for a beginner. U
 
 ## Scope is fixed
 
-The five parts (gateway, policy, sandbox, event log, checkpoints + recovery), the build order, and the cut list in the v1 document do not change during normal work. The "Bonus" of the v1 document (one fake external tool) is built (M7, D-073); it is the only addition and it is finished. It does not open the door to more tools.
+The five parts (gateway, policy, sandbox, event log, checkpoints + recovery), the build order, and the cut list in the v1 document do not change during normal work. The "Bonus" of the v1 document (one fake external tool) is built (M7, D-073); it is finished. On 2026-11-14 Prince approved exactly two more additions (D-088): packages from outside the repo for sandboxed commands, and an AppArmor profile for Ubuntu. Neither is a tool, and neither opens the door to more.
 
 - Do not add features, tools, dependencies or abstractions that the v1 document does not list.
 - If an idea comes up that is outside v1, add one line to the parking lot (§22 of the spec) and continue with the current milestone.
