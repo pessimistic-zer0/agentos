@@ -1072,6 +1072,14 @@ Uncommitted. Some are research projects on their own.
 - **Signed execution records:** attestations that a patch was produced under a given policy.
 - **Multi-model comparison harness** built on comparative replay.
 - **A patch/edit tool** (`fs.patch`: replace a range or apply a diff) so small models do not have to resend whole files. Came up in v1 M4 (D-060); not in v1 because the tool list is fixed at four.
+- **Usability gaps seen in a walk-through as a new user (2026-11-14; decision-log Findings of that date).** None is in v1; each needs Prince's decision before it is built:
+  - **Dependencies in the sandbox:** tests that import third-party packages fail, because the sandbox sees only `sandbox.ro_mounts`, a virtualenv inside the repo is not used, and a policy cannot set environment variables.
+  - **A complete result:** the patch drops binary files and file modes without saying so; an `agentos apply` (or a git-format patch) would close the loop.
+  - **Large repos:** every mutating call copies the whole workspace, including `node_modules` or `target/`; a policy list of folders to leave out of the copy.
+  - **Cleaning up:** nothing removes old executions (`agentos rm` / `gc`).
+  - **Starting:** every command needs the `systemd-run --user --scope -p Delegate=yes` prefix; the runtime could start itself that way. On Ubuntu, ship an AppArmor profile instead of telling users to switch off a system-wide protection.
+  - **Stopping:** Ctrl-C ends the run silently; say that it can be resumed and how.
+  - **Checking before running:** `agentos check` for the host and a policy file, so mistakes show before an execution exists.
 
 ---
 
