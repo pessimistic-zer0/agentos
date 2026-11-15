@@ -6,7 +6,7 @@ Rule of the project: no number without a script or a record that produces it. Ea
 
 - Built **AgentOS**, a Rust runtime that runs an AI coding agent's tool calls in a rootless Linux sandbox (user, mount, PID and network namespaces, cgroup v2, Landlock, `openat2`) behind a default-deny policy, with a write-ahead event log and checkpoints.
 - Survives `kill -9` at any point: **4,800 injected kills at 8 crash points, 0 invariant violations, 0 duplicated effects**, on NixOS and on Ubuntu 24.04 in CI; **32 adversarial tests, 0 sandbox escapes**.
-- Used it on Python, Node and Rust projects; found and fixed **14 bugs**, 6 of them by hands-on use after every test suite passed, and wrote up why the suites missed them.
+- Used it on Python, Node and Rust projects; found and fixed **14 bugs**, 6 of them after every test suite had passed, and wrote up why the suites missed them.
 
 ## Longer form (pick what fits the role)
 
@@ -20,7 +20,7 @@ Rule of the project: no number without a script or a record that produces it. Ea
 | Measured overhead: 4.6 ms added per sandboxed command (p50), 13.3 ms for a durable 4 KB write with log and checkpoint, +36% end to end on the demo task | `make bench`; `docs/results/bench-nix-m8/summary.md` |
 | Portable across distributions without code changes: distro differences live in policy presets; verified on NixOS and on Ubuntu 24.04 in CI, including a job that keeps Ubuntu's user-namespace restriction on and uses a shipped AppArmor profile | `policies/`; `.github/workflows/ci.yml`; D-094, D-110 |
 | Ran it on real-shaped projects in three ecosystems (Python with PyPI packages in a virtualenv, Node with npm packages, Rust): tickets fixed through the gateway, results applied to fresh clones, the projects' own tests passing there | `docs/results/real-repo-trial-nix.md`, `second-stack-trial-nix.md` |
-| Found 14 bugs in my own runtime, 3 of them only on the Ubuntu CI runs and 6 only by hands-on use after all suites passed; documented each with cause, fix and lesson | `docs/bugs.md` (B-001 to B-014); `docs/what-the-suites-missed.md` |
+| Found 14 bugs in my own runtime: 3 only on the Ubuntu CI runs, and 6 after all suites had passed (by hands-on use, by a project someone else wrote, by the benchmarks, by CI); documented each with cause, fix and lesson | `docs/bugs.md` (B-001 to B-014); `docs/what-the-suites-missed.md` |
 | Kept a decision log of 113 entries (options considered, what was discarded and why, evidence actually run), 12 ADRs and a document per milestone | `grep -c '^### D-' docs/decision-log.md`; `docs/decisions/`; `docs/milestones/` |
 
 ## What not to claim

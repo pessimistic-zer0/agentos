@@ -208,7 +208,7 @@ Seven bugs in the runtime itself were found by the suites or the demo, each with
 | What | In plain words | Where |
 |---|---|---|
 | A fifth tool, `ext.call` (off by default) | A request to an outside service, which a checkpoint cannot undo; settled after a crash by sending the same request with the same key | M7, ADR 0012 |
-| Six more bugs fixed (B-009 to B-014) | Found by hand, by a real project, by the benchmarks and by CI on Ubuntu | `docs/bugs.md`, `docs/what-the-suites-missed.md` |
+| Six more bugs fixed (B-009 to B-014) | Found after every suite passed: by hand, by a real project, by the benchmarks and by CI on Ubuntu | `docs/bugs.md`, `docs/what-the-suites-missed.md` |
 | Packages from outside the repo | A virtualenv or a folder of packages is mounted read-only; the policy can set environment variables | M8, D-091, D-092 |
 | Ubuntu without switching off a system-wide protection | An AppArmor profile for agentos; the startup check tries instead of reading switches | M8, D-093, D-096 |
 | A patch that says what it cannot carry, and `agentos apply` that carries it | Binary and empty files, modes, empty folders | M8, M10, D-090, D-108 |
@@ -297,6 +297,6 @@ agentos trace
 | `docs/threat-model.md` | Each attack, its defence and its test |
 | `docs/recovery-semantics.md` | What a crash leaves and what recovery decides, per crash point and tool |
 | `docs/bugs.md` | Every bug found in the runtime, with cause, fix and lesson |
-| `docs/what-the-suites-missed.md` | The six bugs that only hands-on use found |
+| `docs/what-the-suites-missed.md` | The six bugs found after every suite had passed |
 | `docs/resume-bullets.md` | Resume bullets, each with the record its number comes from |
 | `docs/results/` | Results of record with raw data |

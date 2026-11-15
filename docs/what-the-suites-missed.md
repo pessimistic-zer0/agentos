@@ -4,7 +4,7 @@
 
 AgentOS runs a coding agent's tool calls in a Linux sandbox and keeps a log that survives `kill -9`. By the time it was called finished it had three suites: 4,800 deliberate kills with five invariants checked after each, 32 attacks that all had to fail, and a set of ordinary operations that all had to work. Everything passed, on two systems.
 
-Then it was used: by hand, on things the suites did not try, and later on projects that were not written for it. That found six more bugs. None let anything out of the sandbox. All of them would have met a real user in the first week.
+Then it was used: by hand, on things the suites did not try, on projects that were not written for it, through its benchmarks, and on the second system again after new features. That found six more bugs. None let anything out of the sandbox. All of them would have met a real user in the first week.
 
 The full notes are in [`bugs.md`](bugs.md) (B-009 to B-014). This is the short version, with the part that is worth remembering.
 

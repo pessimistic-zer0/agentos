@@ -14,7 +14,7 @@ It is a learning and portfolio project, not a product. It does one thing: one ag
 - **Where it is verified.** NixOS 26.05 on the development machine (`nix` preset), and Ubuntu 24.04 in CI (`fhs` preset), including a job that keeps Ubuntu's restriction on user namespaces switched on and uses the AppArmor profile that comes with agentos. Latest green run on everything but the newest change: [43733350171](https://github.com/pessimistic-zer0/agentos/actions/runs/43733350171). Debian, Fedora and Arch use the same `fhs` preset and have not been run.
 - **What the suites say.** 4,800 kills at 8 points with 0 invariant violations, 32 attacks with 0 escapes, 130 tests in all. See [What it shows](#what-it-shows).
 - **What it is not.** Not hardened like a container runtime (no seccomp filter, no disk limit), no network for commands, one agent at a time. Read [what it does not do](#what-it-does-not-do) before trusting it with anything.
-- **How it got here.** Fourteen bugs were found on the way, eight by the suites and CI, six by using the program by hand on things the suites did not try; each has a note in [`docs/bugs.md`](docs/bugs.md), and the six are told as a story in [`docs/what-the-suites-missed.md`](docs/what-the-suites-missed.md). The history by milestone is in [`docs/milestones/`](docs/milestones/) (M0 to M10).
+- **How it got here.** Fourteen bugs were found on the way: eight by the suites and the first CI runs, and six after every suite had passed (four by using the program on things the suites did not try, one by the benchmarks, one by CI on the other system). Each has a note in [`docs/bugs.md`](docs/bugs.md), and the six are told as a story in [`docs/what-the-suites-missed.md`](docs/what-the-suites-missed.md). The history by milestone is in [`docs/milestones/`](docs/milestones/) (M0 to M10).
 - Licensed under MIT or Apache-2.0, at your option (see [License](#license)).
 
 ## The demo
@@ -89,7 +89,7 @@ Three suites, one command (`nix develop -c make eval`). Results of record, with 
 
 A real LLM also completed the demo task (a local 4B model under llama.cpp), including after being killed mid-run. Three earlier attempts failed; both the failures and the successful run are in `docs/results/`. This shows the loop works end to end with a real model, not that the agent is good.
 
-The suites and CI found eight bugs in the runtime itself (three of them only on Ubuntu); six more were found after v0.1 by using the program by hand, in places no suite looked. Each has a short note in [`docs/bugs.md`](docs/bugs.md).
+The suites and the first CI runs found eight bugs in the runtime itself (two of them only on Ubuntu). Six more were found after v0.1, when every suite passed: by using the program by hand, by a project written by someone else, by the benchmarks, and by CI on Ubuntu. Each has a short note in [`docs/bugs.md`](docs/bugs.md).
 
 ## The bonus: a call that cannot be rolled back
 
@@ -308,7 +308,7 @@ This project was built to be studied afterwards, so the written record is as muc
 | [`docs/threat-model.md`](docs/threat-model.md) | What is protected, each attack with its defence and test, what is out of scope |
 | [`docs/recovery-semantics.md`](docs/recovery-semantics.md) | What a crash leaves and what recovery decides, per crash point and tool |
 | [`docs/bugs.md`](docs/bugs.md) | Every bug found in the runtime: what was done, what went wrong, why, the fix, the lesson |
-| [`docs/what-the-suites-missed.md`](docs/what-the-suites-missed.md) | A short write-up of the six bugs that only hands-on use found |
+| [`docs/what-the-suites-missed.md`](docs/what-the-suites-missed.md) | A short write-up of the six bugs found after every suite had passed |
 | [`docs/project-overview.md`](docs/project-overview.md) | One document that explains the whole project in plain words |
 | [`docs/results/`](docs/results/) | Results of record with raw data |
 
