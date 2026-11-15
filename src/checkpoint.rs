@@ -620,3 +620,209 @@ impl LeftOut {
             .join(", ")
     }
 }
+
+// ---------------------------------------------------------------------------
+// `agentos apply`: copying the result into a repository (D-108).
+//
+// This is the one place where AgentOS writes outside its own state folder,
+// and only when the user runs the command. It works from the same two
+// trees as the patch (the base checkpoint and the final workspace) but
+// copies files instead of describing lines, so binary files, empty files,
+// file modes, empty folders and symlinks all come across.
+//
+// Two rules keep it safe:
+//
+// 1. Nothing is touched unless everything can be: for each path that the
+//    run changed, the repository must still hold what the base checkpoint
+//    holds (or already hold the result). One path that differs refuses the
+//    whole apply, before any write.
+// 2. Every write goes through a handle on its parent folder opened with
+//    openat2(RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS), like the revert code
+//    above, so a symlink in the repository cannot send a file elsewhere.
+//
+// Paths the run never saw (denied or skipped: they are in neither tree)
+// are never looked at, written or deleted.
+// ---------------------------------------------------------------------------
+
+/// What `apply_changes` did, or why it did nothing.
+#[derive(Debug)]
+pub enum ApplyResult {
+    /// The repository differs from the base checkpoint at these paths (or a
+    /// change is of a kind `apply` does not do). Nothing was written.
+    Refused(Vec<String>),
+    Done(Applied),
+}
+
+#[derive(Debug, Default)]
+pub struct Applied {
+    /// One line per change made (or, in a dry run, that would be made):
+    /// `A path`, `M path`, `D path`, `mode path 644 -> 755`, `L path -> target`.
+    pub changes: Vec<String>,
+    /// Paths that already held the result (an apply done twice).
+    pub already: usize,
+    /// Folders the run removed that are not empty in the repository
+    /// (they hold files the run never saw) and were therefore kept.
+    pub kept_folders: Vec<String>,
+}
+
+enum Op {
+    Dir { rel: String, mode: u32, exists: bool },
+    File { rel: String, mode: u32 },
+    Link { rel: String, to: PathBuf, replace: bool },
+    Delete { rel: String, dir: bool },
+}
+
+/// Make `target` hold what the run made of the repository: every
+/// difference between `base` and `work`, except under `scratch` paths.
+pub fn apply_changes(base: &Path, work: &Path, target: &Path, scratch: impl Fn(&str) -> bool, dry_run: bool) -> Result<ApplyResult> {
+    let (a, b) = (scan(base)?, scan(work)?);
+    let mut rels: Vec<&String> = a.keys().chain(b.keys()).filter(|r| !r.is_empty() && !scratch(r)).collect();
+    rels.sort();
+    rels.dedup();
+
+    let mut out = Applied::default();
+    let mut problems = Vec::new();
+    let mut ops = Vec::new();
+    let mode = |m: u32| format!("{m:o}");
+    for rel in rels {
+        let (old, new) = (a.get(rel), b.get(rel));
+        if let (Some(o), Some(n)) = (old, new) {
+            if same(base, work, rel, o, n)? {
+                continue;
+            }
+        }
+        // Where does the repository stand on this path?
+        let now = scan_one(target, rel);
+        let equals = |root: &Path, want: Option<&Entry>| -> Result<bool> {
+            Ok(match (want, &now) {
+                (None, None) => true,
+                (Some(w), Some(cur)) => same(root, target, rel, w, cur)?,
+                _ => false,
+            })
+        };
+        if equals(work, new)? {
+            out.already += 1;
+            continue;
+        }
+        if !equals(base, old)? {
+            problems.push(format!("{rel}: the repository no longer holds what the run started from"));
+            continue;
+        }
+        if let Some(link) = symlink_on_the_way(target, rel) {
+            problems.push(format!("{rel}: `{link}` is a symlink in the repository; apply does not write through symlinks"));
+            continue;
+        }
+        let dir = |e: Option<&Entry>| e.is_some_and(|e| e.kind == Kind::Dir);
+        match (old, new) {
+            (Some(_), Some(_)) if dir(old) != dir(new) => {
+                problems.push(format!("{rel}: a folder became a file or the other way round; apply does not do that, use the patch"));
+            }
+            (_, Some(n)) => match &n.kind {
+                Kind::Dir => {
+                    out.changes.push(match old {
+                        Some(o) => format!("mode {rel}/ {} -> {}", mode(o.mode), mode(n.mode)),
+                        None => format!("A {rel}/"),
+                    });
+                    ops.push(Op::Dir { rel: rel.clone(), mode: n.mode, exists: old.is_some() });
+                }
+                Kind::File => {
+                    out.changes.push(match old {
+                        // Same content, other mode: say so, it is the common case of `chmod +x`.
+                        Some(o) if o.kind == Kind::File && o.size == n.size && std::fs::read(base.join(rel))? == std::fs::read(work.join(rel))? => {
+                            format!("mode {rel} {} -> {}", mode(o.mode), mode(n.mode))
+                        }
+                        Some(_) => format!("M {rel}"),
+                        None if n.mode & 0o111 != 0 => format!("A {rel} (executable, mode {})", mode(n.mode)),
+                        None => format!("A {rel}"),
+                    });
+                    ops.push(Op::File { rel: rel.clone(), mode: n.mode });
+                }
+                Kind::Symlink(to) => {
+                    out.changes.push(format!("L {rel} -> {}", to.display()));
+                    ops.push(Op::Link { rel: rel.clone(), to: to.clone(), replace: old.is_some() });
+                }
+                Kind::Other => problems.push(format!("{rel}: not a file, folder or symlink; apply does not copy it")),
+            },
+            (Some(o), None) => {
+                out.changes.push(format!("D {rel}{}", if o.kind == Kind::Dir { "/" } else { "" }));
+                ops.push(Op::Delete { rel: rel.clone(), dir: o.kind == Kind::Dir });
+            }
+            (None, None) => unreachable!("the path came from one of the two trees"),
+        }
+    }
+    if !problems.is_empty() {
+        return Ok(ApplyResult::Refused(problems));
+    }
+    if dry_run {
+        return Ok(ApplyResult::Done(out));
+    }
+
+    let root = crate::sandbox::beneath::open_root(target).context("opening the repository")?;
+    // Additions and changes first, in path order, so a folder exists before
+    // what goes into it. Deletions after, deepest first.
+    for op in ops.iter().filter(|op| !matches!(op, Op::Delete { .. })) {
+        match op {
+            Op::Dir { rel, mode, exists } => {
+                let (parent, name) = parent_of(&root, rel)?;
+                if !exists {
+                    nix::sys::stat::mkdirat(&parent, name.as_str(), nix::sys::stat::Mode::from_bits_truncate(0o755)).with_context(|| format!("creating `{rel}`"))?;
+                }
+                std::fs::set_permissions(via_fd(&parent, &name), std::fs::Permissions::from_mode(*mode))?;
+            }
+            Op::File { rel, mode } => {
+                let (parent, name) = parent_of(&root, rel)?;
+                // Written under another name and renamed into place, so the
+                // repository never holds half a file.
+                let tmp = format!(".agentos-apply-{}.tmp", std::process::id());
+                let _ = nix::unistd::unlinkat(&parent, tmp.as_str(), nix::unistd::UnlinkatFlags::NoRemoveDir);
+                let fd = nix::fcntl::openat(
+                    &parent,
+                    tmp.as_str(),
+                    nix::fcntl::OFlag::O_WRONLY | nix::fcntl::OFlag::O_CREAT | nix::fcntl::OFlag::O_EXCL | nix::fcntl::OFlag::O_NOFOLLOW | nix::fcntl::OFlag::O_CLOEXEC,
+                    nix::sys::stat::Mode::from_bits_truncate(*mode),
+                )
+                .with_context(|| format!("creating `{rel}`"))?;
+                let mut dst = std::fs::File::from(fd);
+                let copied = (|| -> Result<()> {
+                    std::io::copy(&mut std::fs::File::open(work.join(rel))?, &mut dst)?;
+                    dst.set_permissions(std::fs::Permissions::from_mode(*mode))?;
+                    dst.sync_all()?;
+                    nix::fcntl::renameat(&parent, tmp.as_str(), &parent, name.as_str())?;
+                    Ok(())
+                })();
+                if copied.is_err() {
+                    let _ = nix::unistd::unlinkat(&parent, tmp.as_str(), nix::unistd::UnlinkatFlags::NoRemoveDir);
+                }
+                copied.with_context(|| format!("writing `{rel}`"))?;
+            }
+            Op::Link { rel, to, replace } => {
+                let (parent, name) = parent_of(&root, rel)?;
+                if *replace {
+                    nix::unistd::unlinkat(&parent, name.as_str(), nix::unistd::UnlinkatFlags::NoRemoveDir).with_context(|| format!("replacing `{rel}`"))?;
+                }
+                std::os::unix::fs::symlink(to, via_fd(&parent, &name)).with_context(|| format!("creating the symlink `{rel}`"))?;
+            }
+            Op::Delete { .. } => {}
+        }
+    }
+    let mut deletions: Vec<(&String, bool)> = ops.iter().filter_map(|op| if let Op::Delete { rel, dir } = op { Some((rel, *dir)) } else { None }).collect();
+    deletions.sort_by_key(|(rel, _)| std::cmp::Reverse(rel.matches('/').count()));
+    for (rel, dir) in deletions {
+        let (parent, name) = parent_of(&root, rel)?;
+        let flag = if dir { nix::unistd::UnlinkatFlags::RemoveDir } else { nix::unistd::UnlinkatFlags::NoRemoveDir };
+        match nix::unistd::unlinkat(&parent, name.as_str(), flag) {
+            Ok(()) => {}
+            // The folder still holds something the run never saw (a denied
+            // or skipped file, or one made since): it stays.
+            Err(nix::errno::Errno::ENOTEMPTY) | Err(nix::errno::Errno::EEXIST) if dir => out.kept_folders.push(rel.clone()),
+            Err(e) => return Err(e).with_context(|| format!("removing `{rel}`")),
+        }
+    }
+    Ok(ApplyResult::Done(out))
+}
+
+/// The first folder on the way to `rel` that is a symlink in `root`, if any.
+fn symlink_on_the_way(root: &Path, rel: &str) -> Option<String> {
+    let parts: Vec<&str> = rel.split('/').collect();
+    (1..parts.len()).map(|i| parts[..i].join("/")).find(|anc| std::fs::symlink_metadata(root.join(anc)).is_ok_and(|m| m.file_type().is_symlink()))
+}

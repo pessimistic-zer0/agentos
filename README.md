@@ -13,7 +13,7 @@ It is a learning and portfolio project, not a product. It does one thing: one ag
 - **Verified on two systems, no more.** NixOS on the development machine, and Ubuntu 24.04 in CI ([run 43385661105](https://github.com/pessimistic-zer0/agentos/actions/runs/43385661105), 2026-11-13: lint, all test suites, and 4,800 kills with 0 violations). The first two CI runs failed and found two real bugs (B-007, B-008 in [`docs/bugs.md`](docs/bugs.md)). Debian, Fedora and Arch use the same `fhs` preset and have not been run. On Ubuntu the benchmarks and `make demo` have not been run either.
 - Licensed under MIT or Apache-2.0, at your option (see [License](#license)).
 - **After v0.1: one bonus tool.** `ext.call` sends a request to a (fake) outside service, something a checkpoint cannot undo. It is off unless a policy allows it. See [the bonus](#the-bonus-a-call-that-cannot-be-rolled-back).
-- **After that: what a first user needs** (M8, M9). Clearer first messages, a patch that says what it leaves out, packages from outside the repository, an AppArmor profile for Ubuntu; then `agentos check` and `agentos rm`, no `systemd-run` prefix, a message when a run is stopped, reading part of a large file, and policy lists for folders to skip and for caches. M9 is verified on NixOS only until its CI run. See [on your own project](#on-your-own-project). Verified on NixOS and, in [CI run 43590153676](https://github.com/pessimistic-zer0/agentos/actions/runs/43590153676), on Ubuntu 24.04, where a second job runs the sandbox through the profile with Ubuntu's restriction left on.
+- **After that: what a first user needs** (M8, M9). Clearer first messages, a patch that says what it leaves out, packages from outside the repository, an AppArmor profile for Ubuntu; then `agentos check`, `agentos rm` and `agentos apply`, no `systemd-run` prefix, a message when a run is stopped, reading part of a large file, and policy lists for folders to skip and for caches. M9 is verified on NixOS only until its CI run. See [on your own project](#on-your-own-project). Verified on NixOS and, in [CI run 43590153676](https://github.com/pessimistic-zer0/agentos/actions/runs/43590153676), on Ubuntu 24.04, where a second job runs the sandbox through the profile with Ubuntu's restriction left on.
 - Read [what it does not do](#what-it-does-not-do) before trusting it with anything.
 
 ## The demo
@@ -177,6 +177,7 @@ agentos status                 # all executions; "interrupted" means it was stop
 agentos trace [<id>]           # one line per call; --events for every record; --json for scripts
 agentos recover <id>           # settle the call that was cut off, repair the workspace
 agentos run --resume <id>      # recover, then let the agent continue
+agentos apply <id>             # copy the result into the repo (after reading the patch); --dry-run, --to <folder>
 agentos rm <id>...             # delete executions; also --older-than <days>, --all, --dry-run
 ```
 
@@ -248,7 +249,7 @@ Then run `agentos check --policy my-policy.toml --repo /home/me/proj`. It says w
 
 Things to know before the first run:
 
-- **The result is a patch**, printed at the end as `patch: <path>`. Read it, then apply it in your repository with `git apply <path>` or `patch -p1 < <path>`. A patch is text: if the run added a binary file or an empty file, changed a file's mode or made an empty folder, the run ends with `NOT in the patch: …` and the patch starts with one `# agentos:` line per such change, saying what to do by hand.
+- **The result is a patch**, printed at the end as `patch: <path>`. A run never changes your repository. Read the patch, then either apply it yourself (`git apply <path>` or `patch -p1 < <path>`) or run `agentos apply <id>`, which copies every change into the repository the run was started on. A patch is text: if the run added a binary file or an empty file, changed a file's mode or made an empty folder, the run ends with `NOT in the patch: …` and the patch lists them; `agentos apply` carries them across. It refuses, and changes nothing, if any file the run changed has changed in your repository since; then the patch is the way, because merging is yours to do. `agentos apply <id> --dry-run` shows the list first.
 - **The file tools read and write text.** `fs.read` returns at most `max_output_kb` at a time; for a larger file the agent asks for lines (`start_line`, `max_lines`). `fs.write` replaces a whole file. Binary files cannot be read or written by the agent, only by a command you allow.
 - **`.git` is not in the workspace** (the shipped deny list leaves it out), so commands that ask git for something will not find a repository.
 - **The whole workspace is copied** at the start and again after every change. On btrfs and XFS the copies share disk blocks. Elsewhere a repository with a large `node_modules` or `target/` folder is slow and takes space: 20,000 small files took 5.4 s for a 7-call run here, against 0.6 s for the demo. `skip` leaves a folder out, but then it is not in the workspace at all; that suits a virtualenv (it is used from its own path) and does not suit `node_modules`.
@@ -265,7 +266,7 @@ Things to know before the first run:
 - **No network, ever**, for commands. No web search, no package downloads. The only thing that leaves the runtime is the bonus tool's request to a `127.0.0.1` service that a policy names, and the LLM request.
 - **The sandbox can see** the read-only system folders in full (on NixOS, all of `/nix/store`) and some facts about the host (host name, kernel version, the workspace's path).
 - **Prompt injection is contained, not prevented.** A file can talk the model into asking for something bad; the policy and sandbox then refuse or confine it.
-- **Containment ends at the patch.** A patch can change test hooks or CI files that later run unsandboxed on your machine. Read it before applying.
+- **Containment ends at the patch.** A patch can change test hooks or CI files that later run unsandboxed on your machine. Read it before applying. The same goes for `agentos apply`: it copies what the agent made, executable bits and symlinks included, and lists each one.
 - One agent, one workspace. No dashboard, no replay, no MCP, no SDK, no multi-agent, no approvals. Those were cut on purpose (see the plan).
 
 ## Repository

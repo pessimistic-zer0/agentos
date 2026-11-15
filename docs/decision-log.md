@@ -2580,6 +2580,36 @@ What a policy author must know: everything under a read-only mount can be read b
 
 **Concepts to learn.** Why a system should use a signal it can observe (an exit code) over one it is told (a sentence).
 
+### D-108 — `agentos apply`: a command, run by the user, that copies the result into the repository
+- **Date:** 2026-11-15
+- **Status:** Taken (Prince's decision; it states design rule 10 more exactly, it does not drop it)
+- **Area:** scope
+- **ADR:** none
+
+**In plain words.** The result of a run was a patch, and a patch is text: binary files, empty files, file modes and empty folders do not fit into it. M8 made the patch list them "to apply by hand". `agentos apply <id>` does it for the user: it copies every change the run made into the repository. It is the one command that writes outside AgentOS's own folder, so it is strict about when it may: only for a finished execution, only if the repository still looks the way it did when the run copied it, and never through a symlink.
+
+**The problem.** Design rule 10 said "the original repo is never modified. The output is a patch." In D-098 Claude held `apply` until Prince said whether an explicit command is within that rule. On 2026-11-15 he said "go ahead with apply too".
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| A separate command the user runs after the run. Rule 10 now reads: a *run* never modifies the original repo; its output is a patch; `apply` is a second step that only the user takes | Taken | The property the rule protects is that an agent cannot change the user's repository. That still holds: no tool call, no run, no recovery writes there |
+| Apply automatically at the end of a successful run (`run --apply`) | Discarded | Then a run does modify the repo, and "read the patch first" is skipped by default |
+| Run `git apply` or `patch` for the user | Discarded | Those are the tools that drop what a patch cannot carry |
+| Refuse unless every path the run changed is, in the repository, still as in the base checkpoint (or already as in the result); decide this for all paths before writing any | Taken | A half-applied result on top of the user's own edits is the worst outcome. Paths the run did not change may differ freely |
+| `--force` to overwrite the user's edits | Discarded | The patch exists for that case: merging is a human's job |
+| Three-way merge | Discarded | A large feature; `git` does it better with the patch |
+| Writes through handles opened with `openat2(RESOLVE_BENEATH \| RESOLVE_NO_SYMLINKS)`, files written under a temp name and renamed | Taken | The same care as the revert code (D-009): a symlink in the repository must not send a file elsewhere, and the repository never holds half a file |
+| Leave out what the run never saw (denied and skipped paths) | Taken | They are in neither tree, so they are never compared, written or deleted. A folder the run removed stays if it still holds such files |
+| Apply symlinks and executable bits like everything else, and list each one | Taken | They are part of the result; the listing is where the user sees them |
+| Write a `result.applied` event into the execution's log | Taken | The log is the record of what happened to the repository because of this execution |
+
+**What this means for the code.** `checkpoint::apply_changes` (plan, then write), `runtime::apply` (finished? where to? which paths are caches?), `Cmd::Apply` with `--to <folder>` and `--dry-run`, `EventBody::ResultApplied`, a line in `agentos trace`. Scratch paths are not applied. A change of kind between folder and file is refused with a pointer to the patch. Not atomic across files: all checks come first, so a failure half-way needs something like a full disk. Binary files and file modes through the *file tools* stay parked: `apply` carries them when a command made them.
+
+**Evidence.** `tests/apply.rs`, `nix` preset, 2026-11-15, six tests: a run that changes text, adds a package with an empty `__init__.py`, a binary file, an executable script, a mode, deletes a file, makes an empty folder and a symlink is applied and the repository then equals the workspace, the denied `.env` untouched; a dry run changes nothing; a second apply does nothing; two edited files refuse the whole apply and nothing is changed, an unrelated edit does not matter; `--to` leaves the original alone; a folder swapped for a symlink is refused and nothing is written behind it; an unfinished execution is refused until resumed; caches are not applied. By hand: the M9 session's result applied to a fresh clone of the inventory project, `__init__.py` included, 79 tests passed there. `make test`: 124 passed. Not yet run on `fhs`.
+
+**Concepts to learn.** What a rule is for versus what it literally says; "check everything, then act"; why merging is not copying.
+
 ---
 
 ## Still open

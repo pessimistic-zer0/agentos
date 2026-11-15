@@ -1072,10 +1072,11 @@ Uncommitted. Some are research projects on their own.
 - **Signed execution records:** attestations that a patch was produced under a given policy.
 - **Multi-model comparison harness** built on comparative replay.
 - **A patch/edit tool** (`fs.patch`: replace a range or apply a diff) so small models do not have to resend whole files. Came up in v1 M4 (D-060); not in v1 because the tool list is fixed at four.
+- **Built in M10 (2026-11-15, D-108):** `agentos apply`.
 - **Built in M9 (2026-11-15, D-098 to D-107)**, so no longer parked: a clean-up command (`agentos rm`), leaving folders out of the copy (`filesystem.skip`), starting itself under `systemd-run`, a message on Ctrl-C, a check command, reading part of a file, a hint for an inactive virtualenv, exceptions to deny rules, caches as non-violations (`filesystem.scratch`), a clearer end when the model gives up.
 - **Still parked from the walk-through and the trial (2026-11-14):**
-  - **`agentos apply`:** copy the result into the original repository, so that binary files, modes and empty files come across. It writes into the original repo, which design rule 10 forbids the runtime to do; it needs Prince's word that an explicit command by the user is within that rule. It should refuse if the repo changed since the copy.
-  - **Binary files and file modes through the file tools.** Only after `apply`: until then the patch cannot carry the result.
+  - **Binary files and file modes through the file tools.** `agentos apply` exists now (M10, D-108) and carries them when a command made them; letting the agent's own `fs.read` and `fs.write` handle them is a separate question.
+  - **`apply` on top of the user's own edits** (a merge). Today it refuses and points at the patch.
   - **A read-only folder inside the workspace** (for `node_modules`, which must be at its place in the project; `skip` only suits folders that work from their own path).
   - **A narrower way to allow one script** than a full argv rule per script.
 - **From the M9 re-trial (2026-11-15, `docs/results/real-repo-trial-nix.md`):**

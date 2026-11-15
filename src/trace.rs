@@ -82,6 +82,11 @@ pub fn render_calls(events: &[Event]) -> Result<String> {
             writeln!(out, "patch: {p}")?;
         }
     }
+    for ev in events {
+        if let EventBody::ResultApplied { target, changes } = &ev.body {
+            writeln!(out, "applied: {} change(s) to {target} at {}", changes.len(), ev.ts)?;
+        }
+    }
     Ok(out)
 }
 

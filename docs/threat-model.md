@@ -79,6 +79,7 @@ These are not defended against. They are limits, not oversights.
 - **Several mutually hostile agents on one host.** v1 runs one agent per execution and makes no claim about two executions attacking each other.
 - **Filling the disk.** The workspace is on disk with no size cap (ADR 0010). A command can write until the disk is full. Sandbox `/tmp` is bounded by the memory limit.
 - **Power loss.** The tests kill the process; they do not cut power. Checkpoint contents are not fsynced. No power-loss claim is made (D-022).
+- **What `agentos apply` copies.** It is the user's command, and it puts the agent's result into the user's repository: changed code, new executable files, symlinks (to anywhere), changed test hooks and CI files. It lists every change and refuses a repository that differs from the copy, and it never writes through a symlink or outside the target folder (`tests/apply.rs`). It does not judge the content. Read the patch, or the `--dry-run` list, first (D-108).
 - **What happens after the patch is applied.** A patch can change test hooks, CI files or build scripts that later run unsandboxed on the human's machine. Containment ends when the patch leaves AgentOS. Read the patch.
 - **The quality of the model's work.** A wrong but harmless patch is not a security failure.
 

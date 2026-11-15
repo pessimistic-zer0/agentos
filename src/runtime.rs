@@ -438,3 +438,62 @@ pub fn check(policy_path: Option<&Path>, repo: Option<&Path>) -> usize {
     }
     problems
 }
+
+/// `agentos apply`: copy the result of a finished execution into a
+/// repository (by default the one it was copied from). Returns the number
+/// of changes made. See `checkpoint::apply_changes` for the two safety
+/// rules; this function decides *whether* and *where* (D-108).
+pub fn apply(state_dir: &Path, id: &str, to: Option<&Path>, dry_run: bool) -> Result<usize> {
+    let dir = ExecDir::new(state_dir, id);
+    let mut log = EventLog::open(&dir.log())?;
+    let _lock = lock_execution(&dir)?;
+    let events = log.events()?;
+    if !events.iter().any(|e| matches!(e.body, EventBody::ExecutionFinished { .. })) {
+        bail!("execution {id} has not finished, so its result is not final. Finish it first (`agentos run --resume {id}`)");
+    }
+    let origin = events
+        .iter()
+        .find_map(|e| if let EventBody::ExecutionCreated { repo, .. } = &e.body { Some(PathBuf::from(repo)) } else { None })
+        .context("the log has no execution.created event")?;
+    let target = to.map(Path::to_path_buf).unwrap_or(origin);
+    let target = std::fs::canonicalize(&target).with_context(|| format!("the repository {}", target.display()))?;
+    if !target.is_dir() {
+        bail!("{} is not a folder", target.display());
+    }
+    // The policy the execution ran under says which paths were caches.
+    let (policy, _) = Policy::load(&dir.policy())?;
+    let base = dir.checkpoints().join(checkpoint::name(0));
+    let result = checkpoint::apply_changes(&base, &dir.work(), &target, |rel| policy.scratch(rel), dry_run)?;
+    let applied = match result {
+        checkpoint::ApplyResult::Refused(problems) => {
+            println!("Nothing was changed in {}.", target.display());
+            for p in &problems {
+                println!("  {p}");
+            }
+            bail!(
+                "{} path(s) stand in the way. The repository must still be as it was when the run copied it. \
+                 Undo your changes there, or apply the patch by hand instead: {}",
+                problems.len(),
+                dir.patch().display()
+            );
+        }
+        checkpoint::ApplyResult::Done(applied) => applied,
+    };
+    for line in &applied.changes {
+        println!("  {line}");
+    }
+    for folder in &applied.kept_folders {
+        println!("  kept {folder}/: the run removed it, but in the repository it still holds files the run never saw");
+    }
+    let n = applied.changes.len();
+    match (dry_run, n, applied.already) {
+        (_, 0, 0) => println!("The run changed nothing; there is nothing to apply."),
+        (_, 0, _) => println!("{} already holds the result; nothing to do.", target.display()),
+        (true, ..) => println!("{n} change(s) would be made in {}. Nothing was changed.", target.display()),
+        (false, ..) => {
+            log.append(EventBody::ResultApplied { target: target.display().to_string(), changes: applied.changes.clone() })?;
+            println!("{n} change(s) made in {}. Look at them there before you commit.", target.display());
+        }
+    }
+    Ok(n)
+}

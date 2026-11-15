@@ -57,6 +57,18 @@ enum Cmd {
     },
     /// List executions, or show one execution's state
     Status { id: Option<String> },
+    /// Copy the result of a finished execution into its repository: every
+    /// change, also the ones a patch cannot carry (binary and empty files,
+    /// modes). Refuses if the repository changed since the run copied it
+    Apply {
+        id: String,
+        /// Another copy of the repository to apply to [default: the one the run was started on]
+        #[arg(long, value_name = "FOLDER")]
+        to: Option<PathBuf>,
+        /// Only list what would change
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Check this machine, a policy and a repository without starting anything
     Check {
         /// Policy file to check (and to find its programs on PATH)
@@ -163,6 +175,9 @@ fn main() -> Result<()> {
         }
         Cmd::Recover { id, quiet } => {
             runtime::recover(&state_dir, &id, !quiet)?;
+        }
+        Cmd::Apply { id, to, dry_run } => {
+            runtime::apply(&state_dir, &id, to.as_deref(), dry_run)?;
         }
         Cmd::Check { policy, repo } => {
             let problems = runtime::check(policy.as_deref(), repo.as_deref());

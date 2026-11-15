@@ -98,6 +98,10 @@ pub enum EventBody {
     RecoveryCompleted { reconciled: u64, duration_ms: u64 },
     #[serde(rename = "execution.finished")]
     ExecutionFinished { status: String, summary: String, patch: Option<String> },
+    /// `agentos apply` copied the result into a repository (D-108). Written
+    /// after `execution.finished`; an execution may have several.
+    #[serde(rename = "result.applied")]
+    ResultApplied { target: String, changes: Vec<String> },
 }
 
 impl EventBody {
@@ -116,6 +120,7 @@ impl EventBody {
             EventBody::ToolReconciled { .. } => "tool.reconciled",
             EventBody::RecoveryCompleted { .. } => "recovery.completed",
             EventBody::ExecutionFinished { .. } => "execution.finished",
+            EventBody::ResultApplied { .. } => "result.applied",
         }
     }
 
