@@ -63,7 +63,20 @@ fn resolved_rel(work: &Path, fd: impl AsFd) -> Result<String, ToolError> {
         .ok_or_else(|| ToolError::new(format!("kernel resolved to {} outside the workspace", at.display())))
 }
 
-pub fn read(fd: OwnedFd, rel: &str, max_bytes: u64) -> Result<String, ToolError> {
+/// The largest file a partial read will go through (it counts every line).
+const MAX_SCANNED_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Read a regular text file. Without a range: the whole file, which must
+/// fit in `max_bytes`. With one (`start_line`, `max_lines`; lines count
+/// from 1): those lines, as many whole lines as fit in `max_bytes`, plus
+/// which lines they are and how many the file has (D-102).
+pub fn read(
+    fd: OwnedFd,
+    rel: &str,
+    max_bytes: u64,
+    start_line: Option<u64>,
+    max_lines: Option<u64>,
+) -> Result<(String, Option<crate::tools::ReadLines>), ToolError> {
     let st = fstat(&fd).map_err(|e| errno(rel, e))?;
     let kind = SFlag::from_bits_truncate(st.st_mode) & SFlag::S_IFMT;
     if kind == SFlag::S_IFDIR {
@@ -73,16 +86,61 @@ pub fn read(fd: OwnedFd, rel: &str, max_bytes: u64) -> Result<String, ToolError>
         // FIFOs, sockets, devices: reading them can block or never end.
         return Err(ToolError::new(format!("`{}` is not a regular file", show(rel))));
     }
-    if st.st_size as u64 > max_bytes {
-        return Err(ToolError::new(format!(
-            "`{}` is {} bytes, more than the {max_bytes}-byte limit (limits.max_output_kb)",
-            show(rel),
-            st.st_size
-        )));
+    let not_text = || ToolError::new(format!("`{}` is not UTF-8 text", show(rel)));
+    if start_line.is_none() && max_lines.is_none() {
+        if st.st_size as u64 > max_bytes {
+            return Err(ToolError::new(format!(
+                "`{}` is {} bytes, more than the {max_bytes}-byte limit (limits.max_output_kb). \
+                 Read part of it: give start_line and max_lines",
+                show(rel),
+                st.st_size
+            )));
+        }
+        let mut bytes = Vec::new();
+        File::from(fd).take(max_bytes + 1).read_to_end(&mut bytes).map_err(|e| io(rel, e))?;
+        return String::from_utf8(bytes).map(|text| (text, None)).map_err(|_| not_text());
     }
-    let mut bytes = Vec::new();
-    File::from(fd).take(max_bytes + 1).read_to_end(&mut bytes).map_err(|e| io(rel, e))?;
-    String::from_utf8(bytes).map_err(|_| ToolError::new(format!("`{}` is not UTF-8 text", show(rel))))
+
+    let first = start_line.unwrap_or(1);
+    if first == 0 || max_lines == Some(0) {
+        return Err(ToolError::new("start_line and max_lines count from 1"));
+    }
+    if st.st_size as u64 > MAX_SCANNED_BYTES {
+        return Err(ToolError::new(format!("`{}` is {} bytes; files over {MAX_SCANNED_BYTES} bytes are not read", show(rel), st.st_size)));
+    }
+    // One pass, one line in memory at a time: keep the lines asked for
+    // while they fit, count the rest.
+    use std::io::BufRead;
+    let mut reader = std::io::BufReader::new(File::from(fd));
+    let (mut line, mut kept, mut kept_lines, mut total, mut full) = (Vec::new(), Vec::new(), 0u64, 0u64, false);
+    loop {
+        line.clear();
+        if reader.read_until(b'\n', &mut line).map_err(|e| io(rel, e))? == 0 {
+            break;
+        }
+        total += 1;
+        let wanted = total >= first && max_lines.is_none_or(|n| kept_lines < n) && !full;
+        if wanted {
+            if (kept.len() + line.len()) as u64 > max_bytes {
+                if kept_lines == 0 {
+                    return Err(ToolError::new(format!(
+                        "line {total} of `{}` alone is {} bytes, more than the {max_bytes}-byte limit (limits.max_output_kb)",
+                        show(rel),
+                        line.len()
+                    )));
+                }
+                full = true; // the answer ends before this line; go on counting
+            } else {
+                kept.extend_from_slice(&line);
+                kept_lines += 1;
+            }
+        }
+    }
+    if kept_lines == 0 {
+        return Err(ToolError::new(format!("`{}` has {total} line(s); start_line {first} is past its end", show(rel))));
+    }
+    let text = String::from_utf8(kept).map_err(|_| not_text())?;
+    Ok((text, Some(crate::tools::ReadLines { first, last: first + kept_lines - 1, total })))
 }
 
 pub fn list(fd: OwnedFd, rel: &str) -> Result<Vec<ListEntry>, ToolError> {

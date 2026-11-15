@@ -2444,6 +2444,31 @@ What a policy author must know: everything under a read-only mount can be read b
 
 **Concepts to learn.** None new; see D-091.
 
+### D-102 — `fs.read` can return part of a file (`start_line`, `max_lines`)
+- **Date:** 2026-11-14
+- **Status:** Taken (extends D-041; the cap on one answer stays)
+- **Area:** policy
+- **ADR:** none
+
+**In plain words.** `fs.read` refused any file larger than the answer limit (64 KB in the shipped policies), and there was no way to look at a piece of it. In the trial a ticket was about a 134 KB data file the agent could not open. Now the agent may ask for lines: "from line 100, 50 lines". The answer still has to fit in the same limit; what changes is that a big file can be read in pieces.
+
+**The problem.** Trial on the inventory project (Findings, 2026-11-14): `fs.read tests/fixtures/stock_movements_2025.csv` failed, and the only way to see the file's content was through the project's own import command.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Two optional fields on `fs.read`: `start_line` (from 1) and `max_lines`. The answer holds as many whole lines as fit in `max_output_kb`, and says which lines they are and how many the file has | Taken | Still one tool, still one bounded answer. The total tells the agent where it is |
+| Raise the limit | Discarded | The limit protects the log and the model's context; any fixed number is too small for some file |
+| Byte offsets | Discarded | An agent thinks in lines; a byte range can cut a character in half |
+| A fifth tool (`fs.search`, `fs.head`) | Discarded | The tool list is fixed |
+| Cut the file silently at the limit | Discarded | The agent would believe it had seen the whole file, and then write it back shortened |
+
+**What this means for the code.** `ToolCall::FsRead` and `LoggedCall::FsRead` gain the two fields (left out of the JSON when absent, so old logs and scripts read as before). `tools/fs.rs::read` goes through the file once, one line in memory at a time, and stops at 256 MB. `ToolOutput::Read` gains `lines` (`first`, `last`, `total`). The LLM's tool description and the text it gets back say that the answer is only part of the file. Deny rules and `openat2` apply as for any read. Still true and still a limit: `fs.write` replaces a whole file, so an agent cannot safely rewrite a file it has only read in part.
+
+**Evidence.** `tests/hardening.rs::part_of_a_large_file_can_be_read`, `nix` preset, 2026-11-14: a 3,000-line, 150 KB file; a whole read is refused and names the two fields; lines 1 to 50 come back exactly; from line 2990 to the end; a start past the end and a start of 0 fail with a reason; a request for more than fits returns whole lines up to the limit; a denied file stays denied. `agent::llm::tests::tool_calls_are_parsed_strictly` covers the new arguments. Not yet run on `fhs`.
+
+**Concepts to learn.** Paging through data; why a truncated answer must say that it is truncated.
+
 ---
 
 ## Still open

@@ -207,7 +207,7 @@ impl LlmAgent {
             return None;
         }
         match (self.last_call.take()?, &result.output) {
-            (ToolCall::FsRead { path }, Some(ToolOutput::Read { content })) => {
+            (ToolCall::FsRead { path, .. }, Some(ToolOutput::Read { content, .. })) => {
                 self.seen.insert(path, content.clone());
                 None
             }
@@ -366,7 +366,10 @@ fn tool_schemas() -> Value {
     let path = json!({"type": "string", "description": "Path relative to the repository root"});
     json!([
         f("fs_list", "List the entries of a folder.", json!({"path": path}), &["path"]),
-        f("fs_read", "Read a text file.", json!({"path": path}), &["path"]),
+        f("fs_read", "Read a text file. A file that is too large is refused unless you ask for part of it with start_line and max_lines.",
+          json!({"path": path,
+                 "start_line": {"type": "integer", "description": "Optional. First line to return, counting from 1"},
+                 "max_lines": {"type": "integer", "description": "Optional. How many lines to return"}}), &["path"]),
         f("fs_write", "Replace a file with new content (the whole file). A new file may be in a folder that does not exist yet; the folder is made.",
           json!({"path": path, "content": {"type": "string", "description": "The complete new content of the file"}}), &["path", "content"]),
         f("exec", "Run an allowed command, given as a list of arguments (no shell). Example: [\"pytest\", \"-q\"].",
@@ -380,12 +383,14 @@ fn parse_call(name: &str, args: &str) -> Result<ToolCall> {
         path: Option<String>,
         content: Option<String>,
         argv: Option<Vec<String>>,
+        start_line: Option<u64>,
+        max_lines: Option<u64>,
     }
     let a: Args = serde_json::from_str(if args.trim().is_empty() { "{}" } else { args }).context("arguments are not a JSON object")?;
     let path = || a.path.clone().context("missing `path`");
     Ok(match name {
         "fs_list" => ToolCall::FsList { path: path()? },
-        "fs_read" => ToolCall::FsRead { path: path()? },
+        "fs_read" => ToolCall::FsRead { path: path()?, start_line: a.start_line, max_lines: a.max_lines },
         "fs_write" => ToolCall::FsWrite { path: path()?, content: a.content.clone().context("missing `content`")? },
         "exec" => ToolCall::Exec { argv: a.argv.clone().context("missing `argv`")? },
         other => bail!("unknown tool `{other}`; the tools are fs_list, fs_read, fs_write, exec"),
@@ -400,7 +405,10 @@ fn render_result(r: &ToolResult) -> String {
         (ToolOutcome::NotApplied { reason }, _) => {
             format!("NOT APPLIED: the runtime was restarted while this call was in flight. {reason}. If you still need it, call the tool again.")
         }
-        (ToolOutcome::Ok, Some(ToolOutput::Read { content })) => content.clone(),
+        (ToolOutcome::Ok, Some(ToolOutput::Read { content, lines: None })) => content.clone(),
+        (ToolOutcome::Ok, Some(ToolOutput::Read { content, lines: Some(l) })) => {
+            format!("[lines {}-{} of {}; this is only part of the file]\n{content}", l.first, l.last, l.total)
+        }
         (ToolOutcome::Ok, Some(ToolOutput::List { entries })) => {
             entries.iter().map(|e| format!("{}{}", e.name, if e.kind == "dir" { "/" } else { "" })).collect::<Vec<_>>().join("\n")
         }
@@ -439,7 +447,11 @@ mod tests {
 
     #[test]
     fn tool_calls_are_parsed_strictly() {
-        assert_eq!(parse_call("fs_read", r#"{"path":"a.py"}"#).unwrap(), ToolCall::FsRead { path: "a.py".into() });
+        assert_eq!(parse_call("fs_read", r#"{"path":"a.py"}"#).unwrap(), ToolCall::FsRead { path: "a.py".into(), start_line: None, max_lines: None });
+        assert_eq!(
+            parse_call("fs_read", r#"{"path":"big.csv","start_line":100,"max_lines":50}"#).unwrap(),
+            ToolCall::FsRead { path: "big.csv".into(), start_line: Some(100), max_lines: Some(50) }
+        );
         assert_eq!(
             parse_call("exec", r#"{"argv":["pytest","-q"]}"#).unwrap(),
             ToolCall::Exec { argv: vec!["pytest".into(), "-q".into()] }
@@ -455,7 +467,7 @@ mod tests {
         assert!(render_result(&r).starts_with("DENIED by policy"));
         let r = ToolResult { call_id: 1, outcome: ToolOutcome::NotApplied { reason: "rolled back".into() }, output: None };
         assert!(render_result(&r).contains("call the tool again"));
-        let long = ToolResult { call_id: 1, outcome: ToolOutcome::Ok, output: Some(ToolOutput::Read { content: "x".repeat(50_000) }) };
+        let long = ToolResult { call_id: 1, outcome: ToolOutcome::Ok, output: Some(ToolOutput::Read { content: "x".repeat(50_000), lines: None }) };
         assert!(render_result(&long).len() < 13_000);
     }
 
@@ -467,8 +479,8 @@ mod tests {
     fn a_write_that_drops_lines_gets_a_warning() {
         let mut a = agent();
         let old = "def mean(v):\n    return 1\n\ndef median(v):\n    x = sorted(v)\n    return x[0]\n\ndef mode(v):\n    return v[0]\n";
-        a.last_call = Some(ToolCall::FsRead { path: "s.py".into() });
-        let read = ToolResult { call_id: 1, outcome: ToolOutcome::Ok, output: Some(ToolOutput::Read { content: old.into() }) };
+        a.last_call = Some(ToolCall::FsRead { path: "s.py".into(), start_line: None, max_lines: None });
+        let read = ToolResult { call_id: 1, outcome: ToolOutcome::Ok, output: Some(ToolOutput::Read { content: old.into(), lines: None }) };
         assert_eq!(a.track_file_content(&read), None);
         // Only one function sent back: five lines are gone.
         a.last_call = Some(ToolCall::FsWrite { path: "s.py".into(), content: "def mean(v):\n    return 2\n".into() });

@@ -64,7 +64,7 @@ pub struct Gateway {
 /// What the policy step produced for a call that may go ahead. It holds the
 /// already-opened file handles, so the effect uses exactly what was checked.
 enum Approved {
-    Read { fd: OwnedFd, rel: String },
+    Read { fd: OwnedFd, rel: String, start_line: Option<u64>, max_lines: Option<u64> },
     List { fd: OwnedFd, rel: String },
     Write { target: WriteTarget, content: String },
     Exec { argv: Vec<String> },
@@ -215,7 +215,7 @@ impl Gateway {
             beneath::lexical_rel(path).and_then(|rel| policy.denied(&rel)).map(|rule| Decided::Deny(Decision { allowed: false, rule }))
         };
         match call {
-            ToolCall::FsRead { path } | ToolCall::FsList { path } => {
+            ToolCall::FsRead { path, .. } | ToolCall::FsList { path } => {
                 if let Some(d) = requested_denied(path) {
                     return d;
                 }
@@ -227,7 +227,12 @@ impl Gateway {
                         if !d.allowed {
                             return Decided::Deny(d);
                         }
-                        if is_list { Decided::Allow(d, Approved::List { fd, rel }) } else { Decided::Allow(d, Approved::Read { fd, rel }) }
+                        match call {
+                            ToolCall::FsRead { start_line, max_lines, .. } => {
+                                Decided::Allow(d, Approved::Read { fd, rel, start_line: *start_line, max_lines: *max_lines })
+                            }
+                            _ => Decided::Allow(d, Approved::List { fd, rel }),
+                        }
                     }
                     Err(e) => {
                         // Not found, not a folder, ...: allowed by policy, but impossible.
@@ -285,7 +290,8 @@ impl Gateway {
     /// recovery needs to decide whether the write happened (D-016).
     fn plan(&self, call_id: u64, a: &Approved) -> Result<serde_json::Value, ToolError> {
         Ok(match a {
-            Approved::Read { rel, .. } | Approved::List { rel, .. } => json!({ "path": rel }),
+            Approved::Read { rel, start_line: None, max_lines: None, .. } | Approved::List { rel, .. } => json!({ "path": rel }),
+            Approved::Read { rel, start_line, max_lines, .. } => json!({ "path": rel, "start_line": start_line, "max_lines": max_lines }),
             Approved::Write { target, content } => {
                 let mut plan = json!({
                     "path": target.rel,
@@ -330,7 +336,9 @@ impl Gateway {
     fn effect(&mut self, call_id: u64, a: Approved) -> Result<Result<ToolOutput, ToolError>> {
         let max = self.policy.limits.max_output_kb * 1024;
         Ok(match a {
-            Approved::Read { fd, rel } => fstool::read(fd, &rel, max).map(|content| ToolOutput::Read { content }),
+            Approved::Read { fd, rel, start_line, max_lines } => {
+                fstool::read(fd, &rel, max, start_line, max_lines).map(|(content, lines)| ToolOutput::Read { content, lines })
+            }
             Approved::List { fd, rel } => fstool::list(fd, &rel).map(|entries| ToolOutput::List { entries }),
             Approved::Write { target, content } => {
                 fstool::write(&target, &content, call_id).map(|bytes| ToolOutput::Write { bytes })

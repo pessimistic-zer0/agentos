@@ -473,3 +473,58 @@ fn the_startup_check_works_from_a_program_that_is_not_agentos() {
     let problems = agentos::sandbox::check_host(&me);
     assert!(!problems.iter().any(|p| p.contains("user namespaces")), "{problems:#?}");
 }
+
+// ---------------------------------------------------------------------------
+// D-102: reading part of a file.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn part_of_a_large_file_can_be_read() {
+    let t = TestEnv::new("hard-read-range");
+    let repo = t.root.join("repo");
+    assert!(std::process::Command::new("cp").arg("-a").arg(demo_repo()).arg(&repo).status().unwrap().success());
+    // 3,000 lines, about 150 KB: over the 64 KB limit of the shipped policy.
+    let big: String = (1..=3000).map(|n| format!("row {n:05},{}\n", "x".repeat(38))).collect();
+    assert!(big.len() > 64 * 1024);
+    std::fs::write(repo.join("tests/big.csv"), &big).unwrap();
+    let read = |extra: &str| format!("[[step]]\ntool = \"fs.read\"\npath = \"tests/big.csv\"\n{extra}");
+    let steps = [
+        read(""),                                     // 1: all of it
+        read("start_line = 1\nmax_lines = 50\n"),     // 2
+        read("start_line = 2990\n"),                  // 3: to the end
+        read("start_line = 5000\nmax_lines = 10\n"),  // 4: past the end
+        read("max_lines = 100000\n"),                 // 5: more than fits
+        "[[step]]\ntool = \"fs.read\"\npath = \"src/stats.py\"\nstart_line = 1\nmax_lines = 2\n".to_string(), // 6
+        "[[step]]\ntool = \"fs.read\"\npath = \".env\"\nstart_line = 1\nmax_lines = 2\n".to_string(),          // 7
+        read("start_line = 0\n"),                     // 8
+    ];
+    let script = t.write_script("s.toml", &format!("task = \"ranges\"\n{}", steps.concat()));
+    let id = t.run_script_on(script.to_str().unwrap(), &repo);
+    let events = t.events(&id);
+    let failed = |call| event(&events, "tool.failed", call).map(|e| e["error"].as_str().unwrap().to_string());
+    let out = |call| t.output_of(&id, &events, call).unwrap_or_else(|| panic!("call {call} did not complete: {:?}", failed(call)));
+
+    assert!(failed(1).is_some_and(|e| e.contains("start_line and max_lines")), "the refusal names the way out: {:?}", failed(1));
+    let o = out(2);
+    let want: String = big.lines().take(50).map(|l| format!("{l}\n")).collect();
+    assert_eq!(o["content"].as_str().unwrap(), want);
+    assert_eq!(o["lines"], serde_json::json!({"first": 1, "last": 50, "total": 3000}));
+    let o = out(3);
+    assert_eq!(o["lines"], serde_json::json!({"first": 2990, "last": 3000, "total": 3000}));
+    assert!(o["content"].as_str().unwrap().starts_with("row 02990,") && o["content"].as_str().unwrap().ends_with("\n"));
+    assert!(failed(4).is_some_and(|e| e.contains("3000 line(s)") && e.contains("past its end")), "{:?}", failed(4));
+    let o = out(5);
+    let content = o["content"].as_str().unwrap();
+    let last = o["lines"]["last"].as_u64().unwrap();
+    assert!(content.len() <= 64 * 1024 && content.ends_with("\n"), "cut at a line end, within the limit");
+    assert!(last < 3000 && content.lines().count() as u64 == last, "as many whole lines as fit: {last}");
+    assert!(content.len() + 50 > 64 * 1024, "and no fewer");
+    assert_eq!(o["lines"]["total"], 3000);
+    assert_eq!(out(6)["lines"], serde_json::json!({"first": 1, "last": 2, "total": 19}), "a small file works the same way");
+    assert!(event(&events, "tool.denied", 7).is_some(), "a range does not get around a deny rule");
+    assert!(failed(8).is_some_and(|e| e.contains("count from 1")), "{:?}", failed(8));
+    let trace = t.agentos(&["trace", &id]);
+    assert!(trace.contains("tests/big.csv (lines 1-50)") && trace.contains("lines 1-50 of 3000"), "{trace}");
+    // The intent records what was asked for.
+    assert_eq!(event(&events, "tool.intent", 2).unwrap()["plan"]["max_lines"], 50);
+}
