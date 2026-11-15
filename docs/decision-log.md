@@ -2737,11 +2737,55 @@ This is not a security boundary and does not pretend to be one: code in the sand
 
 ---
 
+### D-114 — The v1.0 scope: what the next release contains, agreed with Prince
+- **Date:** 2026-11-16
+- **Status:** Taken
+- **Area:** scope
+- **ADR:** none
+
+**In plain words.** "v0.1" was the release planned by the v1 design document. Prince asked for a real release after it, called v1.0. A list of eleven items was proposed and he approved all of them on 2026-11-16: three hardening items, three things real projects still cannot do, one trial with a capable hosted model, and four release-engineering items. This opens scope for exactly these eleven items. Anything else still goes to the parking lot.
+
+**The problem.** CLAUDE.md says scope is fixed and only Prince opens it. "Let's aim for v1" did not say what v1.0 contains, so nothing could be built before a list was agreed.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| All eleven items (below) | Taken | Prince's choice from three offered lists |
+| All except B6 (binary files) and D11 (another distribution) | Discarded | Offered as a smaller release; not chosen |
+| Hardening and release engineering only | Discarded | Offered; it would leave the gaps the real-project trials found |
+| Network or downloads in the sandbox, multi-agent, a daemon or SDK, a merge for `apply` | Not proposed | Each is a large change to the threat model or a different product; they stay in the spec (§22 and the phases) |
+
+The eleven items:
+
+| # | Item | Notes at approval |
+|---|---|---|
+| A1 | A seccomp filter for sandboxed commands | Cut from v1 (design document, cut list); `docs/threat-model.md` §4 |
+| A2 | A disk limit for the workspace | Without root a hard cap is probably not possible (ADR 0010: tmpfs breaks recovery; quotas and loop images need root). Expected form: a *measured* limit, checked while and after a command runs, the call killed when over. It must be called that, not a hard cap. An experiment decides |
+| A3 | Scratch folders (`filesystem.scratch`) kept out of checkpoints | 64 MB after two `cargo test` calls (`docs/results/second-stack-trial-nix.md`) |
+| B4 | A read-only folder inside the workspace | For `node_modules`, which must be at its place; `skip` does not suit it |
+| B5 | An edit tool: `fs.edit {path, old_str, new_str}`, `old_str` must occur exactly once | A **fifth agent tool** (sixth counting the bonus `ext.call`). Prince chose this form over a unified-diff `fs.patch` (small models get line numbers and context wrong) and over a line range in `fs.write` (a shape models are not trained on). Parked since D-060 |
+| B6 | Binary files and file modes through the agent's own file tools | `agentos apply` already carries them when a command made them (D-108) |
+| C7 | One run of a capable hosted model through the six tickets of `~/Temp/AgentOS_temp/inventory-service` | Prince gave a Groq API key for this in the session of 2026-11-16 and suggested a Qwen model. The key is passed as an environment variable at run time only; it is never written to a file in the repository or committed (D-058) |
+| D8 | The project name | Prince: decide later, but before the v1.0 tag. Still open (D-023, D-068) |
+| D9 | Cargo version 1.0.0, a CHANGELOG, a release build in CI, install instructions, benchmarks run on Ubuntu | |
+| D10 | A stated compatibility promise for the policy file format and the event log schema | |
+| D11 | At least one more distribution in CI | GitHub offers Ubuntu runners only, and user namespaces are usually blocked inside Docker, so this may need a nested VM. Agreed form: try Debian; if CI cannot run it, record why and drop it from v1.0 |
+
+Milestones, in the order of work: **M11** hardening (A1, A2, A3); **M12** real projects (B5, B4, B6); **M13** hosted-model trial (C7); **M14** release (D8 to D11, then the `v1.0` tag after a green CI run). Before M11: CI on `main` is red (run 43742105191 on `9cec493`, see Findings 2026-11-16) and is made green first.
+
+**What this means for the code.** No code yet. CLAUDE.md's scope section, the design document (new section "v1.0 scope") and the spec's parking lot are updated to name these items. The rule "the tool list is fixed" now reads: four v1 tools, the bonus, and `fs.edit`.
+
+**Evidence.** Prince's answers to the scope questions in the session of 2026-11-16: "All, as proposed"; edit tool form "fs.edit: old/new text"; name "Decide later"; for C7 a Groq key with "maybe use a qwen model".
+
+**Concepts to learn.** seccomp (a kernel filter on which system calls a process may make); disk quotas and why they need root; semantic versioning and what a "1.0" promises; compatibility promises for file formats.
+
+---
+
 ## Still open
 
 | Question | Notes |
 |---|---|
-| Project name | See D-023. Still open at v0.1 (D-068) |
+| Project name | See D-023. Still open at v0.1 (D-068). Must be settled before the `v1.0` tag (D-114) |
 | ~~License~~ | Answered by D-069: dual MIT OR Apache-2.0 |
 | ~~Public repo from day one, or after v0.1?~~ | Answered by events: Prince pushed `main` to GitHub on 2026-11-12, after v0.1 was tagged locally |
 | ~~Does the `fhs` preset pass on Ubuntu?~~ | Answered by D-072: yes on Ubuntu 24.04, CI run 43385661105 (third run; the first two found B-007 and B-008) |
@@ -2811,6 +2855,7 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-15 | M9 built the parked ideas and repeated the real-project session. Each thing that had been in the way was gone (table in `docs/results/real-repo-trial-nix.md`). Three surprises on the way. (1) Self-start failed in its own test with `Unit run-p….scope was already loaded`: systemd-run names a scope after the process id, and the id survives `exec`. It had worked by hand from a terminal. (2) The 4B model, which gave up on the two-module ticket after one call in M8, now made seven; then a reply cut off inside a tool call made its server answer HTTP 500, and the runtime stopped with an error. (3) The reminder for a model that stops early (D-107) was therefore never seen with a real model; only the mock tests show it | A feature tried by hand in one setting (a terminal) is not tested; the test found the collision because it started agentos the way CI does. And every fix to the agent loop moves the model one step further, to the next unhandled case |
 | 2026-11-15 | First CI run of M9 and M10 on Ubuntu (43690755406): both jobs red, on one test. Expected the risky parts to be the self-start in a scope or the signal handler. It was the smallest feature: the note for an inactive virtualenv fired for an *active* one, because on Ubuntu `/usr` is a mount with its own `/usr/bin/pytest` (B-014, fixed by D-109). `cargo test` stopped at that file, so most suites did not run on Ubuntu at all in that run | The `fhs` preset is a different machine in ways that matter, and only CI has one. A red run also hides everything behind the first failure: "one test failed" was really "one test failed and seven suites are unknown" |
 | 2026-11-15 | Trial on a Node project and a Rust project, to see whether the design is tied to Python. Expected trouble with `node_modules`. `node --test` worked at once, `node_modules` copied along. What failed was `npm test` (`spawn sh ENOENT`) and `cargo test` (`linker cc not found`): the sandbox's `PATH` held only the folders of the allowed programs, and these commands start other programs by name. `pytest` never does, which is why thirty-two security tests, a benign suite and two real-project sessions had not shown it. Fixed with `exec.helpers` (D-112); both then ran, tickets were fixed through the gateway and applied to clones. Record: `docs/results/second-stack-trial-nix.md` | A design claim ("not tied to one ecosystem") is untested until a second ecosystem is tried; the first one cannot show what it does not need. The gap was in the environment handed to commands, not in any of the five parts |
+| 2026-11-16 | CI run 43742105191 on `9cec493` (`fhs` job) failed in `toctou_symlink_swap_during_writes_and_reads_never_escapes`: the swapper made 925 swaps, under the required 1,000. Nothing escaped; the `fhs-apparmor` job passed. Earlier runs had 6,400 to 6,750 swaps on the development machine (D-062) | A test that checks its own precondition can fail when the machine is slower, not when the code is wrong. The fix must make the race happen enough on a slow runner, not lower the bar. Because the file stopped `cargo test`, the suites after it did not run, so D-112 is still unverified on `fhs` |
 
 ---
 

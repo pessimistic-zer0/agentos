@@ -23,7 +23,7 @@ Follow the entry template in that file. Write "In plain words" for a beginner. U
 
 ## Scope is fixed
 
-The five parts (gateway, policy, sandbox, event log, checkpoints + recovery), the build order, and the cut list in the v1 document do not change during normal work. The "Bonus" of the v1 document (one fake external tool) is built (M7, D-073); it is finished. On 2026-11-14 Prince approved exactly two more additions (D-088): packages from outside the repo for sandboxed commands, and an AppArmor profile for Ubuntu. Neither is a tool. Later the same day he opened scope for the parked conveniences (M9, D-098), except binary file tools, which stay parked. An `apply` command was held at first and approved on 2026-11-15 (D-108). The tool list is still four plus the bonus.
+The five parts (gateway, policy, sandbox, event log, checkpoints + recovery), the build order, and the cut list in the v1 document do not change during normal work. The "Bonus" of the v1 document (one fake external tool) is built (M7, D-073); it is finished. On 2026-11-14 Prince approved exactly two more additions (D-088): packages from outside the repo for sandboxed commands, and an AppArmor profile for Ubuntu. Neither is a tool. Later the same day he opened scope for the parked conveniences (M9, D-098), except binary file tools, which stay parked. An `apply` command was held at first and approved on 2026-11-15 (D-108). On 2026-11-16 Prince approved the v1.0 scope (D-114; section "v1.0 scope" of the v1 document): seccomp, a measured disk limit, scratch folders out of checkpoints, a read-only folder in the workspace, `fs.edit`, binary files and modes in the file tools, a hosted-model trial, and release engineering (name, 1.0.0, CHANGELOG, compatibility promise, one more distribution in CI). The tool list is four plus the bonus plus `fs.edit`.
 
 - Do not add features, tools, dependencies or abstractions that the v1 document does not list.
 - If an idea comes up that is outside v1, add one line to the parking lot (§22 of the spec) and continue with the current milestone.
@@ -69,6 +69,10 @@ At the end of each milestone, write `docs/milestones/M<n>-<name>.md` from `docs/
 | `M7-bonus-external-tool.md` | after v0.1 | Bonus: `ext.call`, the fake service, its reconciliation rule and fault cells |
 | `M10-apply.md` | after M9 | `agentos apply`: the result copied into the repository by a command the user runs (D-108) |
 | `M9-conveniences.md` | after M8 | `agentos rm` and `check`, self-start in a scope, a message when stopped, `fs.read` with a line range, policy lists `skip`, `scratch`, `deny_except`, a note for an inactive virtualenv, `stopped` when the model gives up |
+| `M11-hardening.md` | v1.0 | seccomp, measured disk limit, scratch out of checkpoints (D-114) |
+| `M12-real-projects.md` | v1.0 | `fs.edit`, read-only folder in the workspace, binary files and modes |
+| `M13-hosted-model.md` | v1.0 | A capable hosted model through the six inventory tickets |
+| `M14-release.md` | v1.0 | Name, 1.0.0, CHANGELOG, compatibility promise, another distribution, tag `v1.0` |
 | `M8-first-user.md` | after M7 | Bugs found by hand (B-009 to B-013), folder-making writes, first messages, the patch's notes, packages from outside the repo, the AppArmor profile, the first trial on a real project |
 
 ## Design rules that must hold
@@ -149,8 +153,10 @@ M9 (tag `m9` locally; `docs/milestones/M9-conveniences.md`), 2026-11-15: ten of 
 
 After M10, 2026-11-15, no new tag yet: the model server's answers are sorted into wait, error and tell-the-model (D-111; verified on `fhs` by CI run 43733350171 on `2a6a3d1`, D-113), and helper programs for commands (`exec.helpers`, D-112), found in a trial on a Node and a Rust project (`docs/results/second-stack-trial-nix.md`; the two projects are in `~/Temp/AgentOS_temp/`). On `nix`: `make test` 130 passed. D-112 is **not yet verified on `fhs`**. `main`, and the tags up to `m10`, are on GitHub, pushed by Prince.
 
+Next: v1.0 (D-114), milestones M11 to M14. First, CI on `main` is red: run 43742105191 on `9cec493` failed in the `fhs` job because the TOCTOU test's swapper made only 925 swaps (the test requires more than 1,000 to count the race as exercised; nothing escaped). So D-112 is still not verified on `fhs`.
+
 Open, and only Prince can close them:
 
-- Decide the project name (D-023, D-068). The license is settled: dual MIT OR Apache-2.0 (D-069).
+- Decide the project name (D-023, D-068), before the `v1.0` tag (D-114). The license is settled: dual MIT OR Apache-2.0 (D-069).
 
 Update this section when any of these changes.

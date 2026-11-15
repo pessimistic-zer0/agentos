@@ -1071,6 +1071,7 @@ Uncommitted. Some are research projects on their own.
 - **Kubernetes operator** for running AgentOS workers (only if Phase 5 happens).
 - **Signed execution records:** attestations that a patch was produced under a given policy.
 - **Multi-model comparison harness** built on comparative replay.
+- **Taken into v1.0 (2026-11-16, D-114)**, so no longer parked: seccomp, a disk limit, scratch folders out of checkpoints, a read-only folder in the workspace (`node_modules`), binary files and file modes through the file tools, and the edit tool below (as `fs.edit`).
 - **A patch/edit tool** (`fs.patch`: replace a range or apply a diff) so small models do not have to resend whole files. Came up in v1 M4 (D-060); not in v1 because the tool list is fixed at four.
 - **Built in M10 (2026-11-15, D-108):** `agentos apply`.
 - **Built in M9 (2026-11-15, D-098 to D-107)**, so no longer parked: a clean-up command (`agentos rm`), leaving folders out of the copy (`filesystem.skip`), starting itself under `systemd-run`, a message on Ctrl-C, a check command, reading part of a file, a hint for an inactive virtualenv, exceptions to deny rules, caches as non-violations (`filesystem.scratch`), a clearer end when the model gives up.

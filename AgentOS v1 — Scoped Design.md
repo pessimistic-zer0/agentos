@@ -327,6 +327,21 @@ Decided by Prince after a walk-through as a new user (D-088). The five parts and
 
 Held, in the parking lot of `AgentOS_Project_Spec.md` (§22): binary files or file modes through the file tools.
 
+## v1.0 scope (agreed 2026-11-16)
+
+Naming: this document is the plan for what was tagged `v0.1`. "v1.0" is the next release, beyond this plan. Prince approved its contents on 2026-11-16 (D-114). Only these items are added; everything else stays in the parking lot of `AgentOS_Project_Spec.md` (§22).
+
+| Milestone | Items |
+|---|---|
+| M11 hardening | A seccomp filter for sandboxed commands. A disk limit for the workspace: a measured limit, not a hard cap, unless an experiment finds a rootless hard cap (ADR 0010). Scratch folders kept out of checkpoints |
+| M12 real projects | `fs.edit {path, old_str, new_str}`, a new agent tool (`old_str` must occur exactly once). A read-only folder inside the workspace (`node_modules`). Binary files and file modes through the file tools |
+| M13 evidence | One run of a capable hosted model through the six tickets of the inventory project |
+| M14 release | The project name (Prince decides). Version 1.0.0, a CHANGELOG, a release build in CI, install instructions, benchmarks on Ubuntu. A compatibility promise for the policy format and the event log schema. One more distribution in CI (Debian; dropped with a written reason if CI cannot run it). Tag `v1.0` after a green CI run |
+
+The five parts and the design rules do not change. The tool list becomes: the four v1 tools, the bonus `ext.call`, and `fs.edit`.
+
+Not in v1.0: network or downloads in the sandbox, multi-agent, a daemon or SDK, a merge for `agentos apply`.
+
 ## Bonus, only after everything above is done
 
 One fake external tool: a small local service with injectable timeouts, called through the gateway with an idempotency key. It gives the "uncertain call that cannot be rolled back" path something real to do. It is not part of the definition of done and must not start before v0.1 is tagged.
