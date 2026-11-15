@@ -62,15 +62,22 @@ impl Programs {
             let found = found.expect("checked above");
             let as_found = link_chain_visible(&found, &mounts).unwrap_or_else(|| real.clone());
             // A mounted folder that has this program in its own `bin`, while
-            // the one found on PATH is another: almost always a virtualenv
-            // that was mounted but not activated. The run would use the
-            // other program and fail in ways that do not point here.
+            // that `bin` is not on PATH at all: almost always a virtualenv
+            // that was mounted but not activated. The run would use another
+            // program and fail in ways that do not point here.
+            //
+            // "Not on PATH at all" is the test, not "a different one was
+            // found". On Ubuntu `/usr` is a mount and `/usr/bin` holds a
+            // `pytest` too; with a virtualenv active that one is on PATH
+            // and merely comes later, which is exactly right (bug B-014).
             for m in &mounts {
-                let own = m.join("bin").join(&prog);
+                let own_bin = m.join("bin");
+                let own = own_bin.join(&prog);
                 let same = |a: &Path, b: &Path| std::fs::canonicalize(a).ok() == std::fs::canonicalize(b).ok();
-                if is_executable(&own) && !same(&own, &as_found) && !same(&own, &real) {
+                let on_path = host_path.split(':').filter(|d| !d.is_empty()).any(|d| same(Path::new(d), &own_bin));
+                if is_executable(&own) && !on_path && !same(&own, &as_found) && !same(&own, &real) {
                     notes.push(format!(
-                        "sandbox.ro_mounts has {}, which holds its own `{prog}` ({}), but the `{prog}` found on PATH is {}. \
+                        "sandbox.ro_mounts has {}, which holds its own `{prog}` ({}), but its bin folder is not on PATH; the `{prog}` in use is {}. \
                          If that folder is a virtualenv, activate it before starting agentos (its bin folder must come first on PATH); \
                          otherwise its packages will not be used.",
                         m.display(),

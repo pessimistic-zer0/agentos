@@ -207,6 +207,40 @@ fn a_mounted_virtualenv_that_is_not_active_gets_a_note() {
 }
 
 #[test]
+fn a_second_copy_of_a_program_later_on_path_is_not_worth_a_note() {
+    // B-014. Two mounted folders each hold a `pytest`; both `bin` folders
+    // are on PATH and the first one wins. That is every Ubuntu machine with
+    // an active virtualenv: `/usr` is a mount and `/usr/bin/pytest` exists.
+    // On NixOS no mount has a `bin`, so only this test shows the case there.
+    let t = TestEnv::new("deps-two-on-path");
+    let active = make_venv(&t);
+    let other = t.root.join("other-tools");
+    assert!(std::process::Command::new("cp").arg("-a").arg(&active).arg(&other).status().unwrap().success());
+    let repo = repo_needing_fakedep(&t);
+    let mounted_twice = policy_with(Some(&active), &[]).replace("ro_mounts = [", &format!("ro_mounts = [\"{}\", ", other.display()));
+    assert!(mounted_twice.contains(other.to_str().unwrap()));
+    let t = t.with_policy_text(&mounted_twice);
+    let script = t.write_script("s.toml", STEPS);
+    let mut c = t.cmd(&["run", "--quiet", "--repo", repo.to_str().unwrap(), "--policy", t.policy.to_str().unwrap(), "--script", script.to_str().unwrap()]);
+    c.env("PATH", format!("{}:{}:{}", active.join("bin").display(), other.join("bin").display(), std::env::var("PATH").unwrap()));
+    let out = c.output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{err}");
+    assert!(!err.contains("note:"), "a program that is on PATH, only later, got a note:\n{err}");
+    // The same two mounts with the second one *not* on PATH: now it is worth saying.
+    let t3 = TestEnv::new("deps-two-one-off-path");
+    let active3 = make_venv(&t3);
+    let other3 = t3.root.join("other-tools");
+    assert!(std::process::Command::new("cp").arg("-a").arg(&active3).arg(&other3).status().unwrap().success());
+    let repo3 = repo_needing_fakedep(&t3);
+    let t3 = t3.with_policy_text(&policy_with(Some(&active3), &[]).replace("ro_mounts = [", &format!("ro_mounts = [\"{}\", ", other3.display())));
+    let script3 = t3.write_script("s.toml", STEPS);
+    let out3 = run(&t3, &repo3, &script3, Some(&active3.join("bin")));
+    let err3 = String::from_utf8_lossy(&out3.stderr);
+    assert!(err3.contains("note:") && err3.contains(other3.to_str().unwrap()) && !err3.contains(&format!("has {},", active3.display())), "{err3}");
+}
+
+#[test]
 fn a_virtualenv_inside_the_repo_is_skipped_in_the_copy_and_still_used() {
     let t = TestEnv::new("deps-skip");
     let repo = repo_needing_fakedep(&t);

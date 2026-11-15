@@ -145,7 +145,7 @@ M8 (tag `m8` locally; `docs/milestones/M8-first-user.md`) is the work after the 
 
 M9 (tag `m9` locally; `docs/milestones/M9-conveniences.md`), 2026-11-15: ten of the parked ideas (D-098 to D-107). On `nix`: `make test` 118 passed; the real-project session repeated (`docs/results/real-repo-trial-nix.md`, second part); 200-kill run in `docs/results/recovery-200-nix-m9.md`. **Not yet verified on `fhs`**: the M9 commits (`b6fc0d6` to tag `m9`) are local. Held at the time: `agentos apply` (built next, M10) and binary file tools. Known and parked: an HTTP error from the model's server ends a run as `interrupted`.
 
-`agentos apply` (M10, tag `m10` locally; `docs/milestones/M10-apply.md`; D-108), 2026-11-15: copies a finished execution's result into the repository, including what a patch cannot carry; refuses if the repository changed since the copy. `tests/apply.rs` (6 tests). On `nix`: `make test` 124 passed. **Not yet verified on `fhs`.** Still parked: binary files and file modes through the file tools.
+`agentos apply` (M10, tag `m10` locally; `docs/milestones/M10-apply.md`; D-108), 2026-11-15: copies a finished execution's result into the repository, including what a patch cannot carry; refuses if the repository changed since the copy. `tests/apply.rs` (6 tests). On `nix`: `make test` 125 passed. **Not yet verified on `fhs`:** the first CI run on M9 and M10 (43690755406, `29f030f`) failed in both jobs on one test, a false note on Ubuntu (B-014, fixed locally by D-109); most suites did not run behind it. A new push is needed. Still parked: binary files and file modes through the file tools.
 
 Open, and only Prince can close them:
 

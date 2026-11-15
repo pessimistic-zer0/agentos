@@ -2425,7 +2425,7 @@ What a policy author must know: everything under a read-only mount can be read b
 
 ### D-101 — A note when a mounted folder has its own copy of an allowed program and another one was found
 - **Date:** 2026-11-14
-- **Status:** Taken
+- **Status:** Taken; the condition for the note is replaced by D-109
 - **Area:** tooling
 - **ADR:** none
 
@@ -2610,6 +2610,30 @@ What a policy author must know: everything under a read-only mount can be read b
 
 **Concepts to learn.** What a rule is for versus what it literally says; "check everything, then act"; why merging is not copying.
 
+### D-109 — The inactive-virtualenv note asks "is its `bin` on `PATH` at all?" (replaces the test in D-101)
+- **Date:** 2026-11-15
+- **Status:** Taken; D-101's aim stands, its condition is replaced
+- **Area:** tooling
+- **ADR:** none
+
+**In plain words.** The note was meant for a virtualenv that is mounted but was not activated. Its test was too wide: it fired whenever a mounted folder had its own copy of a program and another copy was the one in use. On Ubuntu the system folder `/usr` is mounted and has its own `pytest`, so every user with an *active* virtualenv got the note. "Not activated" means the folder's `bin` is not on `PATH`. That is now the test.
+
+**The problem.** Bug B-014, found by the first CI run of M9 on Ubuntu.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Note only when the mounted folder's `bin` is not on `PATH` at all | Taken | It is the definition of "not activated", and needs no knowledge of what a virtualenv is |
+| Note only for folders that contain `pyvenv.cfg` | Discarded | Python knowledge in `src/` (see D-091); the same mistake is possible with other tools' folders |
+| Skip the shipped presets' mounts | Discarded | A list of "system" folders in the code is what the presets exist to avoid |
+| Drop the note | Discarded | The forgotten `activate` in the trial cost real time, and the note is right for it |
+
+**What this means for the code.** `tools/exec.rs::Programs::resolve` compares each `PATH` entry with `<mount>/bin`. The note's wording says "its bin folder is not on PATH".
+
+**Evidence.** CI run 43690755406 (`29f030f`): both jobs failed with the false note in the log. After the fix, on `nix`, 2026-11-15: `tests/deps.rs` 10 passed, including the new `a_second_copy_of_a_program_later_on_path_is_not_worth_a_note`; that test fails with the old condition. `make test`: 125 passed. Not yet run on `fhs`, where it has to be seen: this is an `fhs`-only fault.
+
+**Concepts to learn.** False positives; testing the silent case.
+
 ---
 
 ## Still open
@@ -2684,6 +2708,7 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-14 | First run on a project that is not the demo: an inventory service with real PyPI packages in a virtualenv, written by a separate AI agent that was told not to look at AgentOS. Expected the new dependency support to be the weak point. It worked at once (same `3 failed, 75 passed` as outside; after four tickets were fixed through the gateway, 79 passed, in the sandbox and again after `git apply` in a clone). What failed was elsewhere: the applied patch lacked the package's empty `__init__.py` (B-012, fixed, D-095); `.env.example` was denied; a 134 KB fixture and a gzip file could not be read; `.pytest_cache` showed up as a policy violation on every test run; a forgotten `activate` gave exit 4 with no hint. The local 4B model solved a one-line ticket in 5 calls and 33 s and gave up on a two-module ticket after one call, which the runtime records as `COMPLETED`. Record: `docs/results/real-repo-trial-nix.md` | A project nobody tuned for the tool finds different things from a test written by the tool's author: D-090's list of what a patch cannot carry was written from memory and was one item short. The limits that bite first are the file tools' (size, text only), not the sandbox's |
 | 2026-11-14 | Re-running the benchmarks after this round was expected to be routine. `make bench` ended with a Python traceback about a missing data file. Three steps earlier the `fs.write` benchmark had died, and the script's `\|\| true` had hidden it: the new startup probe (D-093) started the benchmark binary a second time (B-013; fixed by D-096). The same code had passed CI on both jobs. Numbers after the fix, `docs/results/bench-nix-m8/`: sandboxed `true` p50 5.62 ms (direct 1.06), `fs.write` 4 KB p50 13.34 ms, demo end to end p50 481 ms against 354 ms direct. All lower than the v0.1 run, the direct ones too, so the machine was quieter; nothing can be said about the code getting faster. The 200-kill run on `nix` after this round: 4,800 + 1,600 runs, 0 violations (`docs/results/recovery-200-nix-m8.md`) | Benchmarks are also a test: they are the only programs here that use the library without being the `agentos` binary. A suite that never leaves the main binary cannot see what a library user sees. And a step that may fail quietly should not be followed by steps that need its output |
 | 2026-11-15 | M9 built the parked ideas and repeated the real-project session. Each thing that had been in the way was gone (table in `docs/results/real-repo-trial-nix.md`). Three surprises on the way. (1) Self-start failed in its own test with `Unit run-p….scope was already loaded`: systemd-run names a scope after the process id, and the id survives `exec`. It had worked by hand from a terminal. (2) The 4B model, which gave up on the two-module ticket after one call in M8, now made seven; then a reply cut off inside a tool call made its server answer HTTP 500, and the runtime stopped with an error. (3) The reminder for a model that stops early (D-107) was therefore never seen with a real model; only the mock tests show it | A feature tried by hand in one setting (a terminal) is not tested; the test found the collision because it started agentos the way CI does. And every fix to the agent loop moves the model one step further, to the next unhandled case |
+| 2026-11-15 | First CI run of M9 and M10 on Ubuntu (43690755406): both jobs red, on one test. Expected the risky parts to be the self-start in a scope or the signal handler. It was the smallest feature: the note for an inactive virtualenv fired for an *active* one, because on Ubuntu `/usr` is a mount with its own `/usr/bin/pytest` (B-014, fixed by D-109). `cargo test` stopped at that file, so most suites did not run on Ubuntu at all in that run | The `fhs` preset is a different machine in ways that matter, and only CI has one. A red run also hides everything behind the first failure: "one test failed" was really "one test failed and seven suites are unknown" |
 
 ---
 
