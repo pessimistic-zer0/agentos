@@ -42,6 +42,11 @@ fn reply_for(messages: &[Value]) -> Value {
 
 /// Start the mock; returns its base URL and the requests it received.
 fn start_mock() -> (String, Arc<Mutex<Vec<Value>>>) {
+    start_mock_with(reply_for)
+}
+
+/// A mock endpoint whose answers come from `reply_for`.
+fn start_mock_with(reply_for: fn(&[Value]) -> Value) -> (String, Arc<Mutex<Vec<Value>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}/v1", listener.local_addr().unwrap());
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -176,4 +181,69 @@ fn no_server_is_reported_before_anything_is_started() {
     let bad = run_llm(&t, "not a url", &[]);
     let err = String::from_utf8_lossy(&bad.stderr);
     assert!(!bad.status.success() && err.contains("AGENTOS_LLM_BASE_URL"), "{err}");
+}
+
+// ---------------------------------------------------------------------------
+// D-107: a model that stops while its last command is still failing.
+// ---------------------------------------------------------------------------
+
+fn was_told_to_go_on(messages: &[Value]) -> bool {
+    messages.iter().any(|m| m["role"] == "user" && m["content"].as_str().is_some_and(|c| c.starts_with("[agentos] You answered without a tool call")))
+}
+
+fn tool_call(n: usize, name: &str, args: Value) -> Value {
+    json!({"role": "assistant", "content": "", "tool_calls": [{"id": format!("call_{n}"), "type": "function", "function": {"name": name, "arguments": args.to_string()}}]})
+}
+
+/// Runs the failing tests, then only talks.
+fn gives_up(messages: &[Value]) -> Value {
+    let results = messages.iter().filter(|m| m["role"] == "tool").count();
+    match (results, was_told_to_go_on(messages)) {
+        (0, _) => tool_call(1, "exec", json!({"argv": ["pytest", "-q"]})),
+        (_, false) => json!({"role": "assistant", "content": "The test fails because mean() is wrong. I would need to change src/stats.py."}),
+        (_, true) => json!({"role": "assistant", "content": "GIVE UP: I cannot work out the fix."}),
+    }
+}
+
+/// Runs the failing tests, talks, and after being told to go on, fixes them.
+fn goes_on_when_told(messages: &[Value]) -> Value {
+    let results = messages.iter().filter(|m| m["role"] == "tool").count();
+    match (results, was_told_to_go_on(messages)) {
+        (0, _) => tool_call(1, "exec", json!({"argv": ["pytest", "-q"]})),
+        (1, false) => json!({"role": "assistant", "content": "The test fails. Done looking."}),
+        (1, true) => tool_call(2, "fs_write", json!({"path": "src/stats.py", "content": FIXED})),
+        (2, _) => tool_call(3, "exec", json!({"argv": ["pytest", "-q"]})),
+        _ => json!({"role": "assistant", "content": "Fixed; the tests pass."}),
+    }
+}
+
+#[test]
+fn a_model_that_stops_while_the_tests_fail_is_told_once_then_recorded_as_stopped() {
+    let t = TestEnv::new("llm-gives-up");
+    let (url, seen) = start_mock_with(gives_up);
+    let out = run_llm(&t, &url, &[]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let id = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    let events = t.events(&id);
+    let end = events.iter().find(|e| e["type"] == "execution.finished").unwrap();
+    assert_eq!(end["status"], "stopped", "not `completed`: {end}");
+    let summary = end["summary"].as_str().unwrap();
+    assert!(summary.contains("still failing") && summary.contains("GIVE UP: I cannot work out the fix."), "{summary}");
+    assert_eq!(seen.lock().unwrap().len(), 3, "one call, one early stop, one answer to the reminder");
+    let roles: Vec<&str> = events.iter().filter(|e| e["type"] == "agent.message").map(|e| e["message"]["role"].as_str().unwrap()).collect();
+    assert_eq!(roles, ["system", "user", "assistant", "tool", "assistant", "user", "assistant"], "the reminder is in the log");
+    assert!(t.agentos(&["status", &id]).contains("stopped"));
+}
+
+#[test]
+fn a_model_that_goes_on_when_told_finishes_as_completed() {
+    let t = TestEnv::new("llm-goes-on");
+    let (url, seen) = start_mock_with(goes_on_when_told);
+    let out = run_llm(&t, &url, &[]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let id = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    let events = t.events(&id);
+    assert!(events.iter().any(|e| e["type"] == "execution.finished" && e["status"] == "completed"), "{events:#?}");
+    assert_eq!(exec_exit_codes(&t, &events), vec![Some(1), Some(0)]);
+    assert_eq!(seen.lock().unwrap().len(), 5);
 }

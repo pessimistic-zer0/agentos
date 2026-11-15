@@ -105,6 +105,7 @@ pub fn create(opts: &RunOptions, agent: &dyn Agent) -> Result<(Gateway, File)> {
     let sandbox = prepare_sandbox()?;
 
     let id = workspace::new_execution_id();
+    crate::interrupt::running(&id);
     let dir = ExecDir::new(&opts.state_dir, &id);
     std::fs::create_dir_all(&dir.root).with_context(|| format!("creating {}", dir.root.display()))?;
     let lock = lock_execution(&dir)?;
@@ -152,7 +153,9 @@ pub fn recover(state_dir: &Path, id: &str, verbose: bool) -> Result<crate::recov
     let dir = ExecDir::new(state_dir, id);
     let mut log = EventLog::open(&dir.log())?;
     let _lock = lock_execution(&dir)?;
+    crate::interrupt::recovering(id);
     let report = crate::recovery::recover(&dir, &mut log)?;
+    crate::interrupt::finished();
     if verbose {
         print_recovery(id, &report);
     }
@@ -193,7 +196,9 @@ pub fn resume(state_dir: &Path, id: &str, agent: &mut dyn Agent, verbose: bool) 
     let dir = ExecDir::new(state_dir, id);
     let mut log = EventLog::open(&dir.log())?;
     let _lock = lock_execution(&dir)?;
+    crate::interrupt::recovering(id);
     let report = crate::recovery::recover(&dir, &mut log)?;
+    crate::interrupt::running(id);
     if verbose {
         print_recovery(id, &report);
     }
@@ -264,6 +269,7 @@ fn finish(gw: &mut Gateway, status: &str, summary: &str, verbose: bool) -> Resul
         summary: summary.into(),
         patch: Some(gw.dir.patch().display().to_string()),
     })?;
+    crate::interrupt::finished();
     if verbose {
         let what = if report.changed { "patch" } else { "no changes; empty patch" };
         println!("{}  {}  {}\n  {what}: {}", gw.dir.id, status.to_uppercase(), truncate(summary, 200), gw.dir.patch().display());
@@ -306,4 +312,129 @@ pub fn default_state_dir() -> PathBuf {
     }
     let home = std::env::var_os("HOME").unwrap_or_else(|| ".".into());
     Path::new(&home).join(".local/share/agentos")
+}
+
+/// What `agentos rm` did with one execution.
+#[derive(Debug, PartialEq)]
+pub enum Removal {
+    Removed,
+    /// A runtime is working on it right now.
+    InUse,
+    /// It was interrupted and can still be resumed; `--force` removes it.
+    Unfinished,
+    NotFound,
+}
+
+/// Delete one execution's folder: its log, workspace, checkpoints, blobs
+/// and patch. Refuses while a runtime holds the execution's lock, and
+/// (without `force`) an execution that never finished, because that one
+/// can still be resumed and its patch does not exist yet (D-103).
+pub fn remove_execution(state_dir: &Path, id: &str, force: bool, dry_run: bool) -> Result<Removal> {
+    // An id is a folder name, nothing more: no path steps.
+    if id.is_empty() || id.contains('/') || id == "." || id == ".." {
+        return Ok(Removal::NotFound);
+    }
+    let dir = ExecDir::new(state_dir, id);
+    if !dir.root.is_dir() {
+        return Ok(Removal::NotFound);
+    }
+    if is_locked(&dir) {
+        return Ok(Removal::InUse);
+    }
+    let finished = EventLog::open(&dir.log())
+        .and_then(|log| log.events())
+        .map(|events| events.iter().any(|e| matches!(e.body, EventBody::ExecutionFinished { .. })))
+        .unwrap_or(false);
+    // A folder without a readable log cannot be resumed, so there is nothing to protect.
+    if !finished && dir.log().exists() && !force {
+        return Ok(Removal::Unfinished);
+    }
+    if dry_run {
+        return Ok(Removal::Removed);
+    }
+    // Hold the lock while deleting, so no runtime starts on a half-deleted folder.
+    let lock = File::options().create(true).truncate(false).write(true).open(dir.lock())?;
+    if matches!(lock.try_lock(), Err(std::fs::TryLockError::WouldBlock)) {
+        return Ok(Removal::InUse);
+    }
+    checkpoint::remove_tree(&dir.root)?;
+    Ok(Removal::Removed)
+}
+
+/// `agentos check`: everything `run` would check before it starts, and what
+/// the copy of `repo` would look like, without creating an execution.
+/// Prints one block per topic; returns how many problems it found.
+pub fn check(policy_path: Option<&Path>, repo: Option<&Path>) -> usize {
+    let mut problems = 0;
+    let mut fail = |what: &str, why: String| {
+        problems += 1;
+        println!("{what}: PROBLEM\n  {}", why.replace('\n', "\n  "));
+    };
+    match prepare_sandbox() {
+        Ok(_) => println!("host: ok (user namespaces, Landlock, openat2, a delegated cgroup)"),
+        Err(e) => fail("host", format!("{e:#}")),
+    }
+    let policy = match policy_path {
+        None => {
+            println!("policy: not checked (give --policy <file>)");
+            None
+        }
+        Some(path) => match Policy::load(path) {
+            Ok((policy, _)) => {
+                let fs = &policy.filesystem;
+                println!(
+                    "policy: ok (`{}`: {} write, {} deny, {} skip, {} scratch rule(s); {} command rule(s); {} read-only mount(s); {} variable(s))",
+                    policy.name,
+                    fs.write.len(),
+                    fs.deny.len(),
+                    fs.skip.len(),
+                    fs.scratch.len(),
+                    policy.exec.allow.len(),
+                    policy.sandbox.ro_mounts.len(),
+                    policy.sandbox.env.len()
+                );
+                Some(policy)
+            }
+            Err(e) => {
+                fail("policy", e.to_string());
+                None
+            }
+        },
+    };
+    if let Some(policy) = &policy {
+        match Programs::resolve(policy, &std::env::var("PATH").unwrap_or_default()) {
+            Ok(programs) => {
+                println!("programs: ok");
+                for name in policy.programs() {
+                    if let Some(path) = programs.lookup(&name) {
+                        println!("  {name} -> {}", path.display());
+                    }
+                }
+                for note in &programs.notes {
+                    println!("  note: {note}");
+                }
+            }
+            Err(e) => fail("programs", format!("{e:#}")),
+        }
+    }
+    match (repo, &policy) {
+        (None, _) => println!("repo: not checked (give --repo <folder>)"),
+        (Some(_), None) => println!("repo: not checked (it needs a valid policy)"),
+        (Some(repo), Some(policy)) => match std::fs::canonicalize(repo).map_err(anyhow::Error::from).and_then(|r| workspace::survey(&r, policy)) {
+            Ok((report, bytes)) => {
+                println!("repo: ok ({} files, {:.1} MB would be copied into the workspace, and again at every change)", report.files_copied, bytes as f64 / 1e6);
+                let list = |what: &str, paths: &[String]| {
+                    if !paths.is_empty() {
+                        let shown: Vec<&str> = paths.iter().take(12).map(String::as_str).collect();
+                        let more = if paths.len() > shown.len() { format!(", and {} more", paths.len() - shown.len()) } else { String::new() };
+                        println!("  left out by {what} rules: {}{more}", shown.join(", "));
+                    }
+                };
+                list("deny", &report.denied);
+                list("skip", &report.skipped);
+            }
+            Err(e) => fail("repo", format!("--repo {}: {e:#}", repo.display())),
+        },
+    }
+    problems
 }

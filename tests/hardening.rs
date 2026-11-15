@@ -352,7 +352,9 @@ fn without_a_delegated_cgroup_the_message_starts_with_what_to_do() {
     let script = repo_root().join("examples/scripts/fix-demo.toml");
     let mut args = vec!["--user".to_string(), "--scope".into(), "-q".into(), agentos_bin().display().to_string(), "--state-dir".into(), t.state.display().to_string()];
     args.extend(run_args(&t, &script, &demo_repo()));
-    let out = std::process::Command::new("systemd-run").args(&args).current_dir(repo_root()).output().expect("systemd-run");
+    // AGENTOS_IN_SCOPE switches off the self-start of D-105, which would
+    // otherwise move agentos into a delegated scope and hide the message.
+    let out = std::process::Command::new("systemd-run").args(&args).env("AGENTOS_IN_SCOPE", "1").current_dir(repo_root()).output().expect("systemd-run");
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "it ran in a scope that was not delegated:\n{err}");
     let fix = err.find("systemd-run --user --scope -p Delegate=yes").unwrap_or_else(|| panic!("the command to use is missing:\n{err}"));
@@ -527,4 +529,146 @@ fn part_of_a_large_file_can_be_read() {
     assert!(trace.contains("tests/big.csv (lines 1-50)") && trace.contains("lines 1-50 of 3000"), "{trace}");
     // The intent records what was asked for.
     assert_eq!(event(&events, "tool.intent", 2).unwrap()["plan"]["max_lines"], 50);
+}
+
+// ---------------------------------------------------------------------------
+// M9 commands: starting itself in a delegated scope, check, rm, stopping.
+// ---------------------------------------------------------------------------
+
+/// `agentos …` started from a plain scope, as from a newcomer's terminal.
+fn from_a_plain_scope(t: &TestEnv, args: &[String]) -> std::process::Output {
+    let mut all = vec!["--user".to_string(), "--scope".into(), "-q".into(), agentos_bin().display().to_string(), "--state-dir".into(), t.state.display().to_string()];
+    all.extend(args.iter().cloned());
+    std::process::Command::new("systemd-run").args(&all).env_remove("AGENTOS_IN_SCOPE").current_dir(repo_root()).output().expect("systemd-run")
+}
+
+#[test]
+fn agentos_moves_itself_into_a_delegated_scope() {
+    // D-105: no `systemd-run … -p Delegate=yes` prefix needed any more.
+    let t = TestEnv::new("hard-self-scope");
+    let script = repo_root().join("examples/scripts/fix-demo.toml");
+    let out = from_a_plain_scope(&t, &run_args(&t, &script, &demo_repo()));
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let id = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    assert_eq!(id, only_execution(&t));
+    let events = t.events(&id);
+    assert!(events.iter().any(|e| e["type"] == "execution.finished" && e["status"] == "completed"), "{events:#?}");
+    assert_eq!(exec_exit_codes(&t, &events), vec![Some(1), Some(0)], "the sandboxed commands really ran");
+}
+
+#[test]
+fn check_reports_everything_without_starting_anything() {
+    let t = TestEnv::new("hard-check");
+    let policy = t.policy.display().to_string();
+    let repo = demo_repo().display().to_string();
+    let good = t.agentos(&["check", "--policy", &policy, "--repo", &repo]);
+    for needle in ["host: ok", "policy: ok", "programs: ok", "pytest -> ", "repo: ok (4 files", "left out by deny rules: .env"] {
+        assert!(good.contains(needle), "`{needle}` is missing from:\n{good}");
+    }
+    // Two mistakes at once: both are reported, in one go.
+    let bad_policy = t.write_script("bad.toml", &std::fs::read_to_string(&t.policy).unwrap().replace("memory_mb", "memory"));
+    let out = t.output(&["check", "--policy", bad_policy.to_str().unwrap(), "--repo", "/no/such/repo"]);
+    let shown = String::from_utf8_lossy(&out.stdout);
+    assert!(!out.status.success());
+    assert!(shown.contains("host: ok") && shown.contains("policy: PROBLEM") && shown.contains("unknown field `memory`"), "{shown}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("problem(s) found"));
+    // A wrong repo with a good policy.
+    let out = t.output(&["check", "--policy", &policy, "--repo", "/no/such/repo"]);
+    assert!(!out.status.success() && String::from_utf8_lossy(&out.stdout).contains("repo: PROBLEM"));
+    assert!(!t.state.join("executions").exists(), "check must not create an execution");
+    // From a plain scope it moves itself, like `run`.
+    let out = from_a_plain_scope(&t, &["check".to_string(), "--policy".into(), policy]);
+    assert!(out.status.success() && String::from_utf8_lossy(&out.stdout).contains("host: ok"), "{}", String::from_utf8_lossy(&out.stdout));
+}
+
+#[test]
+fn rm_deletes_what_is_safe_to_delete_and_says_why_not_otherwise() {
+    let t = TestEnv::new("hard-rm");
+    let demo = repo_root().join("examples/scripts/fix-demo.toml");
+    let done1 = t.run_script(demo.to_str().unwrap());
+    let done2 = t.run_script(demo.to_str().unwrap());
+    // One that was cut off (killed after call 6's effect) and can be resumed.
+    let args = run_args(&t, &demo, &demo_repo());
+    let st = t.cmd(&args.iter().map(String::as_str).collect::<Vec<_>>()).env("AGENTOS_CRASH_AT", "P4").env("AGENTOS_CRASH_CALL", "6").output().unwrap();
+    assert!(!st.status.success());
+    let dir = |id: &str| t.exec_dir(id);
+    let mut ids: Vec<String> = std::fs::read_dir(t.state.join("executions")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    ids.retain(|i| i != &done1 && i != &done2);
+    let cut = ids.pop().unwrap();
+    // An old one: a finished execution under a name from 2020.
+    let old = "20200101-000000000-abcdef";
+    assert!(std::process::Command::new("cp").arg("-a").arg(dir(&done2)).arg(dir(old)).status().unwrap().success());
+
+    // Nothing named: refuse, delete nothing.
+    assert!(!t.output(&["rm"]).status.success());
+    // A dry run deletes nothing.
+    let shown = t.agentos(&["rm", "--dry-run", &done1]);
+    assert!(shown.contains(&format!("would remove {done1}")) && dir(&done1).exists());
+    // A finished execution goes.
+    let shown = t.agentos(&["rm", &done1]);
+    assert!(shown.contains(&format!("removed {done1}")) && !dir(&done1).exists(), "{shown}");
+    // An unknown id, a path, an unfinished execution: kept, with the reason, and an error.
+    for (id, why) in [("nope", "no execution"), ("../executions", "no execution"), (cut.as_str(), "can still be resumed")] {
+        let out = t.output(&["rm", id]);
+        assert!(!out.status.success(), "{id}");
+        assert!(String::from_utf8_lossy(&out.stdout).contains(why), "{id}: {}", String::from_utf8_lossy(&out.stdout));
+    }
+    assert!(dir(&cut).exists() && t.state.join("executions").exists());
+    // By age: only the one from 2020.
+    let shown = t.agentos(&["rm", "--older-than", "30"]);
+    assert!(shown.contains(&format!("removed {old}")) && shown.contains("1 removed"), "{shown}");
+    assert!(dir(&done2).exists() && dir(&cut).exists());
+    // --all without --force keeps the unfinished one and is not an error.
+    let shown = t.agentos(&["rm", "--all"]);
+    assert!(shown.contains(&format!("removed {done2}")) && shown.contains(&format!("kept {cut}")), "{shown}");
+    // It is still resumable, as promised.
+    t.agentos(&["run", "--quiet", "--resume", &cut]);
+    // A locked folder inside an execution does not stop the delete (B-010's lesson).
+    use std::os::unix::fs::PermissionsExt;
+    let locked = dir(&cut).join("work/src/locked");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::write(locked.join("f"), "x").unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    t.agentos(&["rm", &cut]);
+    assert_eq!(std::fs::read_dir(t.state.join("executions")).unwrap().count(), 0);
+}
+
+/// Start a run whose one command sleeps, and wait until that command runs.
+fn start_sleeping_run(t: &TestEnv) -> (std::process::Child, String) {
+    let script = t.write_script("s.toml", &format!("task = \"sleep\"\n{}", exec_step("open(\"/work/src/ready\", \"w\").write(\"x\")\ntime.sleep(30)")));
+    let args = run_args(t, &script, &demo_repo());
+    let child = t.cmd(&args.iter().map(String::as_str).collect::<Vec<_>>()).stderr(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).spawn().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let ready = std::fs::read_dir(t.state.join("executions")).ok().and_then(|mut d| d.next()).map(|e| e.unwrap().path().join("work/src/ready").exists()).unwrap_or(false);
+        assert!(Instant::now() < deadline, "the command never started");
+        if ready {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let id = only_execution(t);
+    (child, id)
+}
+
+#[test]
+fn stopping_a_run_says_how_to_go_on_and_the_run_can_go_on() {
+    for (signal, code) in [("INT", 130), ("TERM", 143), ("HUP", 129)] {
+        let t = TestEnv::new(&format!("hard-stop-{signal}")).with_policy_text(&policy_with_python());
+        let (child, id) = start_sleeping_run(&t);
+        // While it runs, it cannot be deleted.
+        let out = t.output(&["rm", "--force", &id]);
+        assert!(!out.status.success() && String::from_utf8_lossy(&out.stdout).contains("is working on it"), "{}", String::from_utf8_lossy(&out.stdout));
+        assert!(std::process::Command::new("kill").arg(format!("-{signal}")).arg(child.id().to_string()).status().unwrap().success());
+        let out = child.wait_with_output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(code), "{signal}: {err}");
+        assert!(err.contains(&format!("agentos run --resume {id}")) && err.contains("nothing is lost"), "{signal}:\n{err}");
+        assert!(t.agentos(&["status", &id]).contains("interrupted"), "{signal}");
+        // Recovery treats it like any cut-off command: rolled back, then done again.
+        let shown = t.agentos(&["recover", &id]);
+        assert!(shown.contains("NOT APPLIED"), "{signal}: {shown}");
+        assert_work_equals_last_checkpoint(&t, &id);
+        assert!(!t.exec_dir(&id).join("work/src/ready").exists(), "{signal}: the stopped command's file was rolled back");
+    }
 }

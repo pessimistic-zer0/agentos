@@ -9,6 +9,7 @@ pub mod blob;
 pub mod checkpoint;
 pub mod faults;
 pub mod gateway;
+pub mod interrupt;
 pub mod log;
 pub mod policy;
 pub mod recovery;

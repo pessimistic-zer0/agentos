@@ -128,11 +128,27 @@ pub struct LlmAgent {
     /// file, used to warn when a write drops many lines.
     last_call: Option<ToolCall>,
     seen: std::collections::HashMap<String, String>,
+    /// The last command the model ran did not exit with 0, and it has not
+    /// run one since. A model that stops in this state is not done (D-107).
+    last_command_failed: bool,
+    /// The model was already told once that it stopped too early.
+    nudged_to_go_on: bool,
+}
+
+/// Start of the message that tells the model it stopped too early. Also how
+/// `restore` finds out, from the log, that the message was already sent.
+const GO_ON_MARK: &str = "[agentos] You answered without a tool call";
+
+fn command_failed(result: &ToolResult) -> Option<bool> {
+    match &result.output {
+        Some(ToolOutput::Exec(e)) => Some(e.exit_code != Some(0)),
+        _ => None,
+    }
 }
 
 impl LlmAgent {
     pub fn new(cfg: LlmConfig) -> LlmAgent {
-        let mut a = LlmAgent { cfg, messages: Vec::new(), unlogged: Vec::new(), pending: None, repeats: Default::default(), last_key: None, last_call: None, seen: Default::default() };
+        let mut a = LlmAgent { cfg, messages: Vec::new(), unlogged: Vec::new(), pending: None, repeats: Default::default(), last_key: None, last_call: None, seen: Default::default(), last_command_failed: false, nudged_to_go_on: false };
         let task = a.cfg.task.clone();
         a.push(json!({"role": "system", "content": SYSTEM_PROMPT}));
         a.push(json!({"role": "user", "content": task}));
@@ -240,6 +256,9 @@ impl Agent for LlmAgent {
     fn next_action(&mut self, last: Option<&ToolResult>) -> Result<Action> {
         // Answer the model's open tool call with the gateway's result.
         if let (Some(result), Some(id)) = (last, self.pending.take()) {
+            if let Some(failed) = command_failed(result) {
+                self.last_command_failed = failed;
+            }
             let mut content = render_result(result);
             if let Some(warning) = self.track_file_content(result) {
                 content.push_str(&warning);
@@ -269,6 +288,22 @@ impl Agent for LlmAgent {
                 let mut summary: String = text.chars().take(MAX_SUMMARY_CHARS).collect();
                 if text.chars().count() > MAX_SUMMARY_CHARS {
                     summary.push_str(" [...]");
+                }
+                // Words instead of a tool call normally mean "done". But if
+                // the last command the model ran failed, it is not done: it
+                // is told so once, and if it stops again the run is recorded
+                // as stopped, not as completed (D-107).
+                if self.last_command_failed {
+                    if self.nudged_to_go_on {
+                        return Ok(Action::GiveUp { reason: format!("the model stopped while the last command it ran was still failing. Its last words: {summary}") });
+                    }
+                    self.nudged_to_go_on = true;
+                    self.push(json!({"role": "user", "content": format!(
+                        "{GO_ON_MARK}, but the last command you ran did not succeed, so the task is not finished. \
+                         Go on with a tool call: read the error, change the code, run the command again. \
+                         If you cannot finish the task, answer with one sentence that starts with GIVE UP."
+                    )}));
+                    continue;
                 }
                 return Ok(Action::Finish { summary });
             };
@@ -335,6 +370,8 @@ impl Agent for LlmAgent {
             .collect();
         self.unlogged.clear();
         self.pending = None;
+        self.last_command_failed = history.iter().rev().find_map(command_failed).unwrap_or(false);
+        self.nudged_to_go_on = self.messages.iter().any(|m| m["role"] == "user" && m["content"].as_str().is_some_and(|c| c.starts_with(GO_ON_MARK)));
         let made = self.messages.iter().filter(|m| m["tool_calls"].is_array() && is_valid_call(m)).count();
         let last_is_call = self.messages.last().map(|m| m["tool_calls"].is_array()).unwrap_or(false);
         if last_is_call {

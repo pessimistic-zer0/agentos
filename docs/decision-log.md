@@ -2469,6 +2469,117 @@ What a policy author must know: everything under a read-only mount can be read b
 
 **Concepts to learn.** Paging through data; why a truncated answer must say that it is truncated.
 
+### D-103 — `agentos rm`: executions are deleted by a command, never automatically
+- **Date:** 2026-11-14
+- **Status:** Taken
+- **Area:** tooling
+- **ADR:** none
+
+**In plain words.** Every run leaves a folder with its log, its workspace and one copy of the workspace per change, and nothing ever removed them. `agentos rm` deletes the ones you name, or all older than some number of days, or all. It will not delete an execution that a runtime is working on, and unless you add `--force` it will not delete one that was interrupted, because that one can still be resumed and has no patch yet.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| A command: ids, `--older-than <days>`, `--all`, `--force`, `--dry-run` | Taken | The user decides; nothing disappears by surprise |
+| Delete old executions automatically at the start of a run | Discarded | The log is the record of what an agent did; a tool that erases its own records unasked is hard to trust |
+| Delete only the checkpoints and keep the log | Discarded | Useful, but a second mode to explain; `rm` of the whole execution was the gap that was met |
+
+**What this means for the code.** `runtime::remove_execution` (returns `Removed`, `InUse`, `Unfinished` or `NotFound`), `workspace::all_execution_dirs` and `age_in_days` (the age is read from the date in the id, so it does not depend on file times). The delete holds the execution's lock and uses `checkpoint::remove_tree`, so a folder that a command locked does not stop it (D-086). An id is treated as a folder name only: `rm ../x` finds nothing. Naming an execution that is then kept is an error; `--all` skipping a running one is not.
+
+**Evidence.** `tests/hardening.rs::rm_deletes_what_is_safe_to_delete_and_says_why_not_otherwise` (dry run, a finished one, an unknown id, a path, an unfinished one with and without resuming it, by age, `--all`, a locked folder inside) and the "in use" case in `stopping_a_run_says_how_to_go_on_and_the_run_can_go_on`; `workspace::tests::age_is_read_from_the_id`. `nix` preset, 2026-11-15. Not yet run on `fhs`.
+
+**Concepts to learn.** Why destructive commands default to refusing.
+
+### D-104 — `agentos check`: the startup checks, the policy and the copy, without starting anything
+- **Date:** 2026-11-14
+- **Status:** Taken
+- **Area:** tooling
+- **ADR:** none
+
+**In plain words.** Before, the only way to find out whether a machine, a policy and a repository would work was to start a run and read the error. `agentos check` does everything `run` checks first and stops there. It reports each topic on its own (the machine, the policy file, the programs the policy allows, the repository), so two mistakes are shown in one go. For the repository it says how many files and megabytes would be copied and what the policy leaves out.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| One command that runs all checks and prints one block per topic; exit code 1 if any failed | Taken | It is what a person does before a first run, and what a script can test for |
+| A `--dry-run` flag on `run` | Discarded | `run` needs an agent and a task; checking should not |
+| Stop at the first problem | Discarded | Fixing problems one start at a time was the complaint |
+
+**What this means for the code.** `runtime::check`, `workspace::survey` (walks the repository as the copy would, copies nothing). No execution folder is created.
+
+**Evidence.** `tests/hardening.rs::check_reports_everything_without_starting_anything`. By hand on the trial project: `repo: ok (2780 files, 29.7 MB would be copied …)`, which is the number that should make a user add a `skip` rule. `nix` preset, 2026-11-15. Not yet run on `fhs`.
+
+**Concepts to learn.** None new.
+
+### D-105 — agentos moves itself into a delegated cgroup scope
+- **Date:** 2026-11-14
+- **Status:** Taken (D-013 stands: the cgroup is still delegated by systemd; only who types the command changes)
+- **Area:** sandbox
+- **ADR:** none
+
+**In plain words.** The sandbox needs a control group that systemd has handed to the user, and the way to get one is to start the program through `systemd-run --user --scope -p Delegate=yes`. Until now the user had to type that in front of every command. Now `agentos run` and `agentos check` notice when they are not in such a group and start themselves again through that same command.
+
+**The problem.** Walk-through: every command needs a long prefix, and without it the first thing a newcomer sees is an error about cgroups.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| If not delegated: try `systemd-run … true`; if that works, `exec` `systemd-run … agentos <same arguments>` with `AGENTOS_IN_SCOPE=1` | Taken | `systemd-run --scope` turns into the command it starts, so there is no extra parent: signals, exit codes and `kill -9` reach agentos as before, which the fault-injection suite depends on |
+| Start `systemd-run` as a child and wait for it | Discarded | An extra process between the user and the runtime; a kill of the parent would no longer be a kill of the runtime |
+| Ask systemd for a scope over D-Bus | Discarded | A new dependency for what one `exec` does |
+| Keep the prefix | Discarded | It is the first thing every user trips over |
+
+**What this means for the code.** `main.rs::enter_delegated_scope`. The trial with `true` comes first because after `exec` there is no way back: if systemd cannot give a scope, agentos carries on and the startup check explains, as before (D-089). The scope gets a name of its own (`agentos-<pid>-<nanoseconds>`): systemd-run names scopes after the process id, and the id survives `exec`, so the default name collides when agentos was itself started by `systemd-run --scope`. `AGENTOS_IN_SCOPE` (already used by `demo.sh` and `bench/run.sh`) marks the second start and, set by hand, switches this off.
+
+**Evidence.** `tests/hardening.rs::agentos_moves_itself_into_a_delegated_scope` (started from a plain scope, the demo task completes and its commands ran in the sandbox) and the same for `check`. The name collision was found by that test: `Failed to start transient scope unit: Unit run-p….scope was already loaded`. `without_a_delegated_cgroup_the_message_starts_with_what_to_do` now sets `AGENTOS_IN_SCOPE=1` to reach the message. By hand from a terminal without the prefix: the demo run completed. `nix` preset, 2026-11-15. Not yet run on `fhs`.
+
+**Concepts to learn.** `exec` replacing a process; why a process id is not a unique name over time.
+
+### D-106 — Stopping a run (Ctrl-C, a closed terminal, `kill`) prints how to go on, then stops like a crash
+- **Date:** 2026-11-14
+- **Status:** Taken
+- **Area:** durability
+- **ADR:** none
+
+**In plain words.** Pressing Ctrl-C ended a run without a word. The execution was not lost, it could be resumed, but nothing said so. Now agentos prints the two commands (go on, or only settle the call that was cut off) and stops at once.
+
+**The problem.** Walk-through (read from the code: there was no signal handler).
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| A handler for SIGINT, SIGTERM and SIGHUP that writes a prepared text and calls `_exit` | Taken | Stopping in the middle is the case the log and recovery were built for and are tested on. The handler adds a message and nothing else |
+| Finish the current call, write a clean "interrupted" record, then exit | Discarded | A second way of stopping, with its own states, that no test kills at every point. And a 60-second command would make Ctrl-C take 60 seconds |
+| Roll the workspace back in the handler | Discarded | Work in a signal handler; recovery already does it, safely, later |
+
+**What this means for the code.** `src/interrupt.rs`. The text is built ahead of time (when the execution id is known, when recovery starts, when the run finishes) and stored as a leaked buffer behind atomics, because a handler may neither allocate nor format. A signal that is ignored when agentos starts stays ignored (`nohup`, background jobs). Exit codes are the usual 128 + signal number. The sandboxed command dies with the runtime as before (`PR_SET_PDEATHSIG`, the PID namespace).
+
+**Evidence.** `tests/hardening.rs::stopping_a_run_says_how_to_go_on_and_the_run_can_go_on`: for INT, TERM and HUP, during a sleeping command: exit codes 130, 143, 129; the message names the execution; `status` says interrupted; `recover` rolls the command back and the workspace equals its checkpoint. `nix` preset, 2026-11-15. Not yet run on `fhs`.
+
+**Concepts to learn.** Signals; what a handler may and may not do; why "stop cleanly" can be less safe than "stop".
+
+### D-107 — A model that stops while its last command is still failing is told once, then the run is `stopped`, not `completed`
+- **Date:** 2026-11-14
+- **Status:** Taken
+- **Area:** tooling
+- **ADR:** none
+
+**In plain words.** The LLM agent ends a run by answering with words and no tool call. In the trial a small model ran the tests, saw them fail, wrote a sentence about what it would have to change, and stopped. The run was recorded as `COMPLETED`. Now the runtime remembers whether the last command the model ran succeeded. If it did not and the model stops, it is told once that the task is not finished. If it stops again, the run ends as `stopped`, with the model's last words.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| "The last command exited with 0" as the sign of being done; one reminder; then `stopped` | Taken | It needs no knowledge of what the task is. It uses the one objective signal the runtime has |
+| Trust the model's words | Discarded | That is what recorded a failed run as completed |
+| Keep reminding until the call budget is used up | Discarded | A model that cannot do the task would burn the budget saying so |
+| Require a passing test command before any `completed` | Discarded | Some tasks have no test command, or legitimately end after a read |
+
+**What this means for the code.** `agent/llm.rs`: `last_command_failed`, `nudged_to_go_on`, both rebuilt from the log on resume (the reminder starts with a fixed phrase so it can be found). The reminder is a `user` message and is logged like every other message (ADR 0005). Not covered, and said here: a model that never runs a command, or that edits after a passing run and stops without running it again.
+
+**Evidence.** `tests/llm_agent.rs`: `a_model_that_stops_while_the_tests_fail_is_told_once_then_recorded_as_stopped` (status `stopped`, three requests, the reminder in the log) and `a_model_that_goes_on_when_told_finishes_as_completed`. Not tried again with the real 4B model. `nix` preset, 2026-11-15. Not yet run on `fhs`.
+
+**Concepts to learn.** Why a system should use a signal it can observe (an exit code) over one it is told (a sentence).
+
 ---
 
 ## Still open

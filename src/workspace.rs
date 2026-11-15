@@ -86,6 +86,86 @@ pub fn list_executions(state_dir: &Path) -> Result<Vec<String>> {
     Ok(ids)
 }
 
+/// Every folder under `executions/`, also ones without a log (a run that
+/// died before its log was created). For `agentos rm`.
+pub fn all_execution_dirs(state_dir: &Path) -> Result<Vec<String>> {
+    let dir = state_dir.join("executions");
+    let mut ids = Vec::new();
+    if dir.exists() {
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                if let Some(name) = entry.file_name().to_str() {
+                    ids.push(name.to_string());
+                }
+            }
+        }
+    }
+    ids.sort();
+    Ok(ids)
+}
+
+/// How many whole days ago an execution was created, from the date its id
+/// starts with (`YYYYMMDD-…`, UTC). `None` if the name is not an id.
+pub fn age_in_days(id: &str) -> Option<i64> {
+    let d = id.get(..8)?;
+    if !d.bytes().all(|b| b.is_ascii_digit()) || id.as_bytes().get(8) != Some(&b'-') {
+        return None;
+    }
+    let (y, m, day): (i64, i64, i64) = (d[..4].parse().ok()?, d[4..6].parse().ok()?, d[6..8].parse().ok()?);
+    if !(1..=12).contains(&m) || !(1..=31).contains(&day) {
+        return None;
+    }
+    // Days since 1970-01-01 for a calendar date (Howard Hinnant's
+    // `days_from_civil`): years are counted from March so that the leap day
+    // is the last day of a year.
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y.rem_euclid(400);
+    let doy = (153 * ((m + 9) % 12) + 2) / 5 + day - 1;
+    let created = era * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719_468;
+    let today = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs() as i64 / 86_400;
+    Some(today - created)
+}
+
+/// What `create` would do with `repo`, without copying anything: how many
+/// files and bytes would be copied and which paths left out. For
+/// `agentos check`.
+pub fn survey(repo: &Path, policy: &Policy) -> Result<(CopyReport, u64)> {
+    fn walk(src: &Path, rel: &str, policy: &Policy, report: &mut CopyReport, bytes: &mut u64) -> Result<()> {
+        for entry in fs::read_dir(src).with_context(|| format!("reading {}", src.display()))? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                bail!("file name {:?} in {} is not UTF-8; v1 does not support that", name, src.display());
+            };
+            let child_rel = if rel.is_empty() { name.to_string() } else { format!("{rel}/{name}") };
+            if policy.denied(&child_rel).is_some() {
+                report.denied.push(child_rel);
+            } else if policy.skipped(&child_rel).is_some() {
+                report.skipped.push(child_rel);
+            } else {
+                let ft = entry.file_type()?;
+                if ft.is_dir() {
+                    walk(&entry.path(), &child_rel, policy, report, bytes)?;
+                } else if ft.is_file() {
+                    report.files_copied += 1;
+                    *bytes += entry.metadata()?.len();
+                } else if !ft.is_symlink() {
+                    report.skipped_special.push(child_rel);
+                }
+            }
+        }
+        Ok(())
+    }
+    let mut report = CopyReport::default();
+    let mut bytes = 0;
+    walk(repo, "", policy, &mut report, &mut bytes)?;
+    report.denied.sort();
+    report.skipped.sort();
+    Ok((report, bytes))
+}
+
 /// A new execution id: `YYYYMMDD-HHMMSSmmm-xxxxxx` (UTC, to the millisecond).
 /// Ids sort by creation time, which `agentos trace` and `status` rely on to
 /// find the latest execution. The suffix (from the clock's nanoseconds and
@@ -211,6 +291,19 @@ mod tests {
         assert!(fs::metadata(dest.join("to-env")).is_err());
         fs::remove_dir_all(&base)?;
         Ok(())
+    }
+
+    #[test]
+    fn age_is_read_from_the_id() {
+        assert_eq!(age_in_days(&new_execution_id()), Some(0));
+        let today = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64 / 86_400;
+        assert_eq!(age_in_days("19700101-000000000-abcdef"), Some(today));
+        assert_eq!(age_in_days("19700102-000000000-abcdef"), Some(today - 1));
+        assert_eq!(age_in_days("20000301-000000000-abcdef"), Some(today - 11_017), "the day after a leap day");
+        assert_eq!(age_in_days("20000229-000000000-abcdef"), Some(today - 11_016));
+        for bad in ["nope", "2026111-190203456-abcdef", "20261340-000000000-abcdef", "20261111"] {
+            assert_eq!(age_in_days(bad), None, "{bad}");
+        }
     }
 
     #[test]
