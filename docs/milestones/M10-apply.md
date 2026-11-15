@@ -9,6 +9,8 @@
 
 Written for a reader new to Rust and Linux internals. Plain words first, the real term next to it.
 
+> **Note, added 2026-11-15 after the tag:** verified on `fhs` by CI run 43691133260 on `d98eab1` (D-110). The first run, 43690755406, failed on a false note that only Ubuntu could show (B-014, fixed by D-109). The lines below that say "not yet verified" describe the state when this document was written.
+
 ## 1. Aim
 
 A run ends with a patch, and M8 taught the patch to list what it cannot carry. The user still had to carry those things over by hand. This milestone adds the command that does it: `agentos apply <id>` copies the result of a finished execution into the repository.

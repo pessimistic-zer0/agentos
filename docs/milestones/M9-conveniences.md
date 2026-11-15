@@ -9,6 +9,8 @@
 
 Written for a reader new to Rust and Linux internals. Plain words first, the real term next to it.
 
+> **Note, added 2026-11-15 after the tag:** verified on `fhs` by CI run 43691133260 on `d98eab1` (D-110). The first run, 43690755406, failed on a false note that only Ubuntu could show (B-014, fixed by D-109). The lines below that say "not yet verified" describe the state when this document was written.
+
 ## 1. Aim
 
 M8 made AgentOS usable on a real project and wrote down, in the parking lot, twelve things that still got in a user's way. Prince asked why not build them all. M9 builds ten: the ones that were seen to cost a user time and that do not change what the runtime is allowed to do. Two are held: a command that writes into the original repository, and file tools for binary files.

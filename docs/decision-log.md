@@ -2634,6 +2634,31 @@ What a policy author must know: everything under a read-only mount can be read b
 
 **Concepts to learn.** False positives; testing the silent case.
 
+### D-110 — M9 and M10 count as verified on `fhs` by CI run 43691133260
+- **Date:** 2026-11-15
+- **Status:** Taken (same rule as D-072; the fifth such entry)
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** M9 (the conveniences) and M10 (`agentos apply`) were built on NixOS. The first CI run on them failed on one test and found a bug that only Ubuntu could show (B-014). With that fixed, Prince pushed again and both jobs are green. So M9 and M10 now pass on both systems.
+
+**The problem.** The M9 and M10 documents and CLAUDE.md say "not yet verified on `fhs`"; the first run (43690755406) was red and had left most suites unrun.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Record the green run on `d98eab1`, name the red one before it, update CLAUDE.md, add dated notes to the two milestone documents | Taken | The rule from D-072; a red run that found a bug belongs in the record as much as the green one |
+
+**What this means for the code.** No code change.
+
+**Evidence.** <https://github.com/pessimistic-zer0/agentos/actions/runs/43691133260>, commit `d98eab1`, both jobs `success`, read with `gh run view --log` on 2026-11-15. The run before it, <https://github.com/pessimistic-zer0/agentos/actions/runs/43690755406> on `29f030f`, failed in both jobs (B-014).
+- Job `fhs`: lint clean; `make test` 27 + 6 + 1 + 10 + 14 + 22 + 5 + 4 + 32 + 4 = 125 passed, 0 failed. That includes, for the first time on Ubuntu: `tests/apply.rs` (6), the self-start in a scope, `rm`, `check`, the three stop signals and partial reads in `tests/hardening.rs` (22), the skip, scratch and note tests in `tests/deps.rs` (10), and the reminder tests in `tests/llm_agent.rs` (5). `make demo` ran through. 200-kill step: 4,800 runs, 4,800 killed, 0 violations, 0 duplicated effects; external cells 1,600 runs, 0 violations, 0 duplicated effects.
+- Job `fhs-apparmor` (restriction on): refused without the profile at the same step as before; the demo task completed with the profile at `/usr/local/bin/agentos` and again bound to the test binary; `benign` 1, `deps` 10, `security` 32, `vertical_slice` 4 passed.
+- The 200-kill step took 1,653 s and recovery's p50 was 32.3 ms, p99 362 ms. The p50 matches the previous run on this kind of runner (31.3 ms); the p99 is higher than any run before (112.7 ms in the previous one, 45 to 55 ms on the development machine). Not looked into: the counts are clean and CI runners vary, but if it shows again it deserves a look.
+- Not run on Ubuntu, as before: the benchmarks. Not run in CI at all: the real-project trial and anything with a real model.
+
+**Concepts to learn.** None new.
+
 ---
 
 ## Still open
