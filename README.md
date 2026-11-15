@@ -8,13 +8,14 @@ It is a learning and portfolio project, not a product. It does one thing: one ag
 
 ## Status
 
-**v0.1.** Built on one machine (NixOS 26.05, Linux 7.1.8, btrfs, `nix` policy preset). The test suites also pass in CI on Ubuntu 24.04 with the `fhs` preset.
+**Usable on a real project, on two tested systems, with its limits written down.** The last tagged release is `v0.1`; the work since then is on `main`.
 
-- **Verified on two systems, no more.** NixOS on the development machine, and Ubuntu 24.04 in CI ([run 43385661105](https://github.com/pessimistic-zer0/agentos/actions/runs/43385661105), 2026-11-13: lint, all test suites, and 4,800 kills with 0 violations). The first two CI runs failed and found two real bugs (B-007, B-008 in [`docs/bugs.md`](docs/bugs.md)). Debian, Fedora and Arch use the same `fhs` preset and have not been run. On Ubuntu the benchmarks and `make demo` have not been run either.
+- **What it has been run on.** The demo; a Python project with real PyPI packages in a virtualenv; a Node project with npm packages; a Rust project. On each, tickets were fixed through the gateway and the result applied to a fresh clone, where the project's own tests passed ([`docs/results/real-repo-trial-nix.md`](docs/results/real-repo-trial-nix.md), [`second-stack-trial-nix.md`](docs/results/second-stack-trial-nix.md)). A local 4-billion-parameter model solved a one-line ticket through it and reached its own limit on a two-file one.
+- **Where it is verified.** NixOS 26.05 on the development machine (`nix` preset), and Ubuntu 24.04 in CI (`fhs` preset), including a job that keeps Ubuntu's restriction on user namespaces switched on and uses the AppArmor profile that comes with agentos. Latest green run on everything but the newest change: [43733350171](https://github.com/pessimistic-zer0/agentos/actions/runs/43733350171). Debian, Fedora and Arch use the same `fhs` preset and have not been run.
+- **What the suites say.** 4,800 kills at 8 points with 0 invariant violations, 32 attacks with 0 escapes, 130 tests in all. See [What it shows](#what-it-shows).
+- **What it is not.** Not hardened like a container runtime (no seccomp filter, no disk limit), no network for commands, one agent at a time. Read [what it does not do](#what-it-does-not-do) before trusting it with anything.
+- **How it got here.** Fourteen bugs were found on the way, eight by the suites and CI, six by using the program by hand on things the suites did not try; each has a note in [`docs/bugs.md`](docs/bugs.md), and the six are told as a story in [`docs/what-the-suites-missed.md`](docs/what-the-suites-missed.md). The history by milestone is in [`docs/milestones/`](docs/milestones/) (M0 to M10).
 - Licensed under MIT or Apache-2.0, at your option (see [License](#license)).
-- **After v0.1: one bonus tool.** `ext.call` sends a request to a (fake) outside service, something a checkpoint cannot undo. It is off unless a policy allows it. See [the bonus](#the-bonus-a-call-that-cannot-be-rolled-back).
-- **After that: what a first user needs** (M8, M9). Clearer first messages, a patch that says what it leaves out, packages from outside the repository, an AppArmor profile for Ubuntu; then `agentos check`, `agentos rm` and `agentos apply`, no `systemd-run` prefix, a message when a run is stopped, reading part of a large file, and policy lists for folders to skip and for caches. M9 and `apply` are verified on both systems ([CI run 43691133260](https://github.com/pessimistic-zer0/agentos/actions/runs/43691133260)). See [on your own project](#on-your-own-project). Verified on NixOS and, in [CI run 43590153676](https://github.com/pessimistic-zer0/agentos/actions/runs/43590153676), on Ubuntu 24.04, where a second job runs the sandbox through the profile with Ubuntu's restriction left on.
-- Read [what it does not do](#what-it-does-not-do) before trusting it with anything.
 
 ## The demo
 
@@ -88,7 +89,7 @@ Three suites, one command (`nix develop -c make eval`). Results of record, with 
 
 A real LLM also completed the demo task (a local 4B model under llama.cpp), including after being killed mid-run. Three earlier attempts failed; both the failures and the successful run are in `docs/results/`. This shows the loop works end to end with a real model, not that the agent is good.
 
-The suites found seven bugs in the runtime itself (two of them only on the Ubuntu CI runs); each has a short note in [`docs/bugs.md`](docs/bugs.md). Three more (B-009 to B-011) were found after v0.1 by using the program by hand, in places no suite looked; they are in the same file.
+The suites and CI found eight bugs in the runtime itself (three of them only on Ubuntu); six more were found after v0.1 by using the program by hand, in places no suite looked. Each has a short note in [`docs/bugs.md`](docs/bugs.md).
 
 ## The bonus: a call that cannot be rolled back
 
@@ -306,7 +307,9 @@ This project was built to be studied afterwards, so the written record is as muc
 | [`docs/decisions/`](docs/decisions/) | 12 short ADRs for the hard-to-undo decisions |
 | [`docs/threat-model.md`](docs/threat-model.md) | What is protected, each attack with its defence and test, what is out of scope |
 | [`docs/recovery-semantics.md`](docs/recovery-semantics.md) | What a crash leaves and what recovery decides, per crash point and tool |
-| [`docs/bugs.md`](docs/bugs.md) | Bugs the test suites found in the runtime |
+| [`docs/bugs.md`](docs/bugs.md) | Every bug found in the runtime: what was done, what went wrong, why, the fix, the lesson |
+| [`docs/what-the-suites-missed.md`](docs/what-the-suites-missed.md) | A short write-up of the six bugs that only hands-on use found |
+| [`docs/project-overview.md`](docs/project-overview.md) | One document that explains the whole project in plain words |
 | [`docs/results/`](docs/results/) | Results of record with raw data |
 
 ## Development

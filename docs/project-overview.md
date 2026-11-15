@@ -2,7 +2,7 @@
 
 A single document that explains what AgentOS is, why it exists, what each feature is for, what is built, and what is still to come. For the full plan, see `AgentOS v1 — Scoped Design.md`. For every decision and its reasons, see `docs/decision-log.md`.
 
-Status on 2026-11-13: **v0.1 is tagged locally.** All seven milestones (M0–M6) are done and tested on the `nix` preset (NixOS). The `fhs` preset (Ubuntu and similar systems) is **not yet verified** (see [What is left](#6-what-is-left-to-do)).
+Status on 2026-11-15: **`v0.1` is the last tagged release; `main` is well past it** (milestones M7 to M10 and two changes after). Everything up to commit `2a6a3d1` is verified on both presets: `nix` on the development machine and `fhs` (Ubuntu 24.04) in CI. This overview was first written on 2026-11-13, before that work; sections 1 to 5 still describe the core correctly. What was added since is in section 5.4, and section 6 is rewritten.
 
 ---
 
@@ -203,22 +203,38 @@ Seven bugs in the runtime itself were found by the suites or the demo, each with
 
 ---
 
+### 5.4 Added after v0.1 (M7 to M10, 2026-11-13 to 2026-11-15)
+
+| What | In plain words | Where |
+|---|---|---|
+| A fifth tool, `ext.call` (off by default) | A request to an outside service, which a checkpoint cannot undo; settled after a crash by sending the same request with the same key | M7, ADR 0012 |
+| Six more bugs fixed (B-009 to B-014) | Found by hand, by a real project, by the benchmarks and by CI on Ubuntu | `docs/bugs.md`, `docs/what-the-suites-missed.md` |
+| Packages from outside the repo | A virtualenv or a folder of packages is mounted read-only; the policy can set environment variables | M8, D-091, D-092 |
+| Ubuntu without switching off a system-wide protection | An AppArmor profile for agentos; the startup check tries instead of reading switches | M8, D-093, D-096 |
+| A patch that says what it cannot carry, and `agentos apply` that carries it | Binary and empty files, modes, empty folders | M8, M10, D-090, D-108 |
+| Commands for everyday use | `agentos check`, `rm`, `apply`; no `systemd-run` prefix; a message on Ctrl-C | M9, M10 |
+| Policy lists | `skip` (not copied), `scratch` (caches), `deny_except`, `helpers` (programs that commands start) | M9, D-099, D-100, D-112 |
+| Reading part of a large file | `fs.read` with `start_line` and `max_lines` | M9, D-102 |
+| A model that stops early or whose reply is cut off | Reminded once, then the run ends as `stopped` with its patch | M9, D-107, D-111 |
+| Tried on real-shaped projects | Python (PyPI packages), Node (npm packages), Rust | `docs/results/real-repo-trial-nix.md`, `second-stack-trial-nix.md` |
+
+---
+
 ## 6. What is left to do
 
-### 6.1 To close v0.1 (only Prince can do these)
+### 6.1 Open now
 
 | Item | State | What is needed |
 |---|---|---|
-| **`fhs` preset (Ubuntu) verified** | The first CI run on Ubuntu 24.04 passed lint, unit tests, the security and benign suites, but the 200-kill suite had **1 violation in 4,800 runs** (cell P5 `exec`, bug B-007). The fix (D-070: the `cp` child gets `PR_SET_PDEATHSIG`) and its reproducing test are in the working tree, **not yet committed** at the time of writing. | Commit the fix, push, and get a green CI run. Only then change the documents that say "not yet verified". |
-| **Demo on Ubuntu in under 10 minutes** | Not run. | Follows from the item above. |
-| **Push** | `main` is on GitHub; the tags are not. | Prince pushes (Claude never pushes). |
-| **Project name** | Open (D-023, D-068). | Prince decides. |
+| **Project name** | Open (D-023, D-068) | Prince decides |
+| **A release after `v0.1`** | Not tagged. Rule since D-113: tag only after the CI run on that commit is green | Decide what the release is called and what it must contain |
+| **The newest change on `fhs`** | `exec.helpers` (D-112) has run on `nix` only | A push and a green CI run |
+| **Known limits that are parked** | Binary files through the agent's own file tools; a read-only folder inside the workspace (`node_modules`); build folders outside the checkpoints; downloads in the sandbox; a merge for `apply` | `AgentOS_Project_Spec.md` §22 |
+| **Hardening that v1 cut** | No seccomp filter, no disk limit | Each is a milestone of its own (`docs/threat-model.md` §4) |
 
-Until the `fhs` box is closed, the v1 definition of done is not fully met, by its own rule.
+### 6.2 The bonus
 
-### 6.2 Bonus (allowed now that v0.1 is tagged, but only if Prince asks)
-
-One fake external tool: a small local service with injectable timeouts, called through the gateway with an **idempotency key** (a unique id that lets the service recognise a repeated request). It gives the hardest recovery case, "an uncertain call that cannot be rolled back", something real to do. It is not part of the definition of done.
+Built (M7). See 5.4.
 
 ### 6.3 Later phases ("maybe someday", from `AgentOS_Project_Spec.md`)
 
@@ -260,7 +276,8 @@ nix develop -c make eval      # the three suites at full size (about 13 min)
 By hand:
 
 ```sh
-alias agentos='systemd-run --user --scope -p Delegate=yes -q target/debug/agentos'
+alias agentos=target/debug/agentos        # it moves itself into a delegated cgroup scope (D-105)
+agentos check --policy policies/nix.toml --repo examples/demo-repo
 agentos run --repo examples/demo-repo --policy policies/nix.toml --agent scripted --script examples/scripts/fix-demo.toml
 agentos trace
 ```
@@ -276,8 +293,10 @@ agentos trace
 | `README.md` | Quick start and results |
 | `docs/decision-log.md` | Every decision taken or rejected, with reasons and evidence; findings; glossary |
 | `docs/milestones/` | One document per milestone, with the code explained piece by piece |
-| `docs/decisions/` | 11 ADRs for the hard-to-undo decisions |
+| `docs/decisions/` | 12 ADRs for the hard-to-undo decisions |
 | `docs/threat-model.md` | Each attack, its defence and its test |
 | `docs/recovery-semantics.md` | What a crash leaves and what recovery decides, per crash point and tool |
-| `docs/bugs.md` | Bugs found by the test suites |
+| `docs/bugs.md` | Every bug found in the runtime, with cause, fix and lesson |
+| `docs/what-the-suites-missed.md` | The six bugs that only hands-on use found |
+| `docs/resume-bullets.md` | Resume bullets, each with the record its number comes from |
 | `docs/results/` | Results of record with raw data |
