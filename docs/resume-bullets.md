@@ -12,7 +12,7 @@ Rule of the project: no number without a script or a record that produces it. Ea
 
 | Bullet | Source |
 |---|---|
-| Designed and built a 7,000-line Rust runtime (one crate, no async runtime, 12 dependencies) that mediates every file and command request of an AI coding agent through a gateway: policy check, fsynced intent record, effect, checkpoint, completion record | `cat src/*.rs src/*/*.rs \| wc -l` = 7,047; `Cargo.toml`; `src/gateway.rs` |
+| Designed and built a 7,000-line Rust runtime (one crate, no async runtime, 11 dependencies) that mediates every file and command request of an AI coding agent through a gateway: policy check, fsynced intent record, effect, checkpoint, completion record | `cat src/*.rs src/*/*.rs \| wc -l` = 7,047; `Cargo.toml`; `src/gateway.rs` |
 | Rootless sandbox from Linux primitives: user, mount, PID and network namespaces, `pivot_root` to a root that holds only a copy of the repo, cgroup v2 limits, Landlock, no capabilities, `no_new_privs`; file tools confined by `openat2(RESOLVE_BENEATH)`, immune to symlink races | `src/sandbox/`; `docs/threat-model.md` §3 |
 | Fault-injection harness that kills the runtime at 8 points in a call's life for each tool, 200 times each, then checks 5 invariants: 4,800 runs, 0 violations, 0 effects applied twice; recovery p50 about 20 ms | `make eval-recovery`; `docs/results/recovery-200-nix-m9.md`; Ubuntu: CI run 43691133260 |
 | Adversarial security suite: 32 attacks (path traversal, a symlink flipped about 6,000 times during 300 file calls, fork bomb, memory exhaustion, network, privilege gain, escaping through the revert code), 0 escapes; 0 false denials on 23 ordinary operations | `make eval-security`; `docs/results/security-nix.md`, `security-fhs.md` |
