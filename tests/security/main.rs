@@ -579,13 +579,37 @@ fn patch_does_not_follow_symlinks_to_host_files() {
 /// at a time, and every sandboxed process is dead when its call returns), so
 /// the test plays a stronger attacker than the threat model allows: a host
 /// thread doing the swaps directly on the workspace folder.
+///
+/// One attempt is a full run of 300 racy calls. The race only means something
+/// if it happened often, so the counts must reach more than 1,000 swaps and at
+/// least 20 calls ending each way. The swapper paces itself with a sleep, and
+/// on a slow machine (the CI runner: 925 swaps in run 43742105191) one attempt
+/// may not reach that. Then another attempt runs in a fresh execution, up to
+/// five, and the counts add up. Every attempt checks for escapes on its own.
 #[test]
 fn toctou_symlink_swap_during_writes_and_reads_never_escapes() {
+    let (mut swaps, mut done, mut denied) = (0u64, 0usize, 0usize);
+    let mut attempts = 0;
+    while attempts < 5 && !(swaps > 1000 && denied >= 20 && done >= 20) {
+        attempts += 1;
+        let (s, c, d) = toctou_attempt(attempts);
+        swaps += s;
+        done += c;
+        denied += d;
+    }
+    println!("toctou total: {swaps} swaps, {done} completed inside, {denied} refused, {attempts} attempt(s)");
+    assert!(swaps > 1000, "the swapper only managed {swaps} swaps in {attempts} attempts; the race was not exercised");
+    assert!(denied >= 20 && done >= 20, "both outcomes must occur often for the race to mean anything (denied {denied}, completed {done})");
+}
+
+/// One run of the TOCTOU race; asserts that nothing escaped and returns
+/// (swaps, calls completed inside, calls refused as leaving the workspace).
+fn toctou_attempt(n: usize) -> (u64, usize, usize) {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     let text = policy_text(256, 64, 20).replace("max_tool_calls = 50", "max_tool_calls = 1000");
     assert!(text.contains("max_tool_calls = 1000"));
-    let t = TestEnv::new("sec-toctou").with_policy_text(&text);
+    let t = TestEnv::new(&format!("sec-toctou-{n}")).with_policy_text(&text);
     let repo = make_repo(&t);
     let outside = t.root.join("outside");
     std::fs::create_dir(&outside).unwrap();
@@ -671,9 +695,8 @@ fn toctou_symlink_swap_during_writes_and_reads_never_escapes() {
     let events = t.events(&id);
     let denied = events.iter().filter(|e| e["type"] == "tool.denied").count();
     let done = events.iter().filter(|e| e["type"] == "tool.completed").count();
-    println!("toctou: {swaps} swaps, {done} calls completed inside the workspace, {denied} refused as leaving it, {restarts} restarts");
-    assert!(swaps > 1000, "the swapper only managed {swaps} swaps; the race was not exercised");
-    assert!(denied >= 20 && done >= 20, "both outcomes must occur often for the race to mean anything (denied {denied}, completed {done})");
+    println!("toctou attempt {n}: {swaps} swaps, {done} calls completed inside the workspace, {denied} refused as leaving it, {restarts} restarts");
+    (swaps, done, denied)
 }
 
 #[test]

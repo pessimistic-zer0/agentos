@@ -1466,7 +1466,7 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 ### D-062 — The TOCTOU test uses an attacker stronger than the threat model
 - **Date:** 2026-11-12
-- **Status:** Taken
+- **Status:** Taken; how its counts are reached is replaced by D-115
 - **Area:** sandbox
 - **ADR:** none
 
@@ -2781,6 +2781,32 @@ Milestones, in the order of work: **M11** hardening (A1, A2, A3); **M12** real p
 
 ---
 
+### D-115 — The TOCTOU test runs up to five attempts and adds up its counts; the bars stay
+- **Date:** 2026-11-16
+- **Status:** Taken
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** The race test (D-062) has a host thread that keeps swapping a symlink while the agent reads and writes through it. It refuses to pass unless the race really happened: more than 1,000 swaps, and at least 20 calls ending each way. On the Ubuntu CI runner one run made only 925 swaps, so the test failed although nothing escaped and both outcomes happened over a hundred times. Now, if one run falls short, the test runs another in a fresh execution, up to five, and adds the counts. Every run still checks on its own that nothing leaked.
+
+**The problem.** The swapper paces itself with a 150 µs sleep. On a busy virtual machine a short sleep lasts much longer, so fewer swaps fit into one run. The failure stopped `cargo test` on Ubuntu, so the suites after it did not run there.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Repeat the run (up to five) and add up the counts | Taken | Every bar keeps its value; a slower machine pays with time, not with a weaker test |
+| Lower the bar from 1,000 swaps | Discarded | CLAUDE.md: never weaken a test to make it pass |
+| Drop the sleep and spin instead | Discarded | On a two-core runner a spinning thread takes CPU from the runtime it races, and the rate would still depend on the machine |
+| Rerun the CI job until it passes | Discarded | Hides a test that depends on the machine's speed |
+
+**What this means for the code.** `tests/security/main.rs`: the body is now `toctou_attempt(n)`, which asserts no escape and returns its counts; the test loops while the totals are under the bars and at most five times.
+
+**Evidence.** CI run 43742105191 (`fhs` job), stdout of the failed test: `925 swaps, 136 calls completed inside the workspace, 164 refused as leaving it, 0 restarts`. Not reproduced locally: alone, and the whole security file pinned to one and two CPUs with `taskset`, 5,325 to 7,022 swaps. With the change, the sleep temporarily set to 5 ms: 426 + 492 + 494 swaps over 3 attempts, test passes; set to 60 ms: 177 swaps over 5 attempts, test fails with the swap message. Sleep restored to 150 µs: 7,022 swaps in 1 attempt. Whether it passes on the CI runner: not yet verified.
+
+**Concepts to learn.** Flaky tests; timer slack and why `sleep(150 µs)` is a lower bound, not a duration; a test that checks its own precondition.
+
+---
+
 ## Still open
 
 | Question | Notes |
@@ -2855,7 +2881,7 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-15 | M9 built the parked ideas and repeated the real-project session. Each thing that had been in the way was gone (table in `docs/results/real-repo-trial-nix.md`). Three surprises on the way. (1) Self-start failed in its own test with `Unit run-p….scope was already loaded`: systemd-run names a scope after the process id, and the id survives `exec`. It had worked by hand from a terminal. (2) The 4B model, which gave up on the two-module ticket after one call in M8, now made seven; then a reply cut off inside a tool call made its server answer HTTP 500, and the runtime stopped with an error. (3) The reminder for a model that stops early (D-107) was therefore never seen with a real model; only the mock tests show it | A feature tried by hand in one setting (a terminal) is not tested; the test found the collision because it started agentos the way CI does. And every fix to the agent loop moves the model one step further, to the next unhandled case |
 | 2026-11-15 | First CI run of M9 and M10 on Ubuntu (43690755406): both jobs red, on one test. Expected the risky parts to be the self-start in a scope or the signal handler. It was the smallest feature: the note for an inactive virtualenv fired for an *active* one, because on Ubuntu `/usr` is a mount with its own `/usr/bin/pytest` (B-014, fixed by D-109). `cargo test` stopped at that file, so most suites did not run on Ubuntu at all in that run | The `fhs` preset is a different machine in ways that matter, and only CI has one. A red run also hides everything behind the first failure: "one test failed" was really "one test failed and seven suites are unknown" |
 | 2026-11-15 | Trial on a Node project and a Rust project, to see whether the design is tied to Python. Expected trouble with `node_modules`. `node --test` worked at once, `node_modules` copied along. What failed was `npm test` (`spawn sh ENOENT`) and `cargo test` (`linker cc not found`): the sandbox's `PATH` held only the folders of the allowed programs, and these commands start other programs by name. `pytest` never does, which is why thirty-two security tests, a benign suite and two real-project sessions had not shown it. Fixed with `exec.helpers` (D-112); both then ran, tickets were fixed through the gateway and applied to clones. Record: `docs/results/second-stack-trial-nix.md` | A design claim ("not tied to one ecosystem") is untested until a second ecosystem is tried; the first one cannot show what it does not need. The gap was in the environment handed to commands, not in any of the five parts |
-| 2026-11-16 | CI run 43742105191 on `9cec493` (`fhs` job) failed in `toctou_symlink_swap_during_writes_and_reads_never_escapes`: the swapper made 925 swaps, under the required 1,000. Nothing escaped; the `fhs-apparmor` job passed. Earlier runs had 6,400 to 6,750 swaps on the development machine (D-062) | A test that checks its own precondition can fail when the machine is slower, not when the code is wrong. The fix must make the race happen enough on a slow runner, not lower the bar. Because the file stopped `cargo test`, the suites after it did not run, so D-112 is still unverified on `fhs` |
+| 2026-11-16 | CI run 43742105191 on `9cec493` (`fhs` job) failed in `toctou_symlink_swap_during_writes_and_reads_never_escapes`: the swapper made 925 swaps, under the required 1,000. Nothing escaped; the `fhs-apparmor` job passed. Earlier runs had 6,400 to 6,750 swaps on the development machine (D-062) | A test that checks its own precondition can fail when the machine is slower, not when the code is wrong. The fix must make the race happen enough on a slow runner, not lower the bar (D-115). Because the file stopped `cargo test`, the suites after it did not run, so D-112 is still unverified on `fhs` |
 
 ---
 
@@ -2929,3 +2955,5 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | HTTP status classes | 2xx: done. 4xx: the request was refused. 5xx: the server had a problem (the work may or may not have happened) |
 | Roll forward | Finishing an interrupted action instead of undoing it; the only choice when undoing is impossible |
 | Effectively-once | The result of sending a request possibly several times to a receiver that ignores repeats of the same key |
+| Flaky test | A test whose result depends on timing or the machine, not only on the code |
+| Timer slack | The kernel may wake a sleeping thread later than asked, to save power; a short sleep is a minimum, not an exact time |
