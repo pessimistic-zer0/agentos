@@ -30,6 +30,10 @@ allow = [
   ["pytest"],
   ["python3", "-m", "pytest"],
 ]
+# Programs the allowed commands start themselves, e.g. ["cc"] for `cargo test`
+# (the linker) or ["sh"] for `npm test`. The agent cannot run them; this only
+# puts their folder on the PATH that commands see.
+helpers = []
 
 [sandbox]
 # Host folders the sandbox sees, read-only: the usual places for programs and

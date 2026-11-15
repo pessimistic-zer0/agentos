@@ -410,6 +410,7 @@ pub fn check(policy_path: Option<&Path>, repo: Option<&Path>) -> usize {
                         println!("  {name} -> {}", path.display());
                     }
                 }
+                println!("  PATH for commands: {}", programs.search_path());
                 for note in &programs.notes {
                     println!("  note: {note}");
                 }

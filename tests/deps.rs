@@ -339,3 +339,74 @@ fn without_a_scratch_rule_the_cache_is_reverted_and_reported() {
     assert!(violation["reverted"].to_string().contains(".pytest_cache"), "{violation}");
     assert!(!t.exec_dir(&id).join("work/.pytest_cache").exists());
 }
+
+// ---------------------------------------------------------------------------
+// D-112: helper programs (`exec.helpers`).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_helper_program_is_found_by_commands_and_cannot_be_called_by_the_agent() {
+    // An allowed command (`python3 -m pytest`) starts another program by
+    // name, the way `cargo test` starts `cc` and `npm test` starts `sh`.
+    let make = |name: &str| {
+        let t = TestEnv::new(name);
+        let tools = t.root.join("tools");
+        std::fs::create_dir_all(tools.join("bin")).unwrap();
+        let greet = tools.join("bin/greet");
+        // A script whose interpreter is named by its full path, so that it
+        // needs nothing but itself to be found.
+        let python = std::process::Command::new("python3").args(["-c", "import sys; print(sys.executable)"]).output().unwrap();
+        let python = String::from_utf8(python.stdout).unwrap().trim().to_string();
+        std::fs::write(&greet, format!("#!{python}\nprint('hello from the helper')\n")).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&greet, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let repo = t.root.join("repo");
+        assert!(std::process::Command::new("cp").arg("-a").arg(repo_root().join("examples/demo-repo")).arg(&repo).status().unwrap().success());
+        std::fs::write(
+            repo.join("tests/test_helper.py"),
+            "import shutil, subprocess\n\n\ndef test_helper():\n    print('WHICH', shutil.which('greet'))\n    out = subprocess.run(['greet'], capture_output=True, text=True)\n    print('SAID', out.stdout.strip())\n    assert out.returncode == 0\n",
+        )
+        .unwrap();
+        (t, tools, repo)
+    };
+    let steps = "task = \"helper\"\n\
+        [[step]]\ntool = \"exec\"\nargv = [\"python3\", \"-m\", \"pytest\", \"-q\", \"-s\", \"tests/test_helper.py\"]\n\
+        [[step]]\ntool = \"exec\"\nargv = [\"greet\"]\n";
+
+    // Named as a helper: the command finds it.
+    let (t, tools, repo) = make("deps-helper");
+    let policy = policy_with(Some(&tools), &[]).replace("helpers = []", "helpers = [\"greet\"]");
+    assert!(policy.contains("helpers = [\"greet\"]"), "the preset has no helpers line");
+    let t = t.with_policy_text(&policy);
+    let script = t.write_script("s.toml", steps);
+    let out = run(&t, &repo, &script, Some(&tools.join("bin")));
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let id = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    let events = t.events(&id);
+    let (exit, text) = stdout_of(&t, &id, &events, 1);
+    assert_eq!(exit, Some(0), "{text}");
+    assert!(text.contains(&format!("WHICH {}", tools.join("bin/greet").display())) && text.contains("SAID hello from the helper"), "{text}");
+    // The agent itself still may not run it: a helper is not a rule.
+    let denied = events.iter().find(|e| e["type"] == "tool.denied" && e["call_id"] == 2).expect("call 2 is denied");
+    assert_eq!(denied["rule"], "no matching rule");
+
+    // Mounted and on the host's PATH, but not named: the command does not find it.
+    let (t, tools, repo) = make("deps-helper-unnamed");
+    let t = t.with_policy_text(&policy_with(Some(&tools), &[]));
+    let script = t.write_script("s.toml", steps);
+    let out = run(&t, &repo, &script, Some(&tools.join("bin")));
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let id = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    let (exit, text) = stdout_of(&t, &id, &t.events(&id), 1);
+    assert_ne!(exit, Some(0));
+    assert!(text.contains("WHICH None"), "{text}");
+
+    // A helper that is not on the host's PATH is a startup error that names it.
+    let (t, tools, repo) = make("deps-helper-missing");
+    let t = t.with_policy_text(&policy_with(Some(&tools), &[]).replace("helpers = []", "helpers = [\"greet\"]"));
+    let script = t.write_script("s.toml", steps);
+    let out = run(&t, &repo, &script, None);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success() && err.contains("helper program `greet` was not found on PATH"), "{err}");
+    assert!(!t.state.join("executions").exists());
+}

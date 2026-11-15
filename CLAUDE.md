@@ -51,7 +51,7 @@ The git history is part of the documentation. Someone should be able to read it 
 - Always commit when a milestone is achieved: the code, the tests, the log entries and the milestone document together, so the tag points at a complete milestone. Committing in between is allowed and expected.
 - Never rewrite existing history (no amend of earlier commits, no rebase), and never commit secrets (API keys, tokens, `.env` files).
 - In commit messages and pull request descriptions, do not add Co-Authored-By lines or any signature or attribution to Claude.
-- Tag the end of each milestone locally: `m0`, `m1`, … and `v0.1` at the end.
+- Tag the end of each milestone locally: `m0`, `m1`, … and `v0.1` at the end. Since D-113: tag only after the CI run on that commit is green (`m9` and `m10` were tagged before, and sit on commits that fail on Ubuntu; M9 and M10 first pass there at `d98eab1`).
 
 ## One document per milestone
 
@@ -146,6 +146,8 @@ M8 (tag `m8` locally; `docs/milestones/M8-first-user.md`) is the work after the 
 M9 (tag `m9` locally; `docs/milestones/M9-conveniences.md`), 2026-11-15: ten of the parked ideas (D-098 to D-107). On `nix`: `make test` 118 passed; the real-project session repeated (`docs/results/real-repo-trial-nix.md`, second part); 200-kill run in `docs/results/recovery-200-nix-m9.md`. Verified on `fhs` together with M10 (D-110). Held at the time: `agentos apply` (built next, M10) and binary file tools. The model-server error met in the re-trial is handled since D-111.
 
 `agentos apply` (M10, tag `m10` locally; `docs/milestones/M10-apply.md`; D-108), 2026-11-15: copies a finished execution's result into the repository, including what a patch cannot carry; refuses if the repository changed since the copy. `tests/apply.rs` (6 tests). On `nix`: `make test` 125 passed. On `fhs`: CI run 43691133260 on `d98eab1` (D-110), both jobs green: 125 tests, `make demo`, the 200-kill run, and the AppArmor job. The run before it (43690755406) failed on a false note that only Ubuntu could show (B-014, D-109). Still parked: binary files and file modes through the file tools.
+
+After M10, 2026-11-15, no new tag yet: the model server's answers are sorted into wait, error and tell-the-model (D-111; verified on `fhs` by CI run 43733350171 on `2a6a3d1`, D-113), and helper programs for commands (`exec.helpers`, D-112), found in a trial on a Node and a Rust project (`docs/results/second-stack-trial-nix.md`; the two projects are in `~/Temp/AgentOS_temp/`). On `nix`: `make test` 130 passed. D-112 is **not yet verified on `fhs`**. `main`, and the tags up to `m10`, are on GitHub, pushed by Prince.
 
 Open, and only Prince can close them:
 

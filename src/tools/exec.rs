@@ -2,7 +2,6 @@
 //! through a shell (design rule 8). The command itself runs in the sandbox
 //! (`crate::sandbox`); this file finds the programs and reads their output.
 
-use std::collections::BTreeSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -14,7 +13,10 @@ use crate::policy::Policy;
 #[derive(Debug, Clone)]
 pub struct Programs {
     /// Program name (argv[0] in the policy) -> real path on the host.
-    resolved: Vec<(String, PathBuf)>,
+    /// The third field is where on the host `PATH` it was found (0 = first).
+    resolved: Vec<(String, PathBuf, usize)>,
+    /// Folders of the helper programs (`exec.helpers`), with the same position.
+    helper_dirs: Vec<(usize, PathBuf)>,
     /// Things the user should be told before the run starts (D-101).
     pub notes: Vec<String>,
 }
@@ -33,25 +35,33 @@ impl Programs {
     /// through that link (D-091).
     pub fn resolve(policy: &Policy, host_path: &str) -> Result<Programs> {
         let mut resolved = Vec::new();
+        let mut helper_dirs = Vec::new();
         let mut notes = Vec::new();
-        for prog in policy.programs() {
+        let mounts: Vec<PathBuf> = policy.sandbox.ro_mounts.iter().map(PathBuf::from).collect();
+        // The programs the agent may ask for, then the helper programs that
+        // those start themselves (`exec.helpers`, D-112). Both are found
+        // the same way; only the first kind can be looked up by a call.
+        let allowed = policy.programs();
+        let helpers: Vec<String> = policy.exec.helpers.iter().filter(|h| !allowed.contains(h)).cloned().collect();
+        for (prog, helper) in allowed.iter().map(|p| (p, false)).chain(helpers.iter().map(|h| (h, true))) {
+            let what = if helper { "helper program" } else { "allowed program" };
             if prog.contains('/') {
                 bail!("exec rule program `{prog}` must be a bare name, not a path");
             }
             let found = host_path
                 .split(':')
                 .filter(|d| !d.is_empty())
-                .map(|d| Path::new(d).join(&prog))
-                .find(|p| is_executable(p));
-            let real = match &found {
-                Some(p) => std::fs::canonicalize(p)?,
-                None => bail!("allowed program `{prog}` was not found on PATH"),
+                .enumerate()
+                .map(|(i, d)| (i, Path::new(d).join(prog)))
+                .find(|(_, p)| is_executable(p));
+            let Some((position, found)) = found else {
+                bail!("{what} `{prog}` was not found on PATH");
             };
+            let real = std::fs::canonicalize(&found)?;
             // The sandbox sees only sandbox.ro_mounts, so the program must live there.
-            let mounts: Vec<PathBuf> = policy.sandbox.ro_mounts.iter().map(PathBuf::from).collect();
             if !crate::sandbox::visible_in_sandbox(&real, &mounts) {
                 bail!(
-                    "allowed program `{prog}` is at {}, which the sandbox cannot see: it is not under any \
+                    "{what} `{prog}` is at {}, which the sandbox cannot see: it is not under any \
                      sandbox.ro_mounts entry ({}).\n  \
                      If this is the wrong kind of system for the policy, use the other preset (policies/fhs.toml or policies/nix.toml).\n  \
                      If the program is in a virtualenv or another folder of your own, add that folder to sandbox.ro_mounts in a copy of the policy.",
@@ -59,8 +69,13 @@ impl Programs {
                     policy.sandbox.ro_mounts.join(", ")
                 );
             }
-            let found = found.expect("checked above");
             let as_found = link_chain_visible(&found, &mounts).unwrap_or_else(|| real.clone());
+            if helper {
+                if let Some(dir) = as_found.parent() {
+                    helper_dirs.push((position, dir.to_path_buf()));
+                }
+                continue;
+            }
             // A mounted folder that has this program in its own `bin`, while
             // that `bin` is not on PATH at all: almost always a virtualenv
             // that was mounted but not activated. The run would use another
@@ -72,7 +87,7 @@ impl Programs {
             // and merely comes later, which is exactly right (bug B-014).
             for m in &mounts {
                 let own_bin = m.join("bin");
-                let own = own_bin.join(&prog);
+                let own = own_bin.join(prog);
                 let same = |a: &Path, b: &Path| std::fs::canonicalize(a).ok() == std::fs::canonicalize(b).ok();
                 let on_path = host_path.split(':').filter(|d| !d.is_empty()).any(|d| same(Path::new(d), &own_bin));
                 if is_executable(&own) && !on_path && !same(&own, &as_found) && !same(&own, &real) {
@@ -86,23 +101,34 @@ impl Programs {
                     ));
                 }
             }
-            resolved.push((prog.clone(), as_found));
+            resolved.push((prog.clone(), as_found, position));
         }
-        Ok(Programs { resolved, notes })
+        Ok(Programs { resolved, helper_dirs, notes })
     }
 
     pub fn lookup(&self, name: &str) -> Option<&Path> {
-        self.resolved.iter().find(|(n, _)| n == name).map(|(_, p)| p.as_path())
+        self.resolved.iter().find(|(n, _, _)| n == name).map(|(_, p, _)| p.as_path())
     }
 
     /// `PATH` for the command: the folders holding the resolved programs.
     pub fn search_path(&self) -> String {
-        let dirs: BTreeSet<String> = self
+        // In the order of the host's PATH, so that what came first there
+        // comes first here (a virtualenv's `bin` before `/usr/bin`).
+        let mut dirs: Vec<(usize, PathBuf)> = self
             .resolved
             .iter()
-            .filter_map(|(_, p)| p.parent().map(|d| d.display().to_string()))
+            .filter_map(|(_, p, position)| p.parent().map(|d| (*position, d.to_path_buf())))
+            .chain(self.helper_dirs.iter().cloned())
             .collect();
-        dirs.into_iter().collect::<Vec<_>>().join(":")
+        dirs.sort();
+        let mut out: Vec<String> = Vec::new();
+        for (_, dir) in dirs {
+            let dir = dir.display().to_string();
+            if !out.contains(&dir) {
+                out.push(dir);
+            }
+        }
+        out.join(":")
     }
 }
 

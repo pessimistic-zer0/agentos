@@ -2685,6 +2685,56 @@ What a policy author must know: everything under a read-only mount can be read b
 
 **Concepts to learn.** HTTP status classes (glossary); transient versus permanent failures; why "retry" needs to know which one it is.
 
+### D-112 — `exec.helpers`: programs that allowed commands start themselves
+- **Date:** 2026-11-15
+- **Status:** Taken
+- **Area:** policy
+- **ADR:** none
+
+**In plain words.** A command in the sandbox finds other programs through `PATH`, a list of folders to look in. AgentOS filled that list with the folders of the programs the policy allows, and nothing else. `pytest` needs no other program, so this was never noticed. `cargo test` starts a linker called `cc`; `npm test` starts a shell called `sh`. Neither was found, and both failed. A policy can now name such programs as helpers. Their folders are put on the `PATH`. The agent itself still cannot run them: a helper is not a rule.
+
+**The problem.** The first trial on projects that are not Python (`docs/results/second-stack-trial-nix.md`): `error: linker cc not found` and `npm error enoent spawn sh ENOENT`.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| A list `exec.helpers` of bare program names, found on the host's `PATH` like allowed programs, checked to be under a read-only mount, their folders added to the sandbox's `PATH` | Taken | Says what is needed in the user's terms ("cargo needs cc"), and fails at startup with the name if one is missing |
+| Let the policy set `PATH` | Discarded | Store paths on NixOS change with every update; a policy would hold machine-specific strings. And `PATH` is one of the three variables the runtime owns (D-092) |
+| Put the helper in `exec.allow` | Discarded | That lets the agent run a shell or a compiler directly, which is the opposite of what is meant |
+| Copy the host's whole `PATH` | Discarded | Most of it is not visible in the sandbox, and it would differ from machine to machine in ways the log does not show |
+| The sandbox's `PATH` keeps the order of the host's `PATH` (it was sorted by name before) | Taken | With more folders on it, order starts to matter: a virtualenv's `bin` must stay ahead of `/usr/bin` |
+
+**What this means for the code.** `policy.rs`: `ExecRules.helpers`, `PolicyError::BadHelper`. `tools/exec.rs`: `Programs::resolve` goes through allowed programs and helpers alike; `search_path` orders folders by where they were found on the host's `PATH`. `agentos check` prints the `PATH` commands will see. The shipped policies have `helpers = []`.
+
+This is not a security boundary and does not pretend to be one: code in the sandbox could always start any program under a read-only mount by its full path. `PATH` only decides what is found by name.
+
+**Evidence.** `nix` preset, 2026-11-15. By hand: `cargo test --offline` and `npm test` fail without the helper and run with it (the trial record, runs 4 to 6). `tests/deps.rs::a_helper_program_is_found_by_commands_and_cannot_be_called_by_the_agent`: found when named, `tool.denied` when the agent asks for it, not found when not named, a startup error when it is not on the host's `PATH`. `policy::tests::exec_prefix_rules` covers parsing and the two bad forms. `make test`: 130 passed. Not yet run on `fhs`.
+
+**Concepts to learn.** `PATH`; a linker; why "the agent may run X" and "X may be started by what the agent runs" are different permissions.
+
+### D-113 — D-111 counts as verified on `fhs`; the tags `m9` and `m10` point at commits that fail there
+- **Date:** 2026-11-15
+- **Status:** Taken
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** Two things from one push. The model-server handling (D-111) passed CI on Ubuntu. And when Prince pushed the tags, GitHub ran CI on each tagged commit: `m8` passed, `m9` and `m10` failed, because those two tags sit on commits from before the fix for B-014. The tags are not moved: history is not rewritten. The record says which commit is the first on which M9 and M10 pass on both systems.
+
+**The problem.** CLAUDE.md asks that a tag point at a complete milestone. `m9` and `m10` were made when the work passed on NixOS and before any CI run; the Ubuntu-only bug was found after.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Leave the tags; record here that M9 and M10 first pass on `fhs` at `d98eab1` | Taken | Tags that are on GitHub are history. The decision log is where a reader looks for what a tag does not say |
+| Move the tags to `d98eab1` and push them again | Discarded | Rewrites published history |
+| From now on, tag a milestone only after its CI run is green | Taken | The rule that would have avoided this |
+
+**What this means for the code.** No code change. CLAUDE.md's tagging rule gains "after a green CI run".
+
+**Evidence.** `gh run list` on 2026-11-15: run 43733350171 on `main` at `2a6a3d1`: success (this is the first run with D-111). Runs on the tags, all started by the tag push: 43733353419 (`m8`, `69cdbf0`) success; 43733353800 (`m9`, `5298d2e`) failure; 43733354220 (`m10`, `29f030f`) failure, the same commit and the same failure as run 43690755406 (B-014). The job logs of the two tag runs were not read; that they fail for B-014 is inferred from the commits.
+
+**Concepts to learn.** Why published tags are not moved.
+
 ---
 
 ## Still open
@@ -2760,6 +2810,7 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-14 | Re-running the benchmarks after this round was expected to be routine. `make bench` ended with a Python traceback about a missing data file. Three steps earlier the `fs.write` benchmark had died, and the script's `\|\| true` had hidden it: the new startup probe (D-093) started the benchmark binary a second time (B-013; fixed by D-096). The same code had passed CI on both jobs. Numbers after the fix, `docs/results/bench-nix-m8/`: sandboxed `true` p50 5.62 ms (direct 1.06), `fs.write` 4 KB p50 13.34 ms, demo end to end p50 481 ms against 354 ms direct. All lower than the v0.1 run, the direct ones too, so the machine was quieter; nothing can be said about the code getting faster. The 200-kill run on `nix` after this round: 4,800 + 1,600 runs, 0 violations (`docs/results/recovery-200-nix-m8.md`) | Benchmarks are also a test: they are the only programs here that use the library without being the `agentos` binary. A suite that never leaves the main binary cannot see what a library user sees. And a step that may fail quietly should not be followed by steps that need its output |
 | 2026-11-15 | M9 built the parked ideas and repeated the real-project session. Each thing that had been in the way was gone (table in `docs/results/real-repo-trial-nix.md`). Three surprises on the way. (1) Self-start failed in its own test with `Unit run-p….scope was already loaded`: systemd-run names a scope after the process id, and the id survives `exec`. It had worked by hand from a terminal. (2) The 4B model, which gave up on the two-module ticket after one call in M8, now made seven; then a reply cut off inside a tool call made its server answer HTTP 500, and the runtime stopped with an error. (3) The reminder for a model that stops early (D-107) was therefore never seen with a real model; only the mock tests show it | A feature tried by hand in one setting (a terminal) is not tested; the test found the collision because it started agentos the way CI does. And every fix to the agent loop moves the model one step further, to the next unhandled case |
 | 2026-11-15 | First CI run of M9 and M10 on Ubuntu (43690755406): both jobs red, on one test. Expected the risky parts to be the self-start in a scope or the signal handler. It was the smallest feature: the note for an inactive virtualenv fired for an *active* one, because on Ubuntu `/usr` is a mount with its own `/usr/bin/pytest` (B-014, fixed by D-109). `cargo test` stopped at that file, so most suites did not run on Ubuntu at all in that run | The `fhs` preset is a different machine in ways that matter, and only CI has one. A red run also hides everything behind the first failure: "one test failed" was really "one test failed and seven suites are unknown" |
+| 2026-11-15 | Trial on a Node project and a Rust project, to see whether the design is tied to Python. Expected trouble with `node_modules`. `node --test` worked at once, `node_modules` copied along. What failed was `npm test` (`spawn sh ENOENT`) and `cargo test` (`linker cc not found`): the sandbox's `PATH` held only the folders of the allowed programs, and these commands start other programs by name. `pytest` never does, which is why thirty-two security tests, a benign suite and two real-project sessions had not shown it. Fixed with `exec.helpers` (D-112); both then ran, tickets were fixed through the gateway and applied to clones. Record: `docs/results/second-stack-trial-nix.md` | A design claim ("not tied to one ecosystem") is untested until a second ecosystem is tried; the first one cannot show what it does not need. The gap was in the environment handed to commands, not in any of the five parts |
 
 ---
 

@@ -201,6 +201,7 @@ scratch = [".pytest_cache/**"]     # caches: commands may write here; not report
 
 [exec]
 allow = [["pytest"], ["python3", "-m", "pytest"]]   # argv prefixes
+helpers = []                                        # programs those commands start: ["cc"], ["sh"]
 
 [sandbox]
 ro_mounts = ["/nix/store"]                          # fhs preset: /usr, /bin, /lib, /lib64
@@ -222,7 +223,7 @@ max_tool_calls = 50
 The shipped policies fit the demo. For a real repository, copy one and change four things.
 
 1. **Where the agent may write.** `[filesystem] write`: for example `["src/**", "tests/**", "pyproject.toml"]`. `fs.write` makes missing folders inside these paths. Anything else is refused, and what a command changes elsewhere is put back.
-2. **Which commands it may run.** `[exec] allow`: argv prefixes, bare program names. Every allowed command is arbitrary code (your test suite runs your code); the sandbox is what confines it. There is no network in the sandbox, so a command that downloads something will fail.
+2. **Which commands it may run.** `[exec] allow`: argv prefixes, bare program names. Every allowed command is arbitrary code (your test suite runs your code); the sandbox is what confines it. There is no network in the sandbox, so a command that downloads something will fail: dependencies must already be on disk. If a command starts other programs by name, list them in `[exec] helpers`; the agent cannot run those itself. Two that were tried: `allow = [["cargo", "test"]]` needs `helpers = ["cc"]` and `scratch = ["target/**"]`; `allow = [["npm", "test"]]` needs `helpers = ["sh"]` (`[["node", "--test"]]` needs none).
 3. **The packages your tests need.** The sandbox sees the copy of the repo and the folders in `sandbox.ro_mounts`, nothing else. Not your home folder, and not a virtualenv, even one inside the repo.
    - *A virtualenv:* add its folder to `ro_mounts`, start `agentos` with it activated, and if it lives inside the repo put it in `skip` so that it is not copied. A mount may not be under `/tmp`. If you forget to activate it, `agentos` prints a note.
 

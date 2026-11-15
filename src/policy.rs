@@ -26,6 +26,8 @@ pub enum PolicyError {
     Glob { field: &'static str, glob: String, reason: &'static str },
     #[error("exec.allow[{0}] is empty; a rule must name at least the program")]
     EmptyExecRule(usize),
+    #[error("exec.helpers entry `{0}` must be a bare program name (no `/`, not empty)")]
+    BadHelper(String),
     #[error("sandbox.ro_mounts entry `{0}` must be an absolute path")]
     RelativeMount(String),
     #[error("sandbox.ro_mounts entry `{0}` cannot be used: the sandbox puts its own folder at /work, /tmp, /proc and /dev, and `/` would show the whole machine; keep the folder somewhere else (for example under your home folder)")]
@@ -91,6 +93,12 @@ pub struct ExecRules {
     /// Allowed argv prefixes, e.g. `["pytest"]` or `["python3", "-m", "pytest"]`.
     #[serde(default)]
     pub allow: Vec<Vec<String>>,
+    /// Programs that allowed commands start themselves: a compiler's linker
+    /// (`cc`), the shell behind `npm test` (`sh`). The agent cannot ask for
+    /// them; naming them here only puts their folder on the sandbox's
+    /// `PATH`, so that the allowed command finds them (D-112).
+    #[serde(default)]
+    pub helpers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -245,6 +253,11 @@ impl Policy {
         for (i, rule) in self.exec.allow.iter().enumerate() {
             if rule.is_empty() || rule[0].is_empty() {
                 return Err(PolicyError::EmptyExecRule(i));
+            }
+        }
+        for h in &self.exec.helpers {
+            if h.is_empty() || h.contains('/') {
+                return Err(PolicyError::BadHelper(h.clone()));
             }
         }
         for m in &self.sandbox.ro_mounts {
@@ -542,6 +555,16 @@ max_tool_calls = 20
         assert!(!p.check_exec(&argv(&["python3", "-c", "print(1)"])).allowed);
         assert!(!p.check_exec(&argv(&["/usr/bin/pytest"])).allowed, "paths do not match names");
         assert!(!p.check_exec(&argv(&["sh", "-c", "pytest"])).allowed);
+        // A helper is not an allowed command: the agent still cannot run it.
+        let with_helper = Policy::parse(&DEMO.replace("[sandbox]", "helpers = [\"sh\", \"cc\"]\n[sandbox]")).unwrap();
+        assert_eq!(with_helper.exec.helpers, ["sh", "cc"]);
+        assert!(!with_helper.check_exec(&argv(&["sh", "-c", "pytest"])).allowed);
+        assert!(!with_helper.check_exec(&argv(&["cc"])).allowed);
+        assert_eq!(with_helper.programs(), vec!["pytest".to_string(), "python3".to_string()], "helpers are not programs the agent may name");
+        for bad in ["/bin/sh", ""] {
+            let p = DEMO.replace("[sandbox]", &format!("helpers = [\"{bad}\"]\n[sandbox]"));
+            assert!(matches!(Policy::parse(&p), Err(PolicyError::BadHelper(_))), "{bad}");
+        }
         assert_eq!(p.programs(), vec!["pytest".to_string(), "python3".to_string()]);
     }
 
