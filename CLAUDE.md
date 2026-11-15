@@ -23,7 +23,7 @@ Follow the entry template in that file. Write "In plain words" for a beginner. U
 
 ## Scope is fixed
 
-The five parts (gateway, policy, sandbox, event log, checkpoints + recovery), the build order, and the cut list in the v1 document do not change during normal work. The "Bonus" of the v1 document (one fake external tool) is built (M7, D-073); it is finished. On 2026-11-14 Prince approved exactly two more additions (D-088): packages from outside the repo for sandboxed commands, and an AppArmor profile for Ubuntu. Neither is a tool, and neither opens the door to more.
+The five parts (gateway, policy, sandbox, event log, checkpoints + recovery), the build order, and the cut list in the v1 document do not change during normal work. The "Bonus" of the v1 document (one fake external tool) is built (M7, D-073); it is finished. On 2026-11-14 Prince approved exactly two more additions (D-088): packages from outside the repo for sandboxed commands, and an AppArmor profile for Ubuntu. Neither is a tool. Later the same day he opened scope for the parked conveniences (M9, D-098), except an `apply` command and binary file tools, which stay parked until he says otherwise. The tool list is still four plus the bonus.
 
 - Do not add features, tools, dependencies or abstractions that the v1 document does not list.
 - If an idea comes up that is outside v1, add one line to the parking lot (§22 of the spec) and continue with the current milestone.
@@ -67,6 +67,7 @@ At the end of each milestone, write `docs/milestones/M<n>-<name>.md` from `docs/
 | `M5-benchmarks.md` | 10 | Benchmarks, full security suite |
 | `M6-release.md` | 11–12 | README, threat model, recovery semantics, v0.1 |
 | `M7-bonus-external-tool.md` | after v0.1 | Bonus: `ext.call`, the fake service, its reconciliation rule and fault cells |
+| `M9-conveniences.md` | after M8 | `agentos rm` and `check`, self-start in a scope, a message when stopped, `fs.read` with a line range, policy lists `skip`, `scratch`, `deny_except`, a note for an inactive virtualenv, `stopped` when the model gives up |
 | `M8-first-user.md` | after M7 | Bugs found by hand (B-009 to B-013), folder-making writes, first messages, the patch's notes, packages from outside the repo, the AppArmor profile, the first trial on a real project |
 
 ## Design rules that must hold
@@ -107,6 +108,8 @@ At the end of each milestone, write `docs/milestones/M<n>-<name>.md` from `docs/
 
 Run everything inside the dev shell (`flake.nix`): `nix develop -c <command>`, or `nix develop` once for an interactive shell.
 
+- Since M9, `agentos run` and `agentos check` move themselves into a delegated scope (D-105); the `systemd-run` prefix in the commands below is still correct and still what `make` and CI use. `AGENTOS_IN_SCOPE=1` switches the self-start off.
+- Before a first run on a repo: `agentos check --policy <file> --repo <folder>`. Clean up: `agentos rm <id>`, `--older-than <days>`, `--all`, `--dry-run`.
 - Build and test: `nix develop -c make test` (= `systemd-run --user --scope -p Delegate=yes cargo test`: unit tests, `tests/vertical_slice.rs`, `tests/security/`, and `tests/recovery/` with 3 kills per cell). Without the delegated cgroup the sandbox tests fail at startup with a message saying so. `AGENTOS_TEST_PRESET=fhs` switches the policy preset.
 - Fault-injection suite at full size: `nix develop -c make eval-recovery` (200 kills per cell, about 8 minutes; `RUNS=20` for a quick look). Results of record go in `docs/results/`.
 - Crash by hand: `AGENTOS_CRASH_AT=P4 AGENTOS_CRASH_CALL=6 agentos run ...`, then `agentos recover <id>` and `agentos run --resume <id>` (see `src/faults.rs`).
@@ -139,8 +142,11 @@ M8 (tag `m8` locally; `docs/milestones/M8-first-user.md`) is the work after the 
 - On `nix`: `make test` 105 passed; 200-kill run 4,800 + 1,600 runs with 0 violations (`docs/results/recovery-200-nix-m8.md`); benchmarks re-run (`docs/results/bench-nix-m8/`).
 - On `fhs`: CI run 43612319559 on `69cdbf0` (D-097), both jobs green: `fhs` (105 tests, `make demo`, the 200-kill run) and `fhs-apparmor` (restriction on; refuses without the profile; runs with the profile installed at `/usr/local/bin/agentos` as the README says, and four suites). Earlier M8 runs: 43573592353 (D-087), 43590153676 (D-094). Not run on Ubuntu: benchmarks.
 
+M9 (tag `m9` locally; `docs/milestones/M9-conveniences.md`), 2026-11-15: ten of the parked ideas (D-098 to D-107). On `nix`: `make test` 118 passed; the real-project session repeated (`docs/results/real-repo-trial-nix.md`, second part); 200-kill run in `docs/results/recovery-200-nix-m9.md`. **Not yet verified on `fhs`**: the M9 commits (`b6fc0d6` to tag `m9`) are local. Held on purpose: `agentos apply` (design rule 10 needs Prince's word) and binary file tools. Known and parked: an HTTP error from the model's server ends a run as `interrupted`.
+
 Open, and only Prince can close them:
 
 - Decide the project name (D-023, D-068). The license is settled: dual MIT OR Apache-2.0 (D-069).
+- Say whether `agentos apply` (a command, run by the user, that writes the result into the original repository) is within design rule 10 (D-098).
 
 Update this section when any of these changes.

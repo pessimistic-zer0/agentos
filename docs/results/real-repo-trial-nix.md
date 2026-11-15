@@ -53,3 +53,22 @@ Second version, after the first run: `.venv/**` added to `deny` (so it is not co
 **Not fixed; in the parking lot (spec §22):** no hint when a mounted virtualenv is not the one in use; `.env.*` denies `.env.example`; no partial read of large files; no binary reads or writes; caches such as `.pytest_cache` reported as violations; a model that stops with words is recorded as `COMPLETED`.
 
 **Worth knowing:** putting `.venv/**` in `deny` while mounting the same folder read-only cut the copy from 2,779 files to 73 and the execution's size from 140 MB to 8.3 MB.
+
+## The same session again after M9 (2026-11-15, commit `c2c1e00`)
+
+The same project and the same 18 calls, with a policy as a user would now write it: the preset, the write paths, the virtualenv mounted **and in `skip`** (no longer in `deny`), one more command rule, one variable. Started without any `systemd-run` prefix.
+
+| What was in the way before | Now |
+|---|---|
+| The prefix on every command | `agentos run …` and `agentos check …` alone |
+| No way to see what a run would do | `agentos check`: `repo: ok (74 files, 0.5 MB would be copied …)`, `left out by skip rules: .venv` |
+| Forgotten `activate`: exit 4, no hint | `note: sandbox.ro_mounts has …/.venv, which holds its own pytest … activate it` |
+| `fs.read .env.example`: DENY | `allow  210 bytes` |
+| `fs.read` of the 134 KB fixture: FAILED | with `start_line = 1, max_lines = 20`: `989 bytes, lines 1-20 of 2614` |
+| `pytest`: `2 change(s) outside write globs reverted` | `exit 0, 1.4s`; no violation |
+| Empty `__init__.py` silently missing after `git apply` | `NOT in the patch: 1 empty file`, and a line in the patch with the `touch` command |
+| The virtualenv had to be *denied* to keep it out of the copy | `skip = [".venv/**"]`; 74 files copied, 8.3 MB |
+
+Unchanged, as intended: `fs.write pyproject.toml` is denied (not in this policy's write paths), `python3 scripts/…` and `git status` are denied, the gzip fixture cannot be read as text. The patch applied to a fresh clone; 79 tests passed there (the empty file still has to be made by hand, as the note says).
+
+**The 4B model on the two-module ticket (INV-102), which it gave up on after one call before M9:** this time it made 7 calls: ran the tests, read `parsing.py`, wrote a 973-byte fragment over it, read it back, wrote the whole file (7,663 bytes), ran the tests again (still failing: the second module was not fixed yet), read `pricing.py`. Then its next reply was cut off in the middle of a tool call, the local server answered `HTTP 500: Failed to parse tool call arguments as JSON`, and AgentOS stopped with that error after 94 s, leaving the execution `interrupted`. So the model got further, and the run met a different limit: an error from the model's server is treated as fatal. Parked (spec §22). The reminder of D-107 itself was not reached in this run; it is covered by the mock-server tests only.

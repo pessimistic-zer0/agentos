@@ -1072,21 +1072,14 @@ Uncommitted. Some are research projects on their own.
 - **Signed execution records:** attestations that a patch was produced under a given policy.
 - **Multi-model comparison harness** built on comparative replay.
 - **A patch/edit tool** (`fs.patch`: replace a range or apply a diff) so small models do not have to resend whole files. Came up in v1 M4 (D-060); not in v1 because the tool list is fixed at four.
-- **Usability gaps seen in a walk-through as a new user (2026-11-14; decision-log Findings of that date).** None is in v1; each needs Prince's decision before it is built:
-  - **Dependencies in the sandbox:** tests that import third-party packages fail, because the sandbox sees only `sandbox.ro_mounts`, a virtualenv inside the repo is not used, and a policy cannot set environment variables.
-  - **A complete result:** the patch drops binary files and file modes without saying so; an `agentos apply` (or a git-format patch) would close the loop.
-  - **Large repos:** every mutating call copies the whole workspace, including `node_modules` or `target/`; a policy list of folders to leave out of the copy.
-  - **Cleaning up:** nothing removes old executions (`agentos rm` / `gc`).
-  - **Starting:** every command needs the `systemd-run --user --scope -p Delegate=yes` prefix; the runtime could start itself that way. On Ubuntu, ship an AppArmor profile instead of telling users to switch off a system-wide protection.
-  - **Stopping:** Ctrl-C ends the run silently; say that it can be resumed and how.
-  - **Checking before running:** `agentos check` for the host and a policy file, so mistakes show before an execution exists.
-- **From the first trial on a real project (2026-11-14; `docs/results/real-repo-trial-nix.md`).** None is in v1:
-  - **Reading part of a file** (`fs.read` with a line range), and large files at all: the 64 KB cap stopped a ticket about a 134 KB fixture.
-  - **Binary files and file modes through the file tools** (read, write, make executable).
-  - **A hint when a mounted virtualenv is not the one in use** (its `bin` is not first on `PATH`).
-  - **A narrower default deny list:** `.env.*` also denies `.env.example`; and a way to say "do not copy, but it is not a secret" (today `deny` does both jobs, as for `.venv/**`).
-  - **Caches as non-violations:** `.pytest_cache` changes are reverted and reported on every test run.
-  - **A run that ends with words but without passing tests** is shown as `COMPLETED`; a clearer end state, or one nudge to continue.
+- **Built in M9 (2026-11-15, D-098 to D-107)**, so no longer parked: a clean-up command (`agentos rm`), leaving folders out of the copy (`filesystem.skip`), starting itself under `systemd-run`, a message on Ctrl-C, a check command, reading part of a file, a hint for an inactive virtualenv, exceptions to deny rules, caches as non-violations (`filesystem.scratch`), a clearer end when the model gives up.
+- **Still parked from the walk-through and the trial (2026-11-14):**
+  - **`agentos apply`:** copy the result into the original repository, so that binary files, modes and empty files come across. It writes into the original repo, which design rule 10 forbids the runtime to do; it needs Prince's word that an explicit command by the user is within that rule. It should refuse if the repo changed since the copy.
+  - **Binary files and file modes through the file tools.** Only after `apply`: until then the patch cannot carry the result.
+  - **A read-only folder inside the workspace** (for `node_modules`, which must be at its place in the project; `skip` only suits folders that work from their own path).
+  - **A narrower way to allow one script** than a full argv rule per script.
+- **From the M9 re-trial (2026-11-15, `docs/results/real-repo-trial-nix.md`):**
+  - **An HTTP error from the model's server ends the run as `interrupted`.** With the local 4B model, a reply cut off in the middle of a tool call made the server answer HTTP 500. Resuming asks the same question again and gets the same answer. Telling "try later" (429, 503) from "this will not get better" needs care.
 
 ---
 

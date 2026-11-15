@@ -321,7 +321,9 @@ Decided by Prince after a walk-through as a new user (D-088). The five parts and
 2. **Dependencies in the sandbox** (new): a command can use packages installed outside the repository, through a read-only mount named in the policy and, where needed, environment variables named in the policy (D-091, D-092).
 3. **An AppArmor profile for Ubuntu** (new): so that user namespaces need not be allowed for the whole system (D-093).
 
-Everything else the walk-through raised is in the parking lot of `AgentOS_Project_Spec.md` (§22).
+4. **The parked conveniences** (M9, opened by Prince on 2026-11-14, D-098), none of them a tool: `agentos rm` and `agentos check`; starting itself in a delegated scope; a message when a run is stopped; `fs.read` with a line range; policy lists `skip`, `scratch` and `deny_except`; a note for a virtualenv that is mounted but not active; a run whose model stops while its last command fails ends as `stopped` (D-099 to D-107).
+
+Held, in the parking lot of `AgentOS_Project_Spec.md` (§22): an `apply` command (it would write into the original repository; design rule 10) and binary files or file modes through the file tools.
 
 ## Bonus, only after everything above is done
 

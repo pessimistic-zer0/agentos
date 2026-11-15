@@ -13,7 +13,7 @@ It is a learning and portfolio project, not a product. It does one thing: one ag
 - **Verified on two systems, no more.** NixOS on the development machine, and Ubuntu 24.04 in CI ([run 43385661105](https://github.com/pessimistic-zer0/agentos/actions/runs/43385661105), 2026-11-13: lint, all test suites, and 4,800 kills with 0 violations). The first two CI runs failed and found two real bugs (B-007, B-008 in [`docs/bugs.md`](docs/bugs.md)). Debian, Fedora and Arch use the same `fhs` preset and have not been run. On Ubuntu the benchmarks and `make demo` have not been run either.
 - Licensed under MIT or Apache-2.0, at your option (see [License](#license)).
 - **After v0.1: one bonus tool.** `ext.call` sends a request to a (fake) outside service, something a checkpoint cannot undo. It is off unless a policy allows it. See [the bonus](#the-bonus-a-call-that-cannot-be-rolled-back).
-- **After that: what a first user needs.** Clearer first messages, a patch that says what it leaves out, packages from outside the repository, and an AppArmor profile for Ubuntu. See [on your own project](#on-your-own-project). Verified on NixOS and, in [CI run 43590153676](https://github.com/pessimistic-zer0/agentos/actions/runs/43590153676), on Ubuntu 24.04, where a second job runs the sandbox through the profile with Ubuntu's restriction left on.
+- **After that: what a first user needs** (M8, M9). Clearer first messages, a patch that says what it leaves out, packages from outside the repository, an AppArmor profile for Ubuntu; then `agentos check` and `agentos rm`, no `systemd-run` prefix, a message when a run is stopped, reading part of a large file, and policy lists for folders to skip and for caches. M9 is verified on NixOS only until its CI run. See [on your own project](#on-your-own-project). Verified on NixOS and, in [CI run 43590153676](https://github.com/pessimistic-zer0/agentos/actions/runs/43590153676), on Ubuntu 24.04, where a second job runs the sandbox through the profile with Ubuntu's restriction left on.
 - Read [what it does not do](#what-it-does-not-do) before trusting it with anything.
 
 ## The demo
@@ -165,17 +165,19 @@ More: [`docs/threat-model.md`](docs/threat-model.md), [`docs/recovery-semantics.
 
 ## Using it
 
-Everything runs under a cgroup that systemd delegated to you (no root needed):
+Commands run in a cgroup that systemd delegated to you (no root needed). `agentos run` and `agentos check` move themselves into one, by starting themselves again through `systemd-run --user --scope -p Delegate=yes`; you do not type that.
 
 ```sh
-alias agentos='systemd-run --user --scope -p Delegate=yes -q target/debug/agentos'
+alias agentos=target/debug/agentos
 
+agentos check --policy policies/nix.toml --repo <repo>     # the machine, the policy, what would be copied; starts nothing
 agentos run --repo <repo> --policy policies/nix.toml --agent scripted --script <steps.toml>
 agentos run --repo <repo> --policy policies/nix.toml --agent llm --task "Make the failing test pass"
-agentos status                 # all executions; "interrupted" means it was killed
+agentos status                 # all executions; "interrupted" means it was stopped or killed
 agentos trace [<id>]           # one line per call; --events for every record; --json for scripts
 agentos recover <id>           # settle the call that was cut off, repair the workspace
 agentos run --resume <id>      # recover, then let the agent continue
+agentos rm <id>...             # delete executions; also --older-than <days>, --all, --dry-run
 ```
 
 State lives in `--state-dir`, else `$AGENTOS_STATE_DIR`, else `~/.local/share/agentos`. Each execution has a folder with its log, policy copy, workspace, checkpoints, blobs and `result.patch`. Apply a patch with `patch -p1 < result.patch` in the original repo, after reading it.
@@ -192,6 +194,9 @@ name = "default-nix"
 read  = ["**"]
 write = ["src/**", "tests/**", "**/__pycache__/**"]
 deny  = [".env", ".env.*", "**/.env", "**/.env.*", "secrets/**", ".git/**", "**/*.pem", "**/id_rsa*"]
+deny_except = [".env.example", ".env.sample", ".env.template", "**/.env.example", "**/.env.sample", "**/.env.template"]
+skip    = []                       # not copied into the workspace, e.g. [".venv/**"]
+scratch = [".pytest_cache/**"]     # caches: commands may write here; not reported, not in the patch
 
 [exec]
 allow = [["pytest"], ["python3", "-m", "pytest"]]   # argv prefixes
@@ -218,9 +223,11 @@ The shipped policies fit the demo. For a real repository, copy one and change fo
 1. **Where the agent may write.** `[filesystem] write`: for example `["src/**", "tests/**", "pyproject.toml"]`. `fs.write` makes missing folders inside these paths. Anything else is refused, and what a command changes elsewhere is put back.
 2. **Which commands it may run.** `[exec] allow`: argv prefixes, bare program names. Every allowed command is arbitrary code (your test suite runs your code); the sandbox is what confines it. There is no network in the sandbox, so a command that downloads something will fail.
 3. **The packages your tests need.** The sandbox sees the copy of the repo and the folders in `sandbox.ro_mounts`, nothing else. Not your home folder, and not a virtualenv, even one inside the repo.
-   - *A virtualenv:* add its folder to `ro_mounts` and start `agentos` with it activated. A mount may not be under `/tmp`.
+   - *A virtualenv:* add its folder to `ro_mounts`, start `agentos` with it activated, and if it lives inside the repo put it in `skip` so that it is not copied. A mount may not be under `/tmp`. If you forget to activate it, `agentos` prints a note.
 
      ```toml
+     [filesystem]
+     skip = [".venv/**"]
      [sandbox]
      ro_mounts = ["/usr", "/bin", "/lib", "/lib64", "/home/me/proj/.venv"]
      ```
@@ -237,13 +244,17 @@ The shipped policies fit the demo. For a real repository, copy one and change fo
    Everything under a mount can be read by the code the agent runs (never written). Do not mount a folder that holds secrets.
 4. **The limits.** `call_timeout_s` (60) must be longer than your test suite takes; `max_tool_calls` (50) is the whole run's budget; `max_output_kb` (64) is also the largest file `fs.read` returns.
 
+Then run `agentos check --policy my-policy.toml --repo /home/me/proj`. It says what `run` would refuse, and how many files and megabytes would be copied; if that number is large, add the big folders to `skip`.
+
 Things to know before the first run:
 
-- **The result is a patch**, printed at the end as `patch: <path>`. Read it, then apply it in your repository with `git apply <path>` or `patch -p1 < <path>`. A patch is text: if the run added a binary file, changed a file's mode or made an empty folder, the run ends with `NOT in the patch: …` and the patch starts with one `# agentos:` line per such change, saying where to copy the file from.
+- **The result is a patch**, printed at the end as `patch: <path>`. Read it, then apply it in your repository with `git apply <path>` or `patch -p1 < <path>`. A patch is text: if the run added a binary file or an empty file, changed a file's mode or made an empty folder, the run ends with `NOT in the patch: …` and the patch starts with one `# agentos:` line per such change, saying what to do by hand.
+- **The file tools read and write text.** `fs.read` returns at most `max_output_kb` at a time; for a larger file the agent asks for lines (`start_line`, `max_lines`). `fs.write` replaces a whole file. Binary files cannot be read or written by the agent, only by a command you allow.
 - **`.git` is not in the workspace** (the shipped deny list leaves it out), so commands that ask git for something will not find a repository.
-- **The whole repository is copied** at the start and again after every change. On btrfs and XFS the copies share disk blocks. Elsewhere, a repository with a large `node_modules` or `target/` folder is slow and takes space: 20,000 small files took 5.4 s for a 7-call run here, against 0.6 s for the demo.
-- **If you stop a run** (Ctrl-C, or the terminal closes), nothing is printed. `agentos status` shows it as `interrupted`; `agentos run --resume <id>` settles the call that was cut off and goes on.
-- **Nothing is deleted for you.** Each execution keeps its workspace and one checkpoint per change. Remove old ones with `rm -rf ~/.local/share/agentos/executions/<id>`.
+- **The whole workspace is copied** at the start and again after every change. On btrfs and XFS the copies share disk blocks. Elsewhere a repository with a large `node_modules` or `target/` folder is slow and takes space: 20,000 small files took 5.4 s for a 7-call run here, against 0.6 s for the demo. `skip` leaves a folder out, but then it is not in the workspace at all; that suits a virtualenv (it is used from its own path) and does not suit `node_modules`.
+- **If you stop a run** (Ctrl-C, or the terminal closes), it says how to go on: `agentos run --resume <id>`. `agentos status` shows it as `interrupted`.
+- **If the model gives up**, the run ends as `STOPPED`, not `COMPLETED`: a model that answers with words while its last command is still failing is reminded once, then the run is closed with its last words.
+- **Nothing is deleted for you.** Each execution keeps its workspace and one checkpoint per change. `agentos rm --older-than 14` removes old ones; it keeps executions that are running or can still be resumed.
 
 ## What it does not do
 

@@ -2470,7 +2470,7 @@ What a policy author must know: everything under a read-only mount can be read b
 **Concepts to learn.** Paging through data; why a truncated answer must say that it is truncated.
 
 ### D-103 — `agentos rm`: executions are deleted by a command, never automatically
-- **Date:** 2026-11-14
+- **Date:** 2026-11-15
 - **Status:** Taken
 - **Area:** tooling
 - **ADR:** none
@@ -2491,7 +2491,7 @@ What a policy author must know: everything under a read-only mount can be read b
 **Concepts to learn.** Why destructive commands default to refusing.
 
 ### D-104 — `agentos check`: the startup checks, the policy and the copy, without starting anything
-- **Date:** 2026-11-14
+- **Date:** 2026-11-15
 - **Status:** Taken
 - **Area:** tooling
 - **ADR:** none
@@ -2512,7 +2512,7 @@ What a policy author must know: everything under a read-only mount can be read b
 **Concepts to learn.** None new.
 
 ### D-105 — agentos moves itself into a delegated cgroup scope
-- **Date:** 2026-11-14
+- **Date:** 2026-11-15
 - **Status:** Taken (D-013 stands: the cgroup is still delegated by systemd; only who types the command changes)
 - **Area:** sandbox
 - **ADR:** none
@@ -2536,7 +2536,7 @@ What a policy author must know: everything under a read-only mount can be read b
 **Concepts to learn.** `exec` replacing a process; why a process id is not a unique name over time.
 
 ### D-106 — Stopping a run (Ctrl-C, a closed terminal, `kill`) prints how to go on, then stops like a crash
-- **Date:** 2026-11-14
+- **Date:** 2026-11-15
 - **Status:** Taken
 - **Area:** durability
 - **ADR:** none
@@ -2559,7 +2559,7 @@ What a policy author must know: everything under a read-only mount can be read b
 **Concepts to learn.** Signals; what a handler may and may not do; why "stop cleanly" can be less safe than "stop".
 
 ### D-107 — A model that stops while its last command is still failing is told once, then the run is `stopped`, not `completed`
-- **Date:** 2026-11-14
+- **Date:** 2026-11-15
 - **Status:** Taken
 - **Area:** tooling
 - **ADR:** none
@@ -2653,6 +2653,7 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-14 | Prince asked where a real user would struggle. Claude used the built binary as a newcomer would, on the `nix` preset. Run and seen: (1) a patch from a run that added a binary file, made a script executable and changed a mode applied with `git apply` without any message, but the binary file was missing and both modes were lost; (2) a test importing a package from a `.venv` inside the repo ended with exit 2: the virtualenv is not used; (3) `--agent llm` with no server running copied the workspace, failed with `Connection refused`, named no environment variable, and left an execution that shows as `interrupted` with 0 calls; (4) a repo of 20,000 small files (79 MB) took 5.4 s for the 7-call demo script against 0.6 s for the demo repo, with 4 full checkpoints; (5) a policy parse error is printed twice; (6) without the `systemd-run` prefix the message names a missing `cpu` controller before it names the fix. Read, not run: there is no signal handler, so Ctrl-C ends the run without a word; nothing deletes old executions; the README does not say how to apply the patch or write a policy. A Ctrl-C test from a background shell was void (background jobs ignore SIGINT) | The suites prove the claims; none of them plays a newcomer. Features that would close these gaps are outside v1 and are in the parking lot (spec §22) until Prince decides. Items 1, 3, 5, 6 and the README gaps are defects or wording inside v1 |
 | 2026-11-14 | First run on a project that is not the demo: an inventory service with real PyPI packages in a virtualenv, written by a separate AI agent that was told not to look at AgentOS. Expected the new dependency support to be the weak point. It worked at once (same `3 failed, 75 passed` as outside; after four tickets were fixed through the gateway, 79 passed, in the sandbox and again after `git apply` in a clone). What failed was elsewhere: the applied patch lacked the package's empty `__init__.py` (B-012, fixed, D-095); `.env.example` was denied; a 134 KB fixture and a gzip file could not be read; `.pytest_cache` showed up as a policy violation on every test run; a forgotten `activate` gave exit 4 with no hint. The local 4B model solved a one-line ticket in 5 calls and 33 s and gave up on a two-module ticket after one call, which the runtime records as `COMPLETED`. Record: `docs/results/real-repo-trial-nix.md` | A project nobody tuned for the tool finds different things from a test written by the tool's author: D-090's list of what a patch cannot carry was written from memory and was one item short. The limits that bite first are the file tools' (size, text only), not the sandbox's |
 | 2026-11-14 | Re-running the benchmarks after this round was expected to be routine. `make bench` ended with a Python traceback about a missing data file. Three steps earlier the `fs.write` benchmark had died, and the script's `\|\| true` had hidden it: the new startup probe (D-093) started the benchmark binary a second time (B-013; fixed by D-096). The same code had passed CI on both jobs. Numbers after the fix, `docs/results/bench-nix-m8/`: sandboxed `true` p50 5.62 ms (direct 1.06), `fs.write` 4 KB p50 13.34 ms, demo end to end p50 481 ms against 354 ms direct. All lower than the v0.1 run, the direct ones too, so the machine was quieter; nothing can be said about the code getting faster. The 200-kill run on `nix` after this round: 4,800 + 1,600 runs, 0 violations (`docs/results/recovery-200-nix-m8.md`) | Benchmarks are also a test: they are the only programs here that use the library without being the `agentos` binary. A suite that never leaves the main binary cannot see what a library user sees. And a step that may fail quietly should not be followed by steps that need its output |
+| 2026-11-15 | M9 built the parked ideas and repeated the real-project session. Each thing that had been in the way was gone (table in `docs/results/real-repo-trial-nix.md`). Three surprises on the way. (1) Self-start failed in its own test with `Unit run-p….scope was already loaded`: systemd-run names a scope after the process id, and the id survives `exec`. It had worked by hand from a terminal. (2) The 4B model, which gave up on the two-module ticket after one call in M8, now made seven; then a reply cut off inside a tool call made its server answer HTTP 500, and the runtime stopped with an error. (3) The reminder for a model that stops early (D-107) was therefore never seen with a real model; only the mock tests show it | A feature tried by hand in one setting (a terminal) is not tested; the test found the collision because it started agentos the way CI does. And every fix to the agent loop moves the model one step further, to the next unhandled case |
 
 ---
 
