@@ -76,3 +76,7 @@ Unchanged, as intended: `fs.write pyproject.toml` is denied (not in this policy'
 ## `agentos apply` on the same result (2026-11-15, after D-108)
 
 The M9 session's result, applied to a fresh clone of the inventory project with `agentos apply <id> --to <clone>`: 10 changes listed (4 modified files, 3 new files, 1 new empty file, 2 new folders), `src/inventory/alerts/__init__.py` present with 0 bytes, `git status` in the clone shows exactly those paths, 79 tests pass there. The step that needed a `touch` by hand after `git apply` is gone.
+
+## The 4B model on the two-module ticket, third time (2026-11-15, after D-111)
+
+The same seven calls and the same cut-off reply as in the M9 re-trial. The difference is the ending: `STOPPED  the model's replies could not be used three times in a row; the server's last answer: HTTP 500: Failed to parse tool call arguments as JSON …`, after 94 s, with a patch that holds the model's change to `parsing.py`, and `agentos status` showing `stopped`. Being told did not help this model: the file it wanted to send whole does not fit in what it can write. That is the model's limit, and now it ends as one.

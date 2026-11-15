@@ -135,6 +135,25 @@ pub struct LlmAgent {
     nudged_to_go_on: bool,
 }
 
+/// What one exchange with the model's server gave (see `LlmAgent::complete`).
+enum Reply {
+    /// The assistant's message.
+    Message(Value),
+    /// The server refused this request in a way that sending it again
+    /// unchanged will not cure. With a local server this is how a reply
+    /// that was cut off in the middle of a tool call shows up (HTTP 500).
+    Unusable(String),
+}
+
+enum Tried {
+    Done(Reply),
+    /// "Not now": worth sending again after a pause.
+    Busy(String),
+}
+
+/// Pauses between attempts when the server is busy: four attempts in all.
+const RETRY_WAITS_MS: [u64; 3] = [500, 2_000, 6_000];
+
 /// Start of the message that tells the model it stopped too early. Also how
 /// `restore` finds out, from the log, that the message was already sent.
 const GO_ON_MARK: &str = "[agentos] You answered without a tool call";
@@ -160,8 +179,36 @@ impl LlmAgent {
         self.unlogged.push(m);
     }
 
-    /// One request to `/chat/completions`; returns the assistant message.
-    fn complete(&self) -> Result<Value> {
+    /// One request to `/chat/completions`, sent again a few times if the
+    /// server says "not now". What comes back is sorted into three kinds,
+    /// because they call for three different things (D-111):
+    ///
+    /// | The server said | Meaning | What happens |
+    /// |---|---|---|
+    /// | 200 with a message | an answer | `Reply::Message` |
+    /// | 429, 502, 503, 504 | busy or restarting | wait and send again; if it stays so, an error: the run stops as interrupted and can be resumed later |
+    /// | 401, 403, 404 | wrong key, model or address | an error at once, naming the settings |
+    /// | any other status | this request will not get a better answer (the model's reply could not be used, or the conversation is too long) | `Reply::Unusable`: the caller tells the model, and gives up cleanly if it goes on |
+    /// | no connection | the server is gone | an error: interrupted, resumable |
+    fn complete(&self) -> Result<Reply> {
+        let mut last = String::new();
+        for wait_ms in RETRY_WAITS_MS.iter().copied().map(Some).chain([None]) {
+            match self.complete_once()? {
+                Tried::Done(reply) => return Ok(reply),
+                Tried::Busy(why) => last = why,
+            }
+            match wait_ms {
+                Some(ms) => std::thread::sleep(Duration::from_millis(ms)),
+                None => break,
+            }
+        }
+        bail!(
+            "the LLM server keeps answering that it is busy ({last}). The execution is unfinished and nothing is lost: \
+             run `agentos run --resume <id>` when the server answers again"
+        )
+    }
+
+    fn complete_once(&self) -> Result<Tried> {
         let url = format!("{}/chat/completions", self.cfg.base_url.trim_end_matches('/'));
         let body = json!({
             "model": self.cfg.model,
@@ -185,11 +232,23 @@ impl LlmAgent {
         let mut resp = req.send_json(&body).with_context(|| format!("calling the LLM at {url}"))?;
         let status = resp.status().as_u16();
         let text = resp.body_mut().read_to_string().context("reading the LLM's reply")?;
-        if status != 200 {
-            bail!("the LLM endpoint answered HTTP {status}: {}", text.chars().take(400).collect::<String>());
-        }
-        let reply: Value = serde_json::from_str(&text).context("the LLM's reply is not JSON")?;
-        reply["choices"][0]["message"].as_object().map(|m| Value::Object(m.clone())).context("the LLM's reply has no choices[0].message")
+        let shown: String = text.chars().take(400).collect();
+        Ok(match status {
+            200 => {
+                let reply: Value = serde_json::from_str(&text).context("the LLM's reply is not JSON")?;
+                let message = reply["choices"][0]["message"].as_object().map(|m| Value::Object(m.clone())).context("the LLM's reply has no choices[0].message")?;
+                Tried::Done(Reply::Message(message))
+            }
+            429 | 502 | 503 | 504 => Tried::Busy(format!("HTTP {status}: {shown}")),
+            401 | 403 | 404 => bail!(
+                "the LLM endpoint at {url} answered HTTP {status}: {shown}\n  \
+                 That is a wrong key, model name or address, not something the model did. Check AGENTOS_LLM_API_KEY, \
+                 AGENTOS_LLM_MODEL (in use: {}) and AGENTOS_LLM_BASE_URL (in use: {}).",
+                self.cfg.model,
+                self.cfg.base_url
+            ),
+            _ => Tried::Done(Reply::Unusable(format!("HTTP {status}: {shown}"))),
+        })
     }
 }
 
@@ -279,8 +338,23 @@ impl Agent for LlmAgent {
         }
         // The model may answer with a malformed call; tell it and ask again,
         // a few times at most.
+        let mut unusable: Option<String> = None;
         for _ in 0..3 {
-            let msg = self.complete()?;
+            let msg = match self.complete()? {
+                Reply::Message(msg) => msg,
+                Reply::Unusable(why) => {
+                    // Nothing came back that can be stored as the model's
+                    // message. Say so in the conversation and ask again;
+                    // the loop's limit of three covers this too.
+                    unusable = Some(why.clone());
+                    self.push(json!({"role": "user", "content": format!(
+                        "[agentos] Your last reply could not be used; the server said: {why}\n\
+                         A reply that is too long gets cut off. Answer again with ONE tool call and keep it short. \
+                         If a file is too long to send whole, say GIVE UP and why."
+                    )}));
+                    continue;
+                }
+            };
             let calls = msg["tool_calls"].as_array().cloned().unwrap_or_default();
             let Some(first) = calls.first() else {
                 let text = msg["content"].as_str().unwrap_or("").trim().to_string();
@@ -328,7 +402,12 @@ impl Agent for LlmAgent {
                 Err(e) => self.push(json!({"role": "tool", "tool_call_id": id, "content": format!("invalid tool call: {e}")})),
             }
         }
-        Ok(Action::GiveUp { reason: "the model sent three malformed tool calls in a row".into() })
+        Ok(Action::GiveUp {
+            reason: match unusable {
+                Some(why) => format!("the model's replies could not be used three times in a row; the server's last answer: {why}"),
+                None => "the model sent three malformed tool calls in a row".into(),
+            },
+        })
     }
 
     fn kind(&self) -> &'static str {

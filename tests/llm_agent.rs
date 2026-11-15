@@ -81,10 +81,16 @@ fn start_mock_with(reply_for: fn(&[Value]) -> Value) -> (String, Arc<Mutex<Vec<V
             }
             let mut req: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
             req["_authorization"] = json!(auth);
-            let reply = json!({"choices": [{"index": 0, "message": reply_for(req["messages"].as_array().map(|v| v.as_slice()).unwrap_or(&[]))}]});
+            let message = reply_for(req["messages"].as_array().map(|v| v.as_slice()).unwrap_or(&[]));
+            req["_nth"] = json!(seen2.lock().unwrap().len());
             seen2.lock().unwrap().push(req);
-            let text = reply.to_string();
-            let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", text.len(), text);
+            // A reply of the form {"_status": 500, "_body": "..."} makes the
+            // mock answer with that HTTP status instead of a message.
+            let (status, text) = match message["_status"].as_u64() {
+                Some(code) => (code, message["_body"].as_str().unwrap_or("").to_string()),
+                None => (200, json!({"choices": [{"index": 0, "message": message}]}).to_string()),
+            };
+            let _ = write!(stream, "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", text.len(), text);
         }
     });
     (url, seen)
@@ -246,4 +252,112 @@ fn a_model_that_goes_on_when_told_finishes_as_completed() {
     assert!(events.iter().any(|e| e["type"] == "execution.finished" && e["status"] == "completed"), "{events:#?}");
     assert_eq!(exec_exit_codes(&t, &events), vec![Some(1), Some(0)]);
     assert_eq!(seen.lock().unwrap().len(), 5);
+}
+
+// ---------------------------------------------------------------------------
+// D-111: what the model's server answers when it does not answer 200.
+// ---------------------------------------------------------------------------
+
+const CUT_OFF: &str = r#"{"error":{"code":500,"message":"Failed to parse tool call arguments as JSON: missing closing quote"}}"#;
+
+fn was_told_reply_unusable(messages: &[Value]) -> usize {
+    messages.iter().filter(|m| m["role"] == "user" && m["content"].as_str().is_some_and(|c| c.starts_with("[agentos] Your last reply could not be used"))).count()
+}
+
+/// The first answer after reading the file is "cut off" (HTTP 500); told
+/// so, the model does the job.
+fn cut_off_once(messages: &[Value]) -> Value {
+    let results = messages.iter().filter(|m| m["role"] == "tool").count();
+    match (results, was_told_reply_unusable(messages)) {
+        (0, _) => tool_call(1, "fs_read", json!({"path": "src/stats.py"})),
+        (1, 0) => json!({"_status": 500, "_body": CUT_OFF}),
+        (1, _) => tool_call(2, "fs_write", json!({"path": "src/stats.py", "content": FIXED})),
+        (2, _) => tool_call(3, "exec", json!({"argv": ["pytest", "-q"]})),
+        _ => json!({"role": "assistant", "content": "Fixed; the tests pass."}),
+    }
+}
+
+/// Every answer after the first write is cut off.
+fn cut_off_for_good(messages: &[Value]) -> Value {
+    match messages.iter().filter(|m| m["role"] == "tool").count() {
+        0 => tool_call(1, "fs_write", json!({"path": "src/extra.py", "content": "x = 1\n"})),
+        _ => json!({"_status": 500, "_body": CUT_OFF}),
+    }
+}
+
+/// Busy twice (503), then fine.
+fn busy_twice(messages: &[Value]) -> Value {
+    // The mock counts requests in `_nth` only for the test; here the count
+    // of earlier refusals is kept in a static.
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    if CALLS.fetch_add(1, Ordering::SeqCst) < 2 {
+        return json!({"_status": 503, "_body": "loading model"});
+    }
+    reply_for(messages)
+}
+
+fn wrong_key(_: &[Value]) -> Value {
+    json!({"_status": 401, "_body": "invalid api key"})
+}
+
+#[test]
+fn a_reply_the_server_could_not_use_is_told_to_the_model_and_the_run_goes_on() {
+    let t = TestEnv::new("llm-cut-off-once");
+    let (url, seen) = start_mock_with(cut_off_once);
+    let out = run_llm(&t, &url, &[]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let id = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    let events = t.events(&id);
+    assert!(events.iter().any(|e| e["type"] == "execution.finished" && e["status"] == "completed"), "{events:#?}");
+    assert_eq!(exec_exit_codes(&t, &events), vec![Some(0)]);
+    let told: Vec<&Value> = events.iter().filter(|e| e["type"] == "agent.message" && e["message"]["role"] == "user").map(|e| &e["message"]["content"]).collect();
+    assert!(told.iter().any(|c| c.as_str().unwrap().contains("Failed to parse tool call arguments")), "the server's words are in the log: {told:?}");
+    assert_eq!(seen.lock().unwrap().len(), 5);
+}
+
+#[test]
+fn replies_that_stay_unusable_end_the_run_as_stopped_with_its_patch() {
+    let t = TestEnv::new("llm-cut-off-for-good");
+    let (url, seen) = start_mock_with(cut_off_for_good);
+    let out = run_llm(&t, &url, &[]);
+    assert!(out.status.success(), "not an error: the run ends in an orderly way\n{}", String::from_utf8_lossy(&out.stderr));
+    let id = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    let events = t.events(&id);
+    let end = events.iter().find(|e| e["type"] == "execution.finished").expect("the execution is finished, not interrupted");
+    assert_eq!(end["status"], "stopped");
+    assert!(end["summary"].as_str().unwrap().contains("could not be used three times") && end["summary"].as_str().unwrap().contains("HTTP 500"), "{end}");
+    assert_eq!(seen.lock().unwrap().len(), 4, "the write, then three tries");
+    // The work done before is in the patch.
+    let patch = std::fs::read_to_string(t.exec_dir(&id).join("result.patch")).unwrap();
+    assert!(patch.contains("b/src/extra.py"), "{patch}");
+    assert!(t.agentos(&["status", &id]).contains("stopped"));
+}
+
+#[test]
+fn a_busy_server_is_asked_again() {
+    let t = TestEnv::new("llm-busy");
+    let (url, seen) = start_mock_with(busy_twice);
+    let out = run_llm(&t, &url, &[]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let id = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    assert!(t.events(&id).iter().any(|e| e["type"] == "execution.finished" && e["status"] == "completed"));
+    assert_eq!(seen.lock().unwrap().len(), 8, "two refusals and the six requests of the usual run");
+    // The refusals left no trace in the conversation: the model was never told.
+    let roles: Vec<String> = t.events(&id).iter().filter(|e| e["type"] == "agent.message").map(|e| e["message"]["role"].as_str().unwrap().to_string()).collect();
+    assert_eq!(roles.iter().filter(|r| *r == "user").count(), 1);
+}
+
+#[test]
+fn a_wrong_key_is_an_error_that_names_the_settings() {
+    let t = TestEnv::new("llm-wrong-key");
+    let (url, seen) = start_mock_with(wrong_key);
+    let out = run_llm(&t, &url, &[]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    for needle in ["HTTP 401", "AGENTOS_LLM_API_KEY", "AGENTOS_LLM_MODEL", "AGENTOS_LLM_BASE_URL"] {
+        assert!(err.contains(needle), "`{needle}` is missing from:\n{err}");
+    }
+    assert!(!err.contains("KEY-CANARY-123"), "the key was printed");
+    assert_eq!(seen.lock().unwrap().len(), 1, "no second try with a key that is wrong");
 }

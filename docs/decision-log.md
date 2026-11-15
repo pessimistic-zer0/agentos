@@ -2659,6 +2659,32 @@ What a policy author must know: everything under a read-only mount can be read b
 
 **Concepts to learn.** None new.
 
+### D-111 — What the model's server answers decides what happens: wait, stop with an error, or tell the model
+- **Date:** 2026-11-15
+- **Status:** Taken
+- **Area:** tooling
+- **ADR:** none
+
+**In plain words.** Until now any answer from the model's server other than "200 OK" ended the run with an error and left it interrupted. That is right when the server is down: you resume later. It is wrong in two other cases. If the server is only busy for a moment, the run should wait and ask again. And if the server rejects this particular reply (with a local server, a reply that was cut off in the middle of a tool call comes back as "HTTP 500"), resuming asks the same question and gets the same answer for ever. Now the three cases are told apart.
+
+**The problem.** M9 re-trial: the 4B model's reply was cut off, the server answered `HTTP 500: Failed to parse tool call arguments as JSON`, and the run stopped with that error and an `interrupted` execution that could not get any further by being resumed.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| 429, 502, 503, 504: wait 0.5 s, 2 s, 6 s and send again; if still busy, an error that says the execution can be resumed | Taken | These statuses mean "not now". The run stays resumable |
+| 401, 403, 404: an error at once that names the three settings | Taken | A wrong key or model name does not get better by waiting, and it is the user's to fix |
+| Any other status: tell the model that its reply could not be used (with the server's words) and ask again; after three in a row, end the run as `stopped` with the patch of what was done | Taken | Asking again unchanged cannot help; asking again with a message can. And if it does not, the user gets a finished execution and a patch instead of an error |
+| Treat every non-200 as "tell the model" | Discarded | A model cannot fix a busy server or a wrong key |
+| Look for "tool call" in the error text | Discarded | Server-specific wording |
+| No connection at all: unchanged (an error; interrupted; resumable) | Taken | The server is gone; D-089's check covers the start of a run |
+
+**What this means for the code.** `agent/llm.rs`: `complete` (the retry loop), `complete_once` (the sorting), `enum Reply { Message, Unusable }`. The "unusable" message goes into the conversation as a `user` message and is logged (ADR 0005); the waiting is not logged, because the conversation did not change. The mock server in `tests/llm_agent.rs` can answer with a status.
+
+**Evidence.** `tests/llm_agent.rs`, `nix` preset, 2026-11-15: `a_reply_the_server_could_not_use_is_told_to_the_model_and_the_run_goes_on`, `replies_that_stay_unusable_end_the_run_as_stopped_with_its_patch`, `a_busy_server_is_asked_again`, `a_wrong_key_is_an_error_that_names_the_settings` pass (9 tests in the file). With the real 4B model on the same ticket as before: the same seven calls, the same cut-off reply, and now `STOPPED the model's replies could not be used three times in a row; the server's last answer: HTTP 500 …` after 94 s, with a patch that holds its change to `parsing.py`; `agentos status` says `stopped`. The model did not recover after being told, so the "goes on" path is shown by the mock only. Not yet run on `fhs`.
+
+**Concepts to learn.** HTTP status classes (glossary); transient versus permanent failures; why "retry" needs to know which one it is.
+
 ---
 
 ## Still open
