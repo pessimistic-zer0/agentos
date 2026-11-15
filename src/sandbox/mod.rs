@@ -6,6 +6,7 @@
 //! | Path access (fs tools) | `openat2(RESOLVE_BENEATH)` on a workspace handle | `beneath.rs` |
 //! | Path access (exec) | Landlock | `landlock.rs` |
 //! | Process | user + PID namespace, no capabilities, `no_new_privs` | `ns.rs` |
+//! | System calls | seccomp deny list: namespaces, mounts, `bpf`, `ptrace`, `io_uring`, ... fail with `EPERM` | `seccomp.rs` |
 //! | Network | empty network namespace (loopback only) | `ns.rs` |
 //! | Resources | cgroup v2 limits; watchdog kills the cgroup | `cgroup.rs` |
 //! | Environment | cleared; only PATH, HOME, LANG | `gateway.rs` |
@@ -14,6 +15,7 @@ pub mod beneath;
 pub mod cgroup;
 pub mod landlock;
 pub mod ns;
+pub mod seccomp;
 
 use std::io::Read;
 use std::os::fd::{AsRawFd, OwnedFd};

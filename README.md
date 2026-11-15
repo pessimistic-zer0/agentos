@@ -13,7 +13,7 @@ It is a learning and portfolio project, not a product. It does one thing: one ag
 - **What it has been run on.** The demo; a Python project with real PyPI packages in a virtualenv; a Node project with npm packages; a Rust project. On each, tickets were fixed through the gateway and the result applied to a fresh clone, where the project's own tests passed ([`docs/results/real-repo-trial-nix.md`](docs/results/real-repo-trial-nix.md), [`second-stack-trial-nix.md`](docs/results/second-stack-trial-nix.md)). A local 4-billion-parameter model solved a one-line ticket through it and reached its own limit on a two-file one.
 - **Where it is verified.** NixOS 26.05 on the development machine (`nix` preset), and Ubuntu 24.04 in CI (`fhs` preset), including a job that keeps Ubuntu's restriction on user namespaces switched on and uses the AppArmor profile that comes with agentos. Latest green run on everything but the newest change: [43733350171](https://github.com/pessimistic-zer0/agentos/actions/runs/43733350171). Debian, Fedora and Arch use the same `fhs` preset and have not been run.
 - **What the suites say.** 4,800 kills at 8 points with 0 invariant violations, 32 attacks with 0 escapes, 130 tests in all. See [What it shows](#what-it-shows).
-- **What it is not.** Not hardened like a container runtime (no seccomp filter, no disk limit), no network for commands, one agent at a time. Read [what it does not do](#what-it-does-not-do) before trusting it with anything.
+- **What it is not.** Not hardened like a container runtime (a seccomp deny list but no allow list, no disk limit), no network for commands, one agent at a time. Read [what it does not do](#what-it-does-not-do) before trusting it with anything.
 - **How it got here.** Fourteen bugs were found on the way: eight by the suites and the first CI runs, and six after every suite had passed (four by using the program on things the suites did not try, one by the benchmarks, one by CI on the other system). Each has a note in [`docs/bugs.md`](docs/bugs.md), and the six are told as a story in [`docs/what-the-suites-missed.md`](docs/what-the-suites-missed.md). The history by milestone is in [`docs/milestones/`](docs/milestones/) (M0 to M10).
 - Licensed under MIT or Apache-2.0, at your option (see [License](#license)).
 
@@ -261,7 +261,7 @@ Things to know before the first run:
 
 ## What it does not do
 
-- **It is not hardened like a production container runtime.** No seccomp filter; kernel bugs are out of scope; tested on one kernel and one distribution.
+- **It is not hardened like a production container runtime.** The seccomp filter is a short deny list, not an allow list; kernel bugs are out of scope; tested on one kernel and one distribution.
 - **No power-loss guarantee.** The tests kill the process; they do not cut power. Checkpoints are not fsynced.
 - **No exactly-once execution.** A command that was cut off is rolled back and may be issued again by the agent as a new call. An external call is applied once only if the service honours the idempotency key.
 - **No disk limit.** A command can fill the disk. Checkpoints are never pruned.

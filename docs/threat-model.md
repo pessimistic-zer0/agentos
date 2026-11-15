@@ -63,6 +63,7 @@ All tests are in `tests/security/main.rs` unless another file is named. Results:
 | 30 | Creating or reading a denied path later | Deny rules checked on the requested and the resolved path; revert after `exec` | `denied_paths_cannot_be_created_or_read_later` |
 | 31 | Output flood | Output read on threads and cut at `max_output_kb`; log stores hashes | `output_flood_is_truncated_and_does_not_fill_the_log` |
 | 32 | Rewriting history (the log) | No tool reaches it (rows 8, 11); events are only ever inserted | covered by 8 and 11 |
+| 33 | Reaching more of the kernel from inside: nested user or mount namespaces, `mount`, `bpf`, `ptrace`, `io_uring`, `perf_event_open`, key rings (added for v1.0, D-116) | A seccomp deny list installed after Landlock; these calls fail with `EPERM`, `clone3` with `ENOSYS` (so libc falls back to `clone`, whose namespace flags are checked). Not yet verified on `fhs` | `seccomp_refuses_namespaces_mounts_and_kernel_interfaces` |
 | — | The API key ending up on disk | Sent as a header only; excluded from serialization | `tests/llm_agent.rs`: `llm_loop_fixes_the_demo_and_logs_the_conversation` |
 | — | Refusing ordinary work (false denials) | — | `tests/benign.rs`: 23 operations, 0 false denials |
 
@@ -72,7 +73,7 @@ The second line of defence for rows 10, 11, 22, 27: Landlock allows only `/work`
 
 These are not defended against. They are limits, not oversights.
 
-- **Kernel exploits.** The sandbox is kernel features; a kernel bug that breaks namespaces or Landlock breaks AgentOS. There is no seccomp filter (cut from v1), so sandboxed code can call any system call an unprivileged process may, including creating nested user namespaces. That is more kernel surface than a hardened container runtime exposes.
+- **Kernel exploits.** The sandbox is kernel features; a kernel bug that breaks namespaces or Landlock breaks AgentOS. Since D-116 a seccomp filter refuses about 45 system calls (row 33), among them new namespaces, `bpf`, `io_uring` and `ptrace`. It is a deny list: every other call an unprivileged process may make is still allowed, which is more kernel surface than the allow list of a hardened container runtime.
 - **A malicious host user or root.** Anyone who can run commands as the user can read the log and edit the workspace.
 - **Side channels.** Timing, cache, CPU frequency.
 - **A malicious or leaky LLM provider.** With a hosted API, everything the agent reads is sent to it. Denied files are never in the workspace, so they cannot be sent; anything else can.

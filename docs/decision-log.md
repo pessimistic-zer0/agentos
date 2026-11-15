@@ -2807,6 +2807,37 @@ Milestones, in the order of work: **M11** hardening (A1, A2, A3); **M12** real p
 
 ---
 
+### D-116 — seccomp: a hand-written deny list, installed by the sandbox's init after Landlock
+- **Date:** 2026-11-16
+- **Status:** Taken
+- **Area:** sandbox
+- **ADR:** none
+
+**In plain words.** seccomp is a small filter program the kernel runs every time a process makes a system call (asks the kernel to do something). AgentOS now gives every sandboxed command such a filter. It refuses about 45 kinds of request that a test command never needs and that open up parts of the kernel with a long history of security bugs: making new namespaces (a sandbox inside the sandbox), mounting, `bpf`, `ptrace`, `io_uring`, key rings, kernel modules, setting the clock. The command gets the ordinary error "not permitted" (`EPERM`) and carries on; everything else is allowed.
+
+**The problem.** v1 cut seccomp (design document, cut list). The threat model (§4) said what that left open: a command could make any system call an unprivileged process may, including creating nested user namespaces. The security test written for this item showed that it really could: `unshare(CLONE_NEWUSER)`, `unshare(CLONE_NEWNS)` and `ptrace(PTRACE_TRACEME)` all succeeded inside the sandbox.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Deny list: allow everything except named calls | Taken | Breaks nothing the trials use (cargo with its linker, node, pytest in a virtualenv, Python threads, subprocess and multiprocessing, a shell pipe; experiment `m11-seccomp`) and removes the calls that matter most |
+| Allow list: refuse everything except named calls (Docker's default profile) | Discarded | Must know every call of every toolchain a user might allow; one missing entry breaks a real command in a way that is hard to diagnose. Less kernel surface, so it is the honest limit stated in the threat model and README |
+| The `seccompiler` or `libseccomp` crate | Discarded | A new dependency for about 80 lines of BPF; written by hand, each instruction can be explained in the milestone document |
+| Kill the process on a refused call | Discarded | Looks like a crash of the command; programs already handle `EPERM` (libuv falls back when `io_uring` is refused) |
+| `EPERM` for `clone3` | Discarded | `clone3` passes its flags in memory, which a seccomp filter cannot read. glibc falls back to `clone` only on `ENOSYS`, so `clone3` gets `ENOSYS`, and `clone`, whose flags are in a register, is refused when it asks for a namespace |
+| A policy switch to turn the filter off | Discarded | Nothing in the trials needed it; one more way to weaken the sandbox. Revisit if a real test command needs a refused call |
+| Install in the command's process (G) just before `execve` | Discarded | Installing in C (the sandbox's init) right after Landlock covers G and every process it starts, and C itself, which needs only fork, wait and write |
+
+Other choices inside the filter: a call made with another architecture's numbers kills the process (otherwise the numbers below would not mean what they say); on x86_64 the x32 ABI (bit 30 set) gets `ENOSYS`.
+
+**What this means for the code.** New `src/sandbox/seccomp.rs` (the list, the program, `install`, two unit tests); `ns::init` calls `seccomp::install()` after `landlock::restrict`. New security test `seccomp_refuses_namespaces_mounts_and_kernel_interfaces` (row 33 of the threat model). x86_64 and aarch64 only; other architectures do not compile. Only x86_64 has been built and run.
+
+**Evidence.** Experiment `experiments/m11-seccomp/NOTES.md` (filter of 105 instructions; refused calls return `EPERM`, `clone3` `ENOSYS`; the three trial projects give the same test results as without it). The new security test before the change: fails, with `unshare-user OK`, `unshare-mount OK`, `ptrace OK`, `bpf EINVAL`, `io_uring_setup EFAULT`, `mount EFAULT`, `keyctl EINVAL`, `perf_event_open EFAULT`, `clone3 EINVAL`, and `EPERM` only for `clone-newuser` and `userfaultfd` (for reasons other than a filter). After: passes. `make test` 133 passed; clippy clean. Through `agentos run` on copies of `wordfreq-rs` and `shortlink-node` with the second trial's policies: `cargo test --offline` exit 101 then 0 after the fix, `npm test` exit 1 (the seeded failures), the same as in `docs/results/second-stack-trial-nix.md`. Not yet verified on `fhs`.
+
+**Concepts to learn.** System call; seccomp and seccomp-BPF; classic BPF instructions (load, jump, return); `struct seccomp_data`; why a filter cannot read memory (time-of-check problems); `EPERM` vs `ENOSYS`; deny list vs allow list; x32 ABI; `no_new_privs` as the precondition for an unprivileged filter.
+
+---
+
 ## Still open
 
 | Question | Notes |
@@ -2957,3 +2988,8 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | Effectively-once | The result of sending a request possibly several times to a receiver that ignores repeats of the same key |
 | Flaky test | A test whose result depends on timing or the machine, not only on the code |
 | Timer slack | The kernel may wake a sleeping thread later than asked, to save power; a short sleep is a minimum, not an exact time |
+| seccomp | A Linux feature: a filter program attached to a process that the kernel runs on each of its system calls, to allow it or refuse it |
+| System call | A request from a program to the kernel (open a file, start a process, make a namespace) |
+| Classic BPF | A tiny instruction set (load, compare and jump, return) that the kernel runs safely; seccomp filters are written in it |
+| Deny list / allow list | A deny list names what is refused and allows the rest; an allow list names what is allowed and refuses the rest |
+| EPERM / ENOSYS | Error codes: "operation not permitted" and "function not implemented" |

@@ -53,7 +53,7 @@ v1 is one agent, one workspace, four tools, and a CLI.
 | Network of any kind, including web search and an allowlist proxy | Network is fully off in v1; search can leak data out and bring hostile text in |
 | External tools (open a PR, call an API) | See "Bonus" at the end; not part of done |
 | Human approval workflows | Only matters once external side effects exist |
-| seccomp filter | Namespaces + Landlock + no\_new\_privs cover the v1 threat model |
+| seccomp filter | Namespaces + Landlock + no\_new\_privs cover the v1 threat model. (Built for v1.0 as a deny list: D-116) |
 | Hash-chained event log | Detects corruption only; no test in v1 depends on it |
 | Hard disk-size limit on the workspace | The only rootless way is a tmpfs, which vanishes when the runtime is killed and breaks recovery. Listed as a known limit instead |
 | Git-based checkpoints | A test showed they miss ignored files, empty directories, file modes and a nested `.git` |

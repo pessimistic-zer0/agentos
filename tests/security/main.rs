@@ -442,6 +442,61 @@ fn exec_cannot_reach_host_abstract_unix_sockets() {
     assert_blocked(&out, &["connect abstract socket"]);
 }
 
+/// The seccomp filter (D-116): system calls that widen the kernel surface are
+/// refused with EPERM even though everything else about the sandbox would
+/// allow them. Nested user namespaces are the case `threat-model.md` §4 named.
+/// Some of these calls also fail without a filter (bad arguments give EFAULT
+/// or EINVAL), so the test asks for EPERM exactly, before the kernel looks at
+/// the arguments. System call numbers are x86_64's.
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn seccomp_refuses_namespaces_mounts_and_kernel_interfaces() {
+    let t = env("sec-seccomp");
+    let repo = make_repo(&t);
+    let code = r#"
+import ctypes, errno, subprocess, threading
+libc = ctypes.CDLL(None, use_errno=True)
+def sc(name, nr, *args):
+    ctypes.set_errno(0)
+    r = libc.syscall(ctypes.c_long(nr), *[ctypes.c_long(a) for a in args])
+    if r == 0 and nr == 56:
+        os._exit(0)  # the child of a clone that worked
+    if r > 0 and nr == 56:
+        os.waitpid(r, 0)
+    e = ctypes.get_errno() if r == -1 else 0
+    print(f"RESULT {name} {errno.errorcode.get(e, 'OK') if e else 'OK'}", flush=True)
+CLONE_NEWUSER, CLONE_NEWNS, SIGCHLD = 0x10000000, 0x00020000, 17
+sc('unshare-user', 272, CLONE_NEWUSER)
+sc('unshare-mount', 272, CLONE_NEWNS)
+sc('clone-newuser', 56, CLONE_NEWUSER | SIGCHLD, 0, 0, 0, 0)
+sc('mount', 165, 0, 0, 0, 0, 0)
+sc('io_uring_setup', 425, 1, 0)
+sc('bpf', 321, 0, 0, 0)
+sc('keyctl', 250, 0, 0)
+# PTRACE_TRACEME that works would stop this process at its next signal, so a
+# child asks and then exits.
+pid = os.fork()
+if pid == 0:
+    sc('ptrace', 101, 0, 0, 0, 0)
+    os._exit(0)
+os.waitpid(pid, 0)
+sc('perf_event_open', 298, 0, 0, -1, -1, 0)
+sc('userfaultfd', 323, 0)
+sc('clone3', 435, 0, 0)
+th = threading.Thread(target=lambda: None); th.start(); th.join()
+print('subprocess', subprocess.run(['python3', '-c', 'print(7)'], capture_output=True, text=True).stdout.strip())
+"#;
+    let (_, out) = attack(&t, &repo, code);
+    let stdout = out["stdout"].as_str().unwrap();
+    let stderr = out["stderr"].as_str().unwrap_or("");
+    for name in ["unshare-user", "unshare-mount", "clone-newuser", "mount", "io_uring_setup", "bpf", "keyctl", "ptrace", "perf_event_open", "userfaultfd"] {
+        assert!(stdout.contains(&format!("RESULT {name} EPERM\n")), "{name} must be refused with EPERM\nstdout:\n{stdout}\nstderr:\n{stderr}");
+    }
+    // clone3 cannot be inspected; "not implemented" makes libc fall back to clone.
+    assert!(stdout.contains("RESULT clone3 ENOSYS\n"), "clone3 must give ENOSYS\nstdout:\n{stdout}");
+    assert!(stdout.contains("subprocess 7"), "ordinary work must still run under the filter:\n{stdout}\n{stderr}");
+}
+
 // ===========================================================================
 // 5. Resources: fork bombs, memory, infinite loops, leftover processes
 // ===========================================================================

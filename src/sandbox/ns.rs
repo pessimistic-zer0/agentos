@@ -14,7 +14,7 @@
 //!    joins the exec cgroup; unshare(user, mount, pid, net); writes uid/gid maps
 //!    └─ C  PID 1 of the new PID namespace
 //!          builds the new root, pivot_root, loopback up,
-//!          drops capabilities, no_new_privs, Landlock
+//!          drops capabilities, no_new_privs, Landlock, seccomp
 //!          └─ G  execve(the allowed program)
 //! ```
 //!
@@ -244,6 +244,9 @@ fn init(spec: &SandboxSpec, status: &mut fs::File) -> Result<i32> {
     drop_privileges()?;
     let ro: Vec<&Path> = spec.ro_mounts.iter().map(|p| p.as_path()).collect();
     landlock::restrict(&ro).context("applying Landlock")?;
+    // Last: from here on C makes only the calls an init needs (fork, wait,
+    // write), none of them refused.
+    super::seccomp::install()?;
 
     let prog = CString::new(spec.program.as_os_str().as_encoded_bytes())?;
     let argv: Vec<CString> = spec.argv.iter().map(|a| CString::new(a.as_str())).collect::<Result<_, _>>()?;

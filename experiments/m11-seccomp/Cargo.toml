@@ -1,0 +1,12 @@
+[package]
+name = "m11-seccomp"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# M11 experiment: a seccomp deny-list filter written by hand as classic BPF,
+# with only `libc`, before building it into the sandbox (D-114, A1).
+[dependencies]
+libc = "0.2"
+
+[workspace]

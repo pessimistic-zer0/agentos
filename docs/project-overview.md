@@ -230,7 +230,7 @@ Seven bugs in the runtime itself were found by the suites or the demo, each with
 | **A release after `v0.1`** | Not tagged. Rule since D-113: tag only after the CI run on that commit is green | Decide what the release is called and what it must contain |
 | **The newest change on `fhs`** | `exec.helpers` (D-112) has run on `nix` only | A push and a green CI run |
 | **Known limits that are parked** | Binary files through the agent's own file tools; a read-only folder inside the workspace (`node_modules`); build folders outside the checkpoints; downloads in the sandbox; a merge for `apply` | `AgentOS_Project_Spec.md` §22 |
-| **Hardening that v1 cut** | No seccomp filter, no disk limit | Each is a milestone of its own (`docs/threat-model.md` §4) |
+| **Hardening that v1 cut** | seccomp filter built for v1.0 (D-116, not yet verified on `fhs`); no disk limit yet | M11 (D-114) |
 
 ### 6.2 The bonus
 
@@ -254,7 +254,7 @@ Parking-lot ideas (§22 of the spec) include an `fs.patch` tool so small models 
 
 ## 7. What it does not do (honest limits)
 
-- **Not hardened like a production container runtime.** No seccomp filter; kernel bugs are out of scope; tested on one kernel and one distribution.
+- **Not hardened like a production container runtime.** The seccomp filter is a short deny list, not an allow list; kernel bugs are out of scope; tested on one kernel and one distribution.
 - **No power-loss guarantee.** The tests kill the process; they do not cut power. Checkpoints are not fsynced.
 - **No exactly-once execution.** A command that was cut off is rolled back and may be asked for again by the agent as a new call.
 - **No disk limit.** A command can fill the disk; checkpoints are never pruned. (A tmpfs would give a hard cap but is lost when the runtime is killed, which breaks recovery; ADR 0010.)
