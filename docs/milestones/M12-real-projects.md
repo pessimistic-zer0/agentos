@@ -18,21 +18,21 @@ Three gaps the trials on real projects found (D-114). **B5:** an edit tool, so a
 | Requirement | Met? | Evidence (command and result) |
 |---|---|---|
 | B5: an edit changes exactly the named text and nothing else | Yes, both presets (`fhs`: CI run 43894443267, D-125) | `tests/edit.rs`: `an_edit_changes_one_place_and_nothing_else`, `an_edit_keeps_the_files_mode_and_works_on_text_that_is_not_ascii` |
-| B5: an edit that fits no place, or more than one, changes nothing and says why | On `nix` yes | `an_edit_that_does_not_fit_one_place_changes_nothing_and_says_why`; unit tests `edit_tests` in `src/tools/fs.rs` |
-| B5: policy and confinement as for `fs.write`, plus read access | On `nix` yes | `an_edit_needs_write_and_read_access_and_stays_in_the_workspace` (fails with the read check removed) |
+| B5: an edit that fits no place, or more than one, changes nothing and says why | Yes, both presets | `an_edit_that_does_not_fit_one_place_changes_nothing_and_says_why`; unit tests `edit_tests` in `src/tools/fs.rs` |
+| B5: policy and confinement as for `fs.write`, plus read access | Yes, both presets | `an_edit_needs_write_and_read_access_and_stays_in_the_workspace` (fails with the read check removed) |
 | B5: a kill at any crash point leaves the edit not done or wholly done, and a resumed run applies it once | Yes, both presets | `an_edit_is_recovered_like_a_write`: 8 points × 50 kills by hand on `nix`, 400 runs, 0 violations; 8 × 200 in CI on `fhs`, 1,600 runs, 0 violations (run 43894443267); reports 22 violations when recovery is deliberately broken |
 | B5: a small model can use it | Yes, one run | Qwen3-VL-4B, ticket INV-102: 7 calls, 36 s, solved; three failures before (`docs/results/real-repo-trial-nix.md`) |
 | B4: commands can use the folder and cannot change it; the original repository is untouched | Yes, both presets (CI run 43894443267, D-125) | `tests/rodirs.rs`: `commands_use_the_folder_and_cannot_change_it` (ten kinds of change refused; fails without the read-only flag) |
 | B4: it is never copied: not in the workspace on the host, not in a checkpoint, not in the patch, not touched by `apply` | On `nix` yes | the same test |
-| B4: the file tools read it and can never write it or leave it | On `nix` yes | `the_file_tools_read_it_from_the_repository_and_never_write_it` |
-| B4: a denied path inside, a missing folder or a symlink stops the run before it starts | On `nix` yes | `a_denied_file_in_the_folder_stops_the_run_before_it_starts`, `a_folder_that_is_missing_or_a_symlink_is_refused` |
-| B4: a mount point cannot be redirected | On `nix` yes | `a_command_that_swaps_the_way_to_the_mount_point_is_reverted`, `the_sandbox_refuses_a_mount_point_that_is_a_symlink` |
-| B4: it is there again after a kill and a resume | On `nix` yes | `the_folder_is_still_there_after_a_kill_and_a_resume` |
+| B4: the file tools read it and can never write it or leave it | Yes, both presets | `the_file_tools_read_it_from_the_repository_and_never_write_it` |
+| B4: a denied path inside, a missing folder or a symlink stops the run before it starts | Yes, both presets | `a_denied_file_in_the_folder_stops_the_run_before_it_starts`, `a_folder_that_is_missing_or_a_symlink_is_refused` |
+| B4: a mount point cannot be redirected | Yes, both presets | `a_command_that_swaps_the_way_to_the_mount_point_is_reverted`, `the_sandbox_refuses_a_mount_point_that_is_a_symlink` |
+| B4: it is there again after a kill and a resume | Yes, both presets | `the_folder_is_still_there_after_a_kill_and_a_resume` |
 | B4: the real case | Yes, one session | the Node project with `ro_dirs = ["node_modules"]` (`docs/results/second-stack-trial-nix.md`, last part) |
 | B6: a binary file is read and written byte for byte | Yes, both presets (`fhs`: CI run 43903121563, D-129) | `tests/binary.rs`: `binary_files_are_read_and_written_byte_for_byte` (compared with the `base64` program); unit tests in `src/tools/base64.rs` |
-| B6: an invalid request changes nothing and says why | On `nix` yes | `requests_that_are_not_valid_change_nothing_and_say_why` |
-| B6: the executable bit can be set, cleared and seen, and is kept otherwise | On `nix` yes | `the_executable_bit_is_set_cleared_kept_and_shown` |
-| B6: a kill around a write that only changes the mode is classified correctly | On `nix` yes | `a_kill_around_a_write_that_only_changes_the_mode_is_classified_by_the_mode` (fails with the mode comparison switched off) |
+| B6: an invalid request changes nothing and says why | Yes, both presets | `requests_that_are_not_valid_change_nothing_and_say_why` |
+| B6: the executable bit can be set, cleared and seen, and is kept otherwise | Yes, both presets | `the_executable_bit_is_set_cleared_kept_and_shown` |
+| B6: a kill around a write that only changes the mode is classified correctly | Yes, both presets | `a_kill_around_a_write_that_only_changes_the_mode_is_classified_by_the_mode` (fails with the mode comparison switched off) |
 
 ## 3. What you need to know first
 
