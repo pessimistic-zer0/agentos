@@ -140,3 +140,30 @@ jobs:
           name: bench-fhs
           path: docs/results/bench-fhs
 
+  # A second distribution (D-128): Debian 12, kernel 6.1, in a virtual
+  # machine started from Debian's own cloud image. GitHub has no Debian
+  # machines, and a container would share Ubuntu's kernel and give no
+  # systemd user session. The job is separate so that a problem with the VM
+  # cannot hide the Ubuntu jobs.
+  debian:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Let the runner's user use KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+      - name: Install QEMU
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 qemu-utils
+      - name: make test on Debian 12, as an ordinary user, with the fhs preset
+        run: VM_CPUS=4 VM_MEM=8G ci/debian-vm.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: debian-12-test-log
+          path: |
+            target/debian-vm/test.log
+            target/debian-vm/console.log
+

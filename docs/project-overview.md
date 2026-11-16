@@ -255,7 +255,7 @@ Parking-lot ideas (§22 of the spec) include an `fs.patch` tool so small models 
 
 ## 7. What it does not do (honest limits)
 
-- **Not hardened like a production container runtime.** The seccomp filter is a short deny list, not an allow list; kernel bugs are out of scope; tested on one kernel and one distribution.
+- **Not hardened like a production container runtime.** The seccomp filter is a short deny list, not an allow list; kernel bugs are out of scope; tested on three systems (NixOS, Ubuntu 24.04, Debian 12 in a virtual machine) and no others.
 - **No power-loss guarantee.** The tests kill the process; they do not cut power. Checkpoints are not fsynced.
 - **No exactly-once execution.** A command that was cut off is rolled back and may be asked for again by the agent as a new call.
 - **The disk limit is measured, not a hard cap** (`limits.workspace_mb`, D-117): a fast writer can pass it briefly before it is stopped and undone; checkpoints are never pruned. (A tmpfs would give a hard cap but is lost when the runtime is killed, which breaks recovery; ADR 0010.)

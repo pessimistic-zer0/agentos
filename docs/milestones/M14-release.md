@@ -23,7 +23,7 @@ Turn the code of M11 and M12 into something that can be called 1.0: say what sta
 | D9: benchmarks run on Ubuntu | Written; not yet run in CI | the same job runs `make bench` and uploads `docs/results/bench-fhs` |
 | D9: install instructions | Yes | README, "Installing it" |
 | D9: Cargo version 1.0.0 | Not started (last step) | |
-| D11: one more distribution in CI, or a written reason why not | Not started | |
+| D11: one more distribution in CI, or a written reason why not | Passes locally; CI job written, not yet run | `ci/debian-vm.sh`: Debian 12, kernel 6.1, in a VM on the development machine: `make test` 167 passed (`docs/results/debian-12.md`); CI job `debian` (D-128) |
 | D8: the project name | Open; only Prince decides | |
 | Tag `v1.0` after a green CI run on that commit | Not yet | |
 
@@ -39,6 +39,7 @@ Turn the code of M11 and M12 into something that can be called 1.0: say what sta
 
 | Experiment | What it tried | What happened | What it taught |
 |---|---|---|---|
+| `ci/debian-vm.sh`, run locally | The whole suite on Debian 12 in a VM, before putting it in CI | 167 passed on the first attempt; Debian needed no extra system settings | The sandbox does not depend on Ubuntu or on a recent kernel: 6.1 is enough |
 | (by hand; its output became the fixtures) | Built the tag `v0.1`, made a finished and a killed execution with it, then used today's binary on them | Policy accepted; `status`, `trace`, `apply`, `recover`, `run --resume` all worked | Every setting and log field added since v0.1 was optional, so the promise could be made for what already exists, and v0.1's files could serve as the test |
 
 ## 5. What was built
@@ -48,6 +49,7 @@ Turn the code of M11 and M12 into something that can be called 1.0: say what sta
 | `docs/compatibility.md` | The promise, and what is not promised |
 | `tests/compat.rs`, `tests/fixtures/compat/` | Today's code against two v0.1 presets and two v0.1 execution folders (in a tar file, so the trees are exact) |
 | `CHANGELOG.md` | What changed for a user since 0.1 |
+| `ci/debian-vm.sh` | Boots Debian from its cloud image under QEMU/KVM, installs the prerequisites, runs `make test` as an ordinary user |
 | `packaging/release.sh` | Builds the release, packs the archive; `--check` runs the demo task from the unpacked archive |
 | `.github/workflows/ci.yml` | Job `release`: the script above, then the benchmarks on Ubuntu; both uploaded |
 
@@ -59,6 +61,7 @@ Turn the code of M11 and M12 into something that can be called 1.0: say what sta
 
 | Entry | Decision | Discarded alternatives |
 |---|---|---|
+| D-128 | Debian 12 in a VM, by a script shared by the development machine and CI | A container; root in a privileged container; Fedora too |
 | D-127 | One archive made by a script, checked by running from it, in its own CI job; CI benchmarks are a record only | Publishing from CI; a static build; distribution packages |
 | D-126 | Backward compatibility for format version 1 of policy files and execution folders, tested against frozen v0.1 files | Promising the other direction; promising screen output or the library |
 

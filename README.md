@@ -285,7 +285,7 @@ Things to know before the first run:
 
 ## What it does not do
 
-- **It is not hardened like a production container runtime.** The seccomp filter is a short deny list, not an allow list; kernel bugs are out of scope; tested on one kernel and one distribution.
+- **It is not hardened like a production container runtime.** The seccomp filter is a short deny list, not an allow list; kernel bugs are out of scope; tested on three systems (NixOS, Ubuntu 24.04, and Debian 12 in a virtual machine) and no others.
 - **No power-loss guarantee.** The tests kill the process; they do not cut power. Checkpoints are not fsynced.
 - **No exactly-once execution.** A command that was cut off is rolled back and may be issued again by the agent as a new call. An external call is applied once only if the service honours the idempotency key.
 - **The disk limit is measured, not a hard cap.** `limits.workspace_mb` stops and undoes a command that takes the workspace past it, but the size is measured every 50 ms, so a fast writer can pass it for a moment. Checkpoints are never pruned, and each holds a copy of the workspace.

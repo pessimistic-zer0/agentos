@@ -39,6 +39,10 @@ Not released yet. Open before the release: the project name (D-023), the trial w
 
 - Policy files and execution folders written by 0.1 work unchanged (`tests/compat.rs`).
 
+### Tested on
+
+- NixOS 26.05 (kernel 7.1), Ubuntu 24.04 in CI (kernel 6.8), and Debian 12 (kernel 6.1) in a virtual machine (`docs/results/debian-12.md`).
+
 ## 0.1 (2026-11-12)
 
 The first tagged version: the gateway, the policy, the sandbox (namespaces, cgroups, Landlock, `openat2`), the event log, checkpoints and recovery; four tools (`fs.read`, `fs.list`, `fs.write`, `exec`); a scripted agent and an LLM agent; the fault-injection, security and benchmark suites.

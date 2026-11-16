@@ -3157,6 +3157,36 @@ Other choices inside the filter: a call made with another architecture's numbers
 
 ---
 
+### D-128 — A second distribution: Debian 12 in a virtual machine, by a script that runs the same on the development machine and in CI
+- **Date:** 2026-11-16
+- **Status:** Taken (carries out item D11 of D-114)
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** Until now the `fhs` preset had only ever run on Ubuntu. GitHub's CI machines are all Ubuntu, so another distribution cannot simply be picked. The script `ci/debian-vm.sh` starts a real Debian system as a virtual machine (a computer simulated inside the CI machine), from the image Debian itself publishes, copies the repository in, installs what the README lists, and runs the tests there as an ordinary user. Tried on the development machine first: all 167 tests pass on Debian 12, which also has an older kernel (6.1) than anything tested before.
+
+**The problem.** D-114, item D11: at least one more distribution in CI, with the agreed way out "try Debian; if CI cannot run it, record why and drop it". The threat model listed "two systems were tested, no others" as a weakness.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| A Debian virtual machine under QEMU/KVM, from Debian's cloud image, driven over SSH | Taken | A real Debian kernel, init system and user session. GitHub's Linux runners offer KVM. The same script could be run and debugged locally before any push |
+| A Debian container (`container: debian:12`) | Discarded | A container uses the host's kernel, so it would test Debian's packages on Ubuntu's kernel; and it has no systemd user session, which cgroup delegation needs |
+| A privileged container running systemd, tests as root | Discarded | As root, permission bits do not bind, so the hardening tests would mean something else |
+| Debian 12 rather than 13 | Taken | The older kernel (6.1) is the more useful test; `DEBIAN=13` is a switch in the script |
+| Fedora as well | Not done | One more distribution was the item. SELinux would be a new question; parked |
+| cloud-init settings served over HTTP from the host | Taken | The usual way needs a tool to build a CD image; this needs only `python3 -m http.server` |
+| The 200-kill suite and the benchmarks in the VM | Discarded | About half an hour more per push inside a nested VM; `make test` (3 kills per cell, all suites) is the check that the platform works |
+| Its own CI job | Taken | A VM that fails to boot must not hide the Ubuntu jobs |
+
+**What this means for the code.** `ci/debian-vm.sh`; CI job `debian`; `docs/results/debian-12.md`. No runtime change was needed: nothing in `src/` had assumed Ubuntu.
+
+**Evidence.** One run on the development machine with QEMU 10.2.4 fetched through Nix for the session: the VM reported `Debian GNU/Linux 12 (bookworm), kernel 6.1.0-54-cloud-amd64`, `lsm: lockdown,capability,landlock,yama,apparmor,tomoyo,bpf`, `cgroup2fs`; `AGENTOS_TEST_PRESET=fhs make test` as user `ci`: 167 passed, 0 failed, on the first attempt. The CI job has not run; whether GitHub's runner boots the VM (KVM access, download, time) is not yet verified. The workflow file parses as YAML with four jobs (checked with PyYAML, output read).
+
+**Concepts to learn.** Virtual machine vs container (who owns the kernel); KVM; cloud images and cloud-init; why "it runs in Docker" does not test a kernel feature.
+
+---
+
 ## Still open
 
 | Question | Notes |
@@ -3330,3 +3360,5 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | Rate limit / HTTP 429 | A server's cap on requests or tokens per minute; 429 "Too Many Requests" is its answer when the cap is hit, often with a `Retry-After` header saying when to come back |
 | Backward compatible | A newer program still works with what an older one wrote. (Forward compatible: an older program works with what a newer one wrote) |
 | Fixture | A file kept with the tests as fixed input; a frozen fixture is never regenerated, so it stays evidence of what an older version produced |
+| Virtual machine (VM) | A whole computer simulated in software, with its own kernel; unlike a container, which shares the host's kernel |
+| cloud-init | The first-boot setup that cloud images run: it creates the user and installs the SSH key it is told about |
