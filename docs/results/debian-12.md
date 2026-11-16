@@ -2,7 +2,7 @@
 
 Date: 2026-11-16. Code: commit `70171f4` plus the uncommitted script `ci/debian-vm.sh` (no source change). One run.
 
-**Where it ran.** In a virtual machine on the development machine (QEMU 10.2.4 with KVM, 4 CPUs, 6 GB), started from Debian's own cloud image `debian-12-genericcloud-amd64.qcow2`. Not in CI yet: the CI job `debian` runs the same script and has not run. So this is "passes on Debian 12 in a VM on one machine", not "verified in CI".
+**Where it ran.** In a virtual machine on the development machine (QEMU 10.2.4 with KVM, 4 CPUs, 6 GB), started from Debian's own cloud image `debian-12-genericcloud-amd64.qcow2`. The CI job `debian` runs the same script; it passed the first time it ran, in CI run 43903121563 on `f38fff9` (167 passed, the same system and kernel as below; D-129).
 
 **The system, as it reported itself:**
 
@@ -36,7 +36,7 @@ Date: 2026-11-16. Code: commit `70171f4` plus the uncommitted script `ci/debian-
 | `security` | 33 |
 | `vertical_slice` | 4 |
 
-**What it adds.** A third distribution, and a kernel older than the development machine's (6.1 against 7.1). The Ubuntu runner's kernel version was never recorded, so no comparison with it is made here; CI prints it from now on. Landlock on 6.1 is two versions behind what the code is written for; the sandbox asks for what the kernel has (best effort) and the security suite passed. Debian needed none of Ubuntu's extra steps for user namespaces.
+**What it adds.** A third distribution, and a kernel older than the development machine's (6.1 against 7.1). The Ubuntu runner's kernel, first recorded in CI run 43903121563, is 7.0, so 6.1 is the oldest kernel the suite has run on. Landlock on 6.1 is two versions behind what the code is written for; the sandbox asks for what the kernel has (best effort) and the security suite passed. Debian needed none of Ubuntu's extra steps for user namespaces.
 
 **What it does not show.** The 200-kill suite, the benchmarks and `make demo` were not run on Debian. One run on one machine.
 

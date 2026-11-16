@@ -1,0 +1,12 @@
+date:       2026-11-16T16:06:08Z
+cpu:        AMD EPYC 9V74 80-Core Processor (2 threads)
+ram:        7.7 GiB
+kernel:     Linux 7.0.0-1017-azure
+os:         Ubuntu 24.04.5 LTS
+filesystem: ext2/ext3 (state and workspace under target/)
+rustc:      rustc 1.100.0 (0ef1bc386 2026-11-09)
+build:      release
+preset:     fhs
+python:     Python 3.12.3, pytest 7.4.4
+hyperfine:  hyperfine 1.18.0
+commit:     f38fff9

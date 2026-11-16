@@ -41,7 +41,7 @@ Not released yet. Open before the release: the project name (D-023), the trial w
 
 ### Tested on
 
-- NixOS 26.05 (kernel 7.1), Ubuntu 24.04 in CI (its kernel version was not recorded), and Debian 12 (kernel 6.1) in a virtual machine (`docs/results/debian-12.md`).
+- NixOS 26.05 (kernel 7.1), Ubuntu 24.04 in CI (kernel 7.0), and Debian 12 (kernel 6.1) in a virtual machine, also in CI (`docs/results/debian-12.md`).
 
 ## 0.1 (2026-11-12)
 

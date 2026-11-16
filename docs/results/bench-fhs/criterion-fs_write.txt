@@ -1,0 +1,9 @@
+Benchmarking fs.write 4 KB through AgentOS (intent fsync + checkpoint): Analyzing
+fs.write 4 KB through AgentOS (intent fsync + checkpoint)
+                        time:   [6.1817 ms 8.0895 ms 11.070 ms]
+Benchmarking direct write 4 KB (temp file + fsync + rename): Analyzing
+direct write 4 KB (temp file + fsync + rename)
+                        time:   [624.35 µs 808.04 µs 1.0396 ms]
+Benchmarking direct write 4 KB (plain write, no fsync): Analyzing
+direct write 4 KB (plain write, no fsync)
+                        time:   [339.83 µs 400.13 µs 473.25 µs]

@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Weeks in the plan | v1.0 (D-114); no week plan |
-| Started / finished | 2026-11-16 / in progress |
-| Commits | `ad2b302` … (tag `m12` only after a green CI run, D-113) |
-| Status | Built on `nix` (B5, B4, B6). On `fhs`: B5 and B4 verified (D-125); B6 waits for a CI run, and the tag with it |
+| Started / finished | 2026-11-16 / 2026-11-16 |
+| Commits | `ad2b302` … `0f140f0`; tag `m12` on `f38fff9`, the commit CI ran (D-129) |
+| Status | Done |
 
 Write this document for a reader who is new to Rust and Linux internals. Plain words first, the real term next to it. Fill it in while working.
 
@@ -29,7 +29,7 @@ Three gaps the trials on real projects found (D-114). **B5:** an edit tool, so a
 | B4: a mount point cannot be redirected | On `nix` yes | `a_command_that_swaps_the_way_to_the_mount_point_is_reverted`, `the_sandbox_refuses_a_mount_point_that_is_a_symlink` |
 | B4: it is there again after a kill and a resume | On `nix` yes | `the_folder_is_still_there_after_a_kill_and_a_resume` |
 | B4: the real case | Yes, one session | the Node project with `ro_dirs = ["node_modules"]` (`docs/results/second-stack-trial-nix.md`, last part) |
-| B6: a binary file is read and written byte for byte | On `nix` yes; `fhs` not yet verified | `tests/binary.rs`: `binary_files_are_read_and_written_byte_for_byte` (compared with the `base64` program); unit tests in `src/tools/base64.rs` |
+| B6: a binary file is read and written byte for byte | Yes, both presets (`fhs`: CI run 43903121563, D-129) | `tests/binary.rs`: `binary_files_are_read_and_written_byte_for_byte` (compared with the `base64` program); unit tests in `src/tools/base64.rs` |
 | B6: an invalid request changes nothing and says why | On `nix` yes | `requests_that_are_not_valid_change_nothing_and_say_why` |
 | B6: the executable bit can be set, cleared and seen, and is kept otherwise | On `nix` yes | `the_executable_bit_is_set_cleared_kept_and_shown` |
 | B6: a kill around a write that only changes the mode is classified correctly | On `nix` yes | `a_kill_around_a_write_that_only_changes_the_mode_is_classified_by_the_mode` (fails with the mode comparison switched off) |

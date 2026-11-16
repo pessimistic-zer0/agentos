@@ -5,7 +5,7 @@
 | Weeks in the plan | v1.0 (D-114); no week plan |
 | Started / finished | 2026-11-16 / in progress |
 | Commits | `3036816` … |
-| Status | In progress. Done on `nix`: the compatibility promise (D10) and the CHANGELOG. Open: release build and benchmarks in CI, install instructions, version 1.0.0, another distribution, the name (Prince), and M13, which is blocked on an API key |
+| Status | In progress. Done and verified in CI: the compatibility promise, the CHANGELOG, the release archive, benchmarks on Ubuntu, install instructions, Debian 12. Open: the name (Prince), M13 (blocked on an API key), then version 1.0.0 and the tag |
 
 Write this document for a reader who is new to Rust and Linux internals. Plain words first, the real term next to it. Fill it in while working.
 
@@ -17,13 +17,13 @@ Turn the code of M11 and M12 into something that can be called 1.0: say what sta
 
 | Requirement | Met? | Evidence (command and result) |
 |---|---|---|
-| D10: a stated compatibility promise for the policy format and the event log | On `nix` yes; `fhs` not yet verified | `docs/compatibility.md`; `tests/compat.rs` (4 tests) against files written by the `v0.1` binary |
+| D10: a stated compatibility promise for the policy format and the event log | Yes, both presets (`fhs`: CI run 43903121563, D-129) | `docs/compatibility.md`; `tests/compat.rs` (4 tests) against files written by the `v0.1` binary |
 | D9: a CHANGELOG | Yes | `CHANGELOG.md` |
-| D9: a release build in CI | Written; not yet run in CI | `packaging/release.sh --check` on `nix`: packs a 3.7 MB archive and runs the demo task from it; CI job `release` (D-127) |
-| D9: benchmarks run on Ubuntu | Written; not yet run in CI | the same job runs `make bench` and uploads `docs/results/bench-fhs` |
+| D9: a release build in CI | Yes (CI run 43903121563, job `release`, D-129) | `packaging/release.sh --check` on `nix`: packs a 3.7 MB archive and runs the demo task from it; CI job `release` (D-127) |
+| D9: benchmarks run on Ubuntu | Yes, as a record (`docs/results/bench-fhs/`, D-129) | the same job runs `make bench` and uploads `docs/results/bench-fhs` |
 | D9: install instructions | Yes | README, "Installing it" |
 | D9: Cargo version 1.0.0 | Not started (last step) | |
-| D11: one more distribution in CI, or a written reason why not | Passes locally; CI job written, not yet run | `ci/debian-vm.sh`: Debian 12, kernel 6.1, in a VM on the development machine: `make test` 167 passed (`docs/results/debian-12.md`); CI job `debian` (D-128) |
+| D11: one more distribution in CI, or a written reason why not | Yes: Debian 12 in CI (run 43903121563, job `debian`, 167 passed, D-129) | `ci/debian-vm.sh`: Debian 12, kernel 6.1, in a VM on the development machine: `make test` 167 passed (`docs/results/debian-12.md`); CI job `debian` (D-128) |
 | D8: the project name | Open; only Prince decides | |
 | Tag `v1.0` after a green CI run on that commit | Not yet | |
 

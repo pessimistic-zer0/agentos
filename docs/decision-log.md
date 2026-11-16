@@ -3187,6 +3187,35 @@ Other choices inside the filter: a call made with another architecture's numbers
 
 ---
 
+### D-129 — M12 and the release work count as verified on `fhs` by CI run 43903121563; `m12` is tagged; Debian and the release archive pass in CI
+- **Date:** 2026-11-16
+- **Status:** Taken
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** Prince pushed `f38fff9`. CI ran four jobs on it and all four passed. That verifies on Ubuntu everything that was still open: binary files and the executable bit (D-123), the longer wait for a busy model server (D-124), and the compatibility tests (D-126). The two new jobs passed the first time they ran: the release archive is built, packed and run from on Ubuntu, the benchmarks run there, and the whole test suite passes on Debian 12 in a virtual machine inside CI. M12 is finished and tagged.
+
+**The problem.** The rule: "not yet verified" on `fhs` until a CI run on that commit is green; tag only then (D-113).
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Record the run; tag `m12` on `f38fff9` | Taken | All three items of M12 are in it and it is the commit CI ran (as in D-121) |
+| Put the CI benchmark numbers into the README | Discarded | D-127: a shared machine with 2 threads; kept in `docs/results/bench-fhs/` as a record, with a note saying what they are |
+
+**What this means for the code.** None. `docs/results/bench-fhs/` holds the downloaded artifact. Local tag `m12`.
+
+**Evidence.** `gh run view 43903121563`: completed, success, head `f38fff9`; jobs `fhs`, `fhs-apparmor`, `release`, `debian` all success.
+- `fhs`: the new step printed `system: Ubuntu 24.04.5 LTS`, `kernel: 7.0.0-1014-aws`, `lsm: lockdown,capability,landlock,yama,apparmor,ima,evm`. 167 tests passed (36 + 6 + 1 + 4 + 4 + 11 + 4 + 14 + 26 + 12 + 5 + 7 + 33 + 4). 200-kill step: `fs.edit total: 1600 runs, 1600 killed, 0 violations`; `4800 runs, 4798 killed, 0 invariant violations, 0 duplicated effects, 3628/3628`, recovery p50 19.9 ms, p99 69.6 ms; external `1600 runs, 0 invariant violations, 0 duplicated effects, 911/911`.
+- `release`: `packed: …/agentos-0.1.0-x86_64-linux.tar.gz (3.5M)`, `agentos 0.1.0`, `check: the packed program ran the demo task from the archive; the patch holds the fix`; then `make bench` to the end (`system.txt`: AMD EPYC 9V74, 2 threads, `Linux 7.0.0-1017-azure`, ext filesystem).
+- `debian`: `system: Debian GNU/Linux 12 (bookworm), kernel 6.1.0-54-cloud-amd64, 4 CPUs`; `passed 167 failed 0`; the job took under five minutes.
+
+The kernel line settles an open point: the Ubuntu runners run kernel 7.0, not Ubuntu 24.04's release kernel. Debian's 6.1 is the oldest kernel the suite has run on.
+
+**Concepts to learn.** None new.
+
+---
+
 ## Still open
 
 | Question | Notes |
@@ -3196,7 +3225,7 @@ Other choices inside the filter: a call made with another architecture's numbers
 | ~~License~~ | Answered by D-069: dual MIT OR Apache-2.0 |
 | ~~Public repo from day one, or after v0.1?~~ | Answered by events: Prince pushed `main` to GitHub on 2026-11-12, after v0.1 was tagged locally |
 | ~~Does the `fhs` preset pass on Ubuntu?~~ | Answered by D-072: yes on Ubuntu 24.04, CI run 43385661105 (third run; the first two found B-007 and B-008) |
-| Do the benchmarks work on Ubuntu? | `make demo` runs in CI since M8. The benchmarks are in the CI job `release` since D-127; no run of it yet |
+| ~~Do the benchmarks work on Ubuntu?~~ | Answered by D-129: yes, CI run 43903121563, job `release`; `docs/results/bench-fhs/` |
 | ~~Which LLM for the demo: local llama.cpp server or a hosted API?~~ | Answered by D-058: local llama.cpp |
 
 ---
@@ -3273,6 +3302,7 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-16 | D-127's Evidence said "the workflow file parses as YAML with three jobs" when the command meant to check it had failed (no YAML module in that shell); the commit `ef7b5d0` went in with that sentence. Checked afterwards with PyYAML from the Nix store: three jobs, 10 + 11 + 9 steps, each with `uses` or `run` | The sentence turned out true, but it was written from the intention to check, not from a result. Evidence is what a command printed; read the output before writing the line |
 | 2026-11-16 | The Debian result and the CHANGELOG, as committed in `fa0e572`, gave the Ubuntu CI runner's kernel as 6.8. Nothing had recorded it (the threat model says so); the number was Ubuntu 24.04's release kernel, assumed. Removed in the next commit; the CI job `fhs` now prints the system, kernel and security modules | A number that "everyone knows" is still a number without a source. If a fact is wanted in a document, first make something print it |
 | 2026-11-16 | Commit `2afc950` has a CI workflow file that is not valid YAML: a step name with `: ` in it, unquoted. The check was in the same command line as the commit, joined so that the commit ran whatever the check said. Fixed in the next commit, before any push | The third time today a commit was made before its check was read (`048e7e5`, `ef7b5d0`). A check that cannot stop the commit is not a check: validate in one step, commit in the next |
+| 2026-11-16 | The first CI run that printed its kernel showed 7.0 (`7.0.0-1014-aws`, `7.0.0-1017-azure`) on the Ubuntu 24.04 runners. Earlier the same day a document had said 6.8, from the distribution's release notes, and was corrected for having no source | The assumed number was not only unsourced, it was wrong. Hosted CI images carry their provider's kernel |
 
 ---
 

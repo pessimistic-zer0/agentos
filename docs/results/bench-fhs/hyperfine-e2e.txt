@@ -1,0 +1,11 @@
+Benchmark 1: <repo>/target/release/agentos --state-dir <repo>/target/bench-scratch/state run --quiet --repo examples/demo-repo --policy policies/fhs.toml --script examples/scripts/fix-demo.toml
+  Time (mean ± σ):     452.6 ms ± 121.7 ms    [User: 295.4 ms, System: 75.9 ms]
+  Range (min … max):   377.2 ms … 1047.0 ms    100 runs
+ 
+Benchmark 2: bench/direct-demo.sh examples/demo-repo <repo>/target/bench-scratch
+  Time (mean ± σ):     358.0 ms ±  68.7 ms    [User: 287.0 ms, System: 51.3 ms]
+  Range (min … max):   327.3 ms … 890.1 ms    100 runs
+ 
+Summary
+  bench/direct-demo.sh examples/demo-repo <repo>/target/bench-scratch ran
+    1.26 ± 0.42 times faster than <repo>/target/release/agentos --state-dir <repo>/target/bench-scratch/state run --quiet --repo examples/demo-repo --policy policies/fhs.toml --script examples/scripts/fix-demo.toml
