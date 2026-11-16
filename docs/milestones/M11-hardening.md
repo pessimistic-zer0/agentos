@@ -128,6 +128,8 @@ Starting a process or a thread uses `clone` or `clone3`, and both can also ask f
 2. **The seccomp test hung for 20 s on its first run without the filter.** `PTRACE_TRACEME` succeeded and stopped the Python process at the next signal. Moved into a forked child.
 3. **Without the filter, `clone(CLONE_NEWUSER)` already gave `EPERM`** while `unshare(CLONE_NEWUSER)` worked. Not looked into; the test needs `EPERM` for both, and the `unshare` case is the one that showed the gap.
 
+4. **Commit `048e7e5` has four failing tests.** The disk-limit tests' helper required that the preset has no `workspace_mb` line; the presets got one as the last edit, and the commit was made before the re-run's result was read. Fixed in the following commit. Findings row 2026-11-16.
+
 ## 9. How to run it
 
 ```sh

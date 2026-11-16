@@ -678,9 +678,10 @@ fn stopping_a_run_says_how_to_go_on_and_the_run_can_go_on() {
 // ---------------------------------------------------------------------------
 
 fn policy_with_workspace_mb(mb: u64) -> String {
+    // The presets set 2048; replace that line.
     let text = policy_with_python();
-    assert!(!text.contains("workspace_mb"));
-    text.replace("[limits]\n", &format!("[limits]\nworkspace_mb = {mb}\n"))
+    let old = text.lines().find(|l| l.starts_with("workspace_mb")).expect("the preset sets workspace_mb").to_string();
+    text.replace(&old, &format!("workspace_mb = {mb}"))
 }
 
 #[test]
