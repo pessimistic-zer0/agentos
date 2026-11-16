@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Weeks in the plan | v1.0 (D-114); no week plan |
-| Started / finished | 2026-11-16 / in progress |
-| Commits | `8628ac0` (scope) … (tag `m11` only after a green CI run, D-113) |
-| Status | Built on `nix` (A1, A2, A3); waiting for a green CI run on `fhs` before the tag |
+| Started / finished | 2026-11-16 / 2026-11-16 |
+| Commits | `8628ac0` (scope) … `fc31fbb` (tag `m11`, D-121); the 200-kill results and the last lines of this document are in `10cab11` and after |
+| Status | Done |
 
 Write this document for a reader who is new to Rust and Linux internals. Plain words first, the real term next to it. Fill it in while working.
 
@@ -22,10 +22,10 @@ Before the first item, CI on `main` was red: the TOCTOU race test's own check th
 | CI's red TOCTOU test fixed without lowering a bar | Yes, both presets (`fhs`: CI run 43844369387, D-119) | D-115; `cargo test --test security toctou` passes in 1 attempt (7,022 swaps); slowed by hand: passes in 3 attempts at 5 ms, fails after 5 at 60 ms |
 | A1: namespaces, mounts, `bpf`, `ptrace`, `io_uring`, `perf_event_open`, key rings refused inside the sandbox | Yes, both presets (CI run 43844369387, D-119) | `seccomp_refuses_namespaces_mounts_and_kernel_interfaces`: fails before the change (`unshare-user OK`, `unshare-mount OK`, `ptrace OK`), passes after |
 | A1: real test commands still work | On `nix` yes | Experiment `m11-seccomp`; `agentos run` with the second trial's Rust and npm policies gives the trial's results; `make test` 133 passed |
-| A2: a command cannot take the workspace past `limits.workspace_mb` and leave it there | On `nix` yes; `fhs` not yet verified | `tests/hardening.rs`: `a_command_that_fills_the_workspace_is_stopped_and_undone`, `one_file_cannot_grow_past_the_limit`, `fs_write_past_the_limit_writes_nothing`, `a_repository_larger_than_the_limit_is_refused_at_the_start`; all four fail with the limit switched off by hand. It is a measured limit, not a hard cap (D-117) |
-| A3: no checkpoint holds a scratch path; the workspace keeps them | On `nix` yes; `fhs` not yet verified | `a_cache_is_scratch_and_an_example_env_file_is_not_a_secret` (fails with the change switched off); unit test in `src/checkpoint.rs`; the Rust trial session: 86 MB before, 21 MB after |
+| A2: a command cannot take the workspace past `limits.workspace_mb` and leave it there | Yes, both presets (`fhs`: CI run 43849008533, D-121) | `tests/hardening.rs`: `a_command_that_fills_the_workspace_is_stopped_and_undone`, `one_file_cannot_grow_past_the_limit`, `fs_write_past_the_limit_writes_nothing`, `a_repository_larger_than_the_limit_is_refused_at_the_start`; all four fail with the limit switched off by hand. It is a measured limit, not a hard cap (D-117) |
+| A3: no checkpoint holds a scratch path; the workspace keeps them | Yes, both presets (CI run 43849008533, D-121) | `a_cache_is_scratch_and_an_example_env_file_is_not_a_secret` (fails with the change switched off); unit test in `src/checkpoint.rs`; the Rust trial session: 86 MB before, 21 MB after |
 | The five recovery invariants still hold with the new code on the killed paths | On `nix` yes | `make eval-recovery`: 4,800 runs, 0 violations, 0 duplicated effects, recovery p50 20.3 ms, p99 61.1 ms; external cells 1,600 runs, 0 violations (`docs/results/recovery-200-nix-m11.md`) |
-| Both presets pass | `nix` yes; `fhs` yes for the TOCTOU fix and A1 (CI run 43844369387 on `caeb948`); A2 and A3 not yet verified | needs a push of `1600435` or later and a CI run |
+| Both presets pass | `nix` yes; `fhs` yes for the TOCTOU fix and A1 (CI run 43844369387 on `caeb948`); A2 and A3 by CI run 43849008533 on `fc31fbb` (D-121): 138 tests, `make demo`, the 200-kill step with 0 violations, and the AppArmor job | `gh run view 43849008533` |
 
 ## 3. What you need to know first
 
@@ -126,6 +126,7 @@ Starting a process or a thread uses `clone` or `clone3`, and both can also ask f
 | D-114 | The v1.0 scope: eleven items, milestones M11 to M14 | A smaller list; hardening and release only |
 | D-115 | The TOCTOU test repeats the run (up to five) and adds the counts; bars unchanged | Lowering the bar; spinning instead of sleeping; rerunning CI |
 | D-118 | Scratch paths deleted from the checkpoint copy before it is renamed into place | Moving caches aside; a Rust copier; mounting; carrying caches across a rollback |
+| D-119, D-121 | CI runs 43844369387 and 43849008533 verify M11 on `fhs`; `m11` is tagged on the commit CI ran | Tagging a later, unrun commit |
 | D-117 | `limits.workspace_mb`: measured every 50 ms, `RLIMIT_FSIZE` per file, the command undone when over | tmpfs, quotas, loop image (ADR 0010); checking only at the end; counting checkpoints |
 | D-116 | seccomp as a hand-written deny list in C after Landlock; `EPERM`, `ENOSYS` for `clone3` | Allow list; a seccomp crate; killing; a policy switch; installing in G |
 

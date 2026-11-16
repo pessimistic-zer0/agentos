@@ -4,7 +4,7 @@
 |---|---|
 | Weeks in the plan | v1.0 (D-114); no week plan |
 | Started / finished | 2026-11-16 / in progress |
-| Commits | (first commit of `fs.edit`) … (tag `m12` only after a green CI run, D-113) |
+| Commits | `ad2b302` … (tag `m12` only after a green CI run, D-113) |
 | Status | In progress: B5 (`fs.edit`) built on `nix`; B4 and B6 not started |
 
 Write this document for a reader who is new to Rust and Linux internals. Plain words first, the real term next to it. Fill it in while working.

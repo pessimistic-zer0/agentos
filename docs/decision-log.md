@@ -2955,6 +2955,31 @@ Other choices inside the filter: a call made with another architecture's numbers
 
 ---
 
+### D-121 — M11 counts as verified on `fhs` by CI run 43849008533; the tag `m11` goes on the commit CI ran
+- **Date:** 2026-11-16
+- **Status:** Taken
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** Prince pushed `fc31fbb`, which holds all of M11. CI ran it on Ubuntu and both jobs passed, so the disk limit (D-117) and checkpoints without scratch paths (D-118) are now verified on both systems, as the TOCTOU fix and seccomp already were (D-119). M11 is finished and gets its tag.
+
+**The problem.** Two rules pull apart. D-113: tag only a commit whose CI run is green. CLAUDE.md: the tag should point at a complete milestone, document included. The milestone document can only say "verified by run X" after run X, which is after the commit that run X tested.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Tag `fc31fbb`, the commit CI ran | Taken | The tag then means exactly "this code passed on both systems". The code of M11 is complete there, and the document exists there with the `fhs` column open |
+| Tag the later commit that closes the document | Discarded | That commit has not been run by CI, and it also contains `fs.edit` (M12) |
+| Push again and wait for a run on the documents-only commit | Discarded | Half an hour of CI to verify text |
+
+**What this means for the code.** None. Local tag `m11` on `fc31fbb`; Prince pushes it. The last lines of the M11 document (this run, the questions) are in commits after the tag.
+
+**Evidence.** `gh run view 43849008533`: completed, success, head `fc31fbb`, jobs `fhs` and `fhs-apparmor` success. `fhs` log: 138 tests passed (30 + 6 + 1 + 11 + 14 + 26 + 9 + 4 + 33 + 4), among them the four disk-limit tests, `a_cache_is_scratch_and_an_example_env_file_is_not_a_secret` and the checkpoint unit test; 200-kill step `4800 runs, 4800 killed, 0 invariant violations, 0 duplicated effects, 3733/3733`, recovery p50 37.3 ms, p99 117.1 ms; external `1600 runs, 0 invariant violations, 0 duplicated effects, 940/940`.
+
+**Concepts to learn.** None new.
+
+---
+
 ## Still open
 
 | Question | Notes |
