@@ -23,7 +23,7 @@ Three gaps the trials on real projects found (D-114). **B5:** an edit tool, so a
 | B5: a kill at any crash point leaves the edit not done or wholly done, and a resumed run applies it once | Yes, both presets | `an_edit_is_recovered_like_a_write`: 8 points × 50 kills by hand on `nix`, 400 runs, 0 violations; 8 × 200 in CI on `fhs`, 1,600 runs, 0 violations (run 43894443267); reports 22 violations when recovery is deliberately broken |
 | B5: a small model can use it | Yes, one run | Qwen3-VL-4B, ticket INV-102: 7 calls, 36 s, solved; three failures before (`docs/results/real-repo-trial-nix.md`) |
 | B4: commands can use the folder and cannot change it; the original repository is untouched | Yes, both presets (CI run 43894443267, D-125) | `tests/rodirs.rs`: `commands_use_the_folder_and_cannot_change_it` (ten kinds of change refused; fails without the read-only flag) |
-| B4: it is never copied: not in the workspace on the host, not in a checkpoint, not in the patch, not touched by `apply` | On `nix` yes | the same test |
+| B4: it is never copied: not in the workspace on the host, not in a checkpoint, not in the patch, not touched by `apply` | Yes, both presets | the same test |
 | B4: the file tools read it and can never write it or leave it | Yes, both presets | `the_file_tools_read_it_from_the_repository_and_never_write_it` |
 | B4: a denied path inside, a missing folder or a symlink stops the run before it starts | Yes, both presets | `a_denied_file_in_the_folder_stops_the_run_before_it_starts`, `a_folder_that_is_missing_or_a_symlink_is_refused` |
 | B4: a mount point cannot be redirected | Yes, both presets | `a_command_that_swaps_the_way_to_the_mount_point_is_reverted`, `the_sandbox_refuses_a_mount_point_that_is_a_symlink` |
