@@ -163,8 +163,11 @@ M11 (tag `m11` locally, on `fc31fbb`; `docs/milestones/M11-hardening.md`), 2026-
 
 M12 (`docs/milestones/M12-real-projects.md`) is started: `fs.edit` (D-120) and a read-only repository folder inside the workspace (`filesystem.ro_dirs`, D-122) , and binary files and the executable bit through the file tools (D-123) are built; `make test` 161 passed on `nix`; D-120 and D-122 are on GitHub (CI run 43894443267 in progress when this was written), D-123 is local; none is verified on `fhs` yet. A busy model server that names a wait (`Retry-After`) is given it (D-124; `make test` 163 passed), found on the first hosted-model request of M13. With `fs.edit` the local 4B model solved the two-module ticket it had failed three times (`docs/results/real-repo-trial-nix.md`, last part). All three M12 items are built; no tag `m12` until CI is green (D-113).
 
+M13 (`docs/milestones/M13-hosted-model.md`) is **blocked** after one of six tickets: the Groq key's tier allows 8,000 tokens per minute, which is also the largest request, and the conversations need more (`docs/results/hosted-model-trial-nix.md`). INV-101 was solved and checked. The five other tickets were not run.
+
 Open, and only Prince can close them:
 
+- A key for M13 with a much higher tokens-per-minute limit (a higher Groq tier, or another OpenAI-compatible provider).
 - Decide the project name (D-023, D-068), before the `v1.0` tag (D-114). The license is settled: dual MIT OR Apache-2.0 (D-069).
 
 Update this section when any of these changes.

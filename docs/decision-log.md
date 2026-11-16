@@ -3079,6 +3079,7 @@ Other choices inside the filter: a call made with another architecture's numbers
 
 | Question | Notes |
 |---|---|
+| A key for the hosted-model trial (M13) with more than 8,000 tokens per minute | Only Prince can provide it. See `docs/milestones/M13-hosted-model.md` |
 | Project name | See D-023. Still open at v0.1 (D-068). Must be settled before the `v1.0` tag (D-114) |
 | ~~License~~ | Answered by D-069: dual MIT OR Apache-2.0 |
 | ~~Public repo from day one, or after v0.1?~~ | Answered by events: Prince pushed `main` to GitHub on 2026-11-12, after v0.1 was tagged locally |
@@ -3156,6 +3157,7 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-16 | A test for `ro_dirs` expected a command to fail after an earlier command replaced the mount point with a symlink. It ran normally: the revert after the first command had already restored the folder, because a read-only folder is never a writable path | Two defences were stacked and the outer one hid the inner. The inner one (the sandbox's own check) had to be tested through the library, with a workspace prepared by hand |
 | 2026-11-16 | A write that keeps a file's content and only makes it executable has the same hash before and after. Recovery decided by hash alone, so a kill *before* such a write was reported as APPLIED. Found while designing `executable`, shown by a test, fixed by putting the mode in the intent (D-123) | A recovery rule is only as good as what the intent records. Each new thing a write can change needs its own evidence in the intent |
 | 2026-11-16 | First run against a hosted model: stopped after three calls by HTTP 429. The key allows 8,000 tokens per minute; agentos retried for 8.5 s in total and gave up, while the server's `Retry-After` header said how long to wait | Retry rules tuned on a local server do not fit a hosted one. Ask the other side how long to wait when it tells you (D-124) |
+| 2026-11-16 | M13, the six-ticket trial with a hosted model, is blocked after one ticket. The key's tier allows 8,000 tokens per minute, and since every request carries the whole conversation, that is also the largest conversation that can be sent; the first run hit `413 Request too large` at call 10. INV-101 was solved at call 5 and checked on a clone (2 failed, 76 passed). `docs/results/hosted-model-trial-nix.md` | A context window of 131,072 tokens says nothing about what a key may send. Check the limits of the account before planning a trial around a model. The five tickets not run are recorded as not run |
 
 ---
 
