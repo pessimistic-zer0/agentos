@@ -314,6 +314,8 @@ This project was built to be studied afterwards, so the written record is as muc
 | [`docs/decisions/`](docs/decisions/) | 12 short ADRs for the hard-to-undo decisions |
 | [`docs/threat-model.md`](docs/threat-model.md) | What is protected, each attack with its defence and test, what is out of scope |
 | [`docs/recovery-semantics.md`](docs/recovery-semantics.md) | What a crash leaves and what recovery decides, per crash point and tool |
+| [`docs/compatibility.md`](docs/compatibility.md) | What a later version promises about your policy files and execution folders |
+| [`CHANGELOG.md`](CHANGELOG.md) | What changed for a user, version by version |
 | [`docs/bugs.md`](docs/bugs.md) | Every bug found in the runtime: what was done, what went wrong, why, the fix, the lesson |
 | [`docs/what-the-suites-missed.md`](docs/what-the-suites-missed.md) | A short write-up of the six bugs found after every suite had passed |
 | [`docs/project-overview.md`](docs/project-overview.md) | One document that explains the whole project in plain words |

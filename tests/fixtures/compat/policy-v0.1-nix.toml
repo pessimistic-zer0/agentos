@@ -1,0 +1,30 @@
+# Default AgentOS policy for NixOS (preset `nix`).
+# The only difference from fhs.toml is [sandbox].ro_mounts.
+policy_version = 1
+name = "default-nix"
+
+[filesystem]
+# Paths are relative to the workspace root. `**` matches any number of folders.
+read  = ["**"]
+write = ["src/**", "tests/**", "**/__pycache__/**"]
+# Denied paths are never copied into the workspace (D-008) and never opened.
+deny  = [".env", ".env.*", "**/.env", "**/.env.*", "secrets/**", ".git/**", "**/*.pem", "**/id_rsa*"]
+
+[exec]
+# argv prefixes. Arguments after the prefix are allowed and logged.
+allow = [
+  ["pytest"],
+  ["python3", "-m", "pytest"],
+]
+
+[sandbox]
+# Host folders the sandbox sees, read-only. On NixOS every program lives here.
+ro_mounts = ["/nix/store"]
+
+[limits]
+memory_mb      = 512
+pids           = 128
+cpu_percent    = 200
+call_timeout_s = 60
+max_output_kb  = 64
+max_tool_calls = 50

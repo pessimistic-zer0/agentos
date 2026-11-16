@@ -3099,6 +3099,35 @@ Other choices inside the filter: a call made with another architecture's numbers
 
 ---
 
+### D-126 — The compatibility promise: policy files and execution folders, from 1.0 on, tested against frozen v0.1 files
+- **Date:** 2026-11-16
+- **Status:** Taken (carries out item D10 of D-114)
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** A "1.0" tells users that what they wrote for it keeps working. For AgentOS that is two things: the policy file a user writes, and the folder a run leaves behind (its log, checkpoints and patch). The promise: any later 1.x reads both as 1.0 did. New settings and new log fields may be added, but only as optional ones; nothing is removed or changes meaning without a new format version, which older programs refuse by name. The page `docs/compatibility.md` says this, and says what is not promised.
+
+**The problem.** D-114 asks for a stated promise. A promise nobody checks is worth little, and the project had no test that read anything written by an older version.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Promise backward compatibility for format version 1 of both files; additions optional only | Taken | It is what the code already does: `policy_version` and `schema_version` exist since v0.1, every setting added since was optional with a neutral default |
+| Freeze files written by the `v0.1` binary as fixtures and test today's code against them | Taken | The only honest evidence: the files come from a real older program, not from today's code pretending. The experiment showed that everything works |
+| Promise the other direction too (an old program reads new files) | Discarded | An unknown policy key is an error on purpose: a misspelt `deny` must not silently protect nothing |
+| Promise the screen output or the Rust functions | Discarded | Neither is an interface; saying so now avoids an accidental promise |
+| Pack the fixture as a tar file | Taken | git does not keep empty folders or most permission bits; an execution folder needs its trees exact |
+| Resume the frozen interrupted execution in the test on both presets | Discarded | Its saved policy is v0.1's `nix` preset, whose folders do not exist on Ubuntu. Recovery, trace, apply and rm are tested on both; the resume on `nix` only. The promise page says that resuming needs the same paths |
+| A fixture written by 1.0 itself | Later | Added when 1.0 is built (M14); until then the newest frozen files are v0.1's |
+
+**What this means for the code.** No runtime change. `docs/compatibility.md`; `tests/compat.rs` (4 tests) with `tests/fixtures/compat/` (two v0.1 presets, `v0.1-executions.tar` with a finished execution and one killed at P4). From now on a change that breaks these tests is a format change and needs a new version number.
+
+**Evidence.** Experiment by hand (not kept as a program): the tag `v0.1` built in a scratch worktree; with that binary one finished run of the demo and one killed at P4 of call 6; then today's binary: the v0.1 policy checks `ok`, `status` lists both, `trace` and `apply --dry-run` work on the finished one, `recover` says `#6 fs.write APPLIED`, `run --resume` runs call 7 (`pytest`, exit 0) and completes, `apply --to` a copy makes 5 changes. `tests/compat.rs`: 4 passed with `AGENTOS_TEST_PRESET` unset and set to `fhs` on this machine. One test first failed for a reason in the test: a helper looked up the folder by the id in the log, and the fixture's folders have fixed names. Not yet verified on `fhs` in CI.
+
+**Concepts to learn.** Backward and forward compatibility; format version numbers; semantic versioning (what a major version promises); test fixtures and why they must be frozen.
+
+---
+
 ## Still open
 
 | Question | Notes |
@@ -3269,3 +3298,5 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | Base64 | A way to write any bytes with 64 printable characters, three bytes as four characters; used to carry binary data in text formats such as JSON |
 | Executable bit | The permission bit that lets a file be run as a program; mode 755 has it, 644 does not |
 | Rate limit / HTTP 429 | A server's cap on requests or tokens per minute; 429 "Too Many Requests" is its answer when the cap is hit, often with a `Retry-After` header saying when to come back |
+| Backward compatible | A newer program still works with what an older one wrote. (Forward compatible: an older program works with what a newer one wrote) |
+| Fixture | A file kept with the tests as fixed input; a frozen fixture is never regenerated, so it stays evidence of what an older version produced |

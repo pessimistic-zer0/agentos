@@ -125,6 +125,7 @@ Run everything inside the dev shell (`flake.nix`): `nix develop -c <command>`, o
 - Demo: `nix develop -c make demo` (the fix, then a deliberate kill, recover and resume). By hand: `systemd-run --user --scope -p Delegate=yes cargo run -- run --repo examples/demo-repo --policy policies/nix.toml --agent scripted --script examples/scripts/fix-demo.toml`, then `cargo run -- trace`.
 - M0 practice program: `cd experiments/m0-ramp && cargo test`. Other experiments: see each `experiments/*/NOTES.md`.
 - Bonus tool by hand: `cargo run --example fake_service` (port 8099; `FAKE_SERVICE_FAULTS='order-1=drop_after'` loses an answer), add the `[external]` section it prints to a copy of a policy, and use a script step `tool = "ext.call"`. Tests: `tests/external.rs`; the external fault cells are the second test in `tests/recovery/main.rs` (report: `target/recovery-ext-report.json`).
+- The compatibility promise (`docs/compatibility.md`, D-126): `tests/compat.rs`, with frozen v0.1 files in `tests/fixtures/compat/` (never regenerate them). User-facing changes go in `CHANGELOG.md`.
 - Binary files (base64) and the executable bit through the file tools (D-123): `tests/binary.rs`.
 - A repository folder shown read-only at its place (`filesystem.ro_dirs`, D-122): `tests/rodirs.rs`.
 - `fs.edit` (D-120): `tests/edit.rs`; its kill cells are the test `an_edit_is_recovered_like_a_write` in `tests/recovery/main.rs`.
@@ -162,6 +163,8 @@ v1.0 is in progress (D-114), milestones M11 to M14.
 M11 (tag `m11` locally, on `fc31fbb`; `docs/milestones/M11-hardening.md`), 2026-11-16: the TOCTOU test repeats its race until it happened often enough (D-115, after CI run 43742105191 failed on 925 swaps); the seccomp filter (D-116); the measured disk limit `limits.workspace_mb` (D-117); scratch paths left out of checkpoints (D-118). On `nix`: `make test` 138 passed; 200-kill run in `docs/results/recovery-200-nix-m11.md`. On `fhs`: CI runs 43844369387 on `caeb948` (D-119) and 43849008533 on `fc31fbb` (D-121), both jobs green. Commit `048e7e5` has four failing tests, fixed in `b340a51`.
 
 M12 (`docs/milestones/M12-real-projects.md`), no tag yet: `fs.edit` (D-120), a read-only repository folder inside the workspace (`filesystem.ro_dirs`, D-122), binary files and the executable bit through the file tools (D-123). On `nix`: `make test` 163 passed. On `fhs`: D-120 and D-122 are verified by CI run 43894443267 on `b66298a` (D-125); D-123, and D-124 (a busy model server that names a wait is given it), are **not yet verified on `fhs`**. With `fs.edit` the local 4B model solved the two-module ticket it had failed three times (`docs/results/real-repo-trial-nix.md`, last part).
+
+M14 (`docs/milestones/M14-release.md`) is started: the compatibility promise with tests against frozen v0.1 files (D-126) and `CHANGELOG.md`; `make test` 167 passed on `nix`, not yet verified on `fhs`. Open in M14: a release build and benchmarks in CI, install instructions, version 1.0.0, another distribution in CI, the name.
 
 M13 (`docs/milestones/M13-hosted-model.md`) is **blocked** after one of six tickets: the Groq key's tier allows 8,000 tokens per minute, which is also the largest request, and the conversations need more (`docs/results/hosted-model-trial-nix.md`). INV-101 was solved and checked. The five other tickets were not run.
 
