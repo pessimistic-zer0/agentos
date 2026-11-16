@@ -59,6 +59,11 @@ pub struct Gateway {
     /// The last checkpoint named in the log. The workspace equals it between
     /// calls; `exec` changes are compared against it.
     pub last_checkpoint: String,
+    /// The original repository. Only read, and only for the folders in
+    /// `filesystem.ro_dirs`: they are mounted into the sandbox from here,
+    /// and `fs.read` / `fs.list` of paths in them are answered from here
+    /// (D-122).
+    repo: PathBuf,
 }
 
 /// What the policy step produced for a call that may go ahead. It holds the
@@ -85,6 +90,9 @@ enum Decided {
 }
 
 impl Gateway {
+    // One argument per thing the runtime hands over at a start or a resume;
+    // a struct for them would only be built to be taken apart here.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         dir: ExecDir,
         log: EventLog,
@@ -93,11 +101,12 @@ impl Gateway {
         sandbox: SandboxCtx,
         next_call_id: u64,
         last_checkpoint: String,
+        repo: PathBuf,
     ) -> Gateway {
         let blobs = BlobStore::new(&dir.blobs());
         // LANG is one of the three variables passed through (with PATH and HOME).
         let lang = std::env::var("LANG").unwrap_or_else(|_| "C.UTF-8".into());
-        Gateway { dir, log, policy, blobs, programs, sandbox, lang, next_call_id, last_checkpoint }
+        Gateway { dir, log, policy, blobs, programs, sandbox, lang, next_call_id, last_checkpoint, repo }
     }
 
     /// Handle one tool call from start to end. An `Err` here means the runtime
@@ -231,9 +240,20 @@ impl Gateway {
                     return d;
                 }
                 let is_list = matches!(call, ToolCall::FsList { .. });
-                match fstool::open_for_read(&work, path, is_list) {
+                // A path in a read-only folder is not in the workspace (only
+                // an empty folder is). It is opened beneath the original
+                // repository instead, with the same kernel confinement, and
+                // must still be inside that folder once resolved (D-122).
+                let ro = beneath::lexical_rel(path).and_then(|rel| policy.ro_dir(&rel).map(str::to_string));
+                let root = if ro.is_some() { &self.repo } else { &work };
+                match fstool::open_for_read(root, path, is_list) {
                     Ok(Opened::Outside(e)) => escape(e),
                     Ok(Opened::Inside { fd, rel }) => {
+                        if let Some(dir) = &ro {
+                            if policy.ro_dir(&rel) != Some(dir.as_str()) {
+                                return Decided::Deny(Decision { allowed: false, rule: format!("path leaves the read-only folder `{dir}`") });
+                            }
+                        }
                         let d = policy.check_path(Access::Read, &rel);
                         if !d.allowed {
                             return Decided::Deny(d);
@@ -506,6 +526,7 @@ impl Gateway {
             uid: nix::unistd::getuid().as_raw(),
             gid: nix::unistd::getgid().as_raw(),
             max_file_bytes: self.policy.limits.workspace_bytes(),
+            ro_dirs: self.policy.filesystem.ro_dirs.iter().map(|d| (self.repo.join(d), d.clone())).collect(),
         };
         let cg = self.sandbox.cgroups.create(&sandbox::cgroup_name(&self.dir.id, call_id), &self.policy.limits)?;
         let timeout = std::time::Duration::from_secs(self.policy.limits.call_timeout_s);

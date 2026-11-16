@@ -142,6 +142,9 @@ pub fn survey(repo: &Path, policy: &Policy) -> Result<(CopyReport, u64)> {
             let child_rel = if rel.is_empty() { name.to_string() } else { format!("{rel}/{name}") };
             if policy.denied(&child_rel).is_some() {
                 report.denied.push(child_rel);
+            } else if policy.ro_dir(&child_rel).is_some() {
+                check_ro_dir(&entry.path(), &child_rel, policy)?;
+                report.ro_dirs.push(child_rel);
             } else if policy.skipped(&child_rel).is_some() {
                 report.skipped.push(child_rel);
             } else {
@@ -163,6 +166,7 @@ pub fn survey(repo: &Path, policy: &Policy) -> Result<(CopyReport, u64)> {
     walk(repo, "", policy, &mut report, &mut bytes)?;
     report.denied.sort();
     report.skipped.sort();
+    all_ro_dirs_found(policy, &report)?;
     Ok((report, bytes))
 }
 
@@ -189,6 +193,57 @@ pub struct CopyReport {
     pub skipped: Vec<String>,
     /// Sockets, FIFOs and device files: not copied (a source repo has no use for them).
     pub skipped_special: Vec<String>,
+    /// `filesystem.ro_dirs` folders: an empty folder stands in the
+    /// workspace; commands get the original mounted there (D-122).
+    pub ro_dirs: Vec<String>,
+}
+
+/// A folder named in `filesystem.ro_dirs` will be shown to commands as it
+/// is in the repository. So it must be a real folder, and nothing in it may
+/// match a deny rule: design rule 6 says denied files never reach the
+/// workspace, and a mount would bring them there.
+fn check_ro_dir(dir: &Path, rel: &str, policy: &Policy) -> Result<()> {
+    if !fs::symlink_metadata(dir)?.is_dir() {
+        bail!("filesystem.ro_dirs entry `{rel}` is not a folder in the repository (a symlink does not count)");
+    }
+    fn walk(dir: &Path, rel: &str, policy: &Policy, found: &mut Vec<String>) -> Result<()> {
+        for entry in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                bail!("file name {:?} in {} is not UTF-8; v1 does not support that", name, dir.display());
+            };
+            let child = format!("{rel}/{name}");
+            if policy.denied(&child).is_some() {
+                found.push(child);
+            } else if entry.file_type()?.is_dir() {
+                walk(&entry.path(), &child, policy, found)?;
+            }
+        }
+        Ok(())
+    }
+    let mut found = Vec::new();
+    walk(dir, rel, policy, &mut found)?;
+    if !found.is_empty() {
+        found.sort();
+        let more = if found.len() > 5 { format!(", and {} more", found.len() - 5) } else { String::new() };
+        bail!(
+            "filesystem.ro_dirs entry `{rel}` holds paths that a deny rule matches: {}{more}. \
+             A read-only folder is shown to commands as it is, so it must not hold denied files. \
+             Remove them, or add them to filesystem.deny_except if they are not secrets.",
+            found[..found.len().min(5)].join(", ")
+        );
+    }
+    Ok(())
+}
+
+fn all_ro_dirs_found(policy: &Policy, report: &CopyReport) -> Result<()> {
+    for d in &policy.filesystem.ro_dirs {
+        if !report.ro_dirs.contains(d) {
+            bail!("filesystem.ro_dirs entry `{d}` was not found in the repository (or a folder above it is left out by a deny or skip rule)");
+        }
+    }
+    Ok(())
 }
 
 /// Copy `repo` into `dest` (which must not exist), leaving out every path the
@@ -206,6 +261,7 @@ pub fn create(repo: &Path, dest: &Path, policy: &Policy) -> Result<CopyReport> {
     copy_dir(repo, dest, "", policy, &mut report)?;
     report.denied.sort();
     report.skipped.sort();
+    all_ro_dirs_found(policy, &report)?;
     Ok(report)
 }
 
@@ -221,6 +277,14 @@ fn copy_dir(src: &Path, dst: &Path, rel: &str, policy: &Policy, report: &mut Cop
         let child_rel = if rel.is_empty() { name.to_string() } else { format!("{rel}/{name}") };
         if policy.denied(&child_rel).is_some() {
             report.denied.push(child_rel);
+            continue;
+        }
+        if policy.ro_dir(&child_rel).is_some() {
+            // Not copied: an empty folder marks the place where commands
+            // will find the original, mounted read-only.
+            check_ro_dir(&entry.path(), &child_rel, policy)?;
+            fs::create_dir(dst.join(name)).with_context(|| format!("creating the mount point {child_rel}"))?;
+            report.ro_dirs.push(child_rel);
             continue;
         }
         if policy.skipped(&child_rel).is_some() {

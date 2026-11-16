@@ -214,7 +214,7 @@ Seven bugs in the runtime itself were found by the suites or the demo, each with
 | Ubuntu without switching off a system-wide protection | An AppArmor profile for agentos; the startup check tries instead of reading switches | M8, D-093, D-096 |
 | A patch that says what it cannot carry, and `agentos apply` that carries it | Binary and empty files, modes, empty folders | M8, M10, D-090, D-108 |
 | Commands for everyday use | `agentos check`, `rm`, `apply`; no `systemd-run` prefix; a message on Ctrl-C | M9, M10 |
-| Policy lists | `skip` (not copied), `scratch` (caches; not in checkpoints since D-118), `deny_except`, `helpers` (programs that commands start) | M9, D-099, D-100, D-112 |
+| Policy lists | `ro_dirs` (not copied; commands see the repository's folder read-only at its place, D-122), `skip` (not copied), `scratch` (caches; not in checkpoints since D-118), `deny_except`, `helpers` (programs that commands start) | M9, D-099, D-100, D-112 |
 | Reading part of a large file | `fs.read` with `start_line` and `max_lines` | M9, D-102 |
 | A model that stops early or whose reply is cut off | Reminded once, then the run ends as `stopped` with its patch | M9, D-107, D-111 |
 | Tried on real-shaped projects | Python (PyPI packages), Node (npm packages), Rust | `docs/results/real-repo-trial-nix.md`, `second-stack-trial-nix.md` |

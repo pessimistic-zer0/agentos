@@ -28,6 +28,8 @@ pub enum PolicyError {
     EmptyExecRule(usize),
     #[error("exec.helpers entry `{0}` must be a bare program name (no `/`, not empty)")]
     BadHelper(String),
+    #[error("filesystem.ro_dirs entry `{dir}`: {reason}")]
+    RoDir { dir: String, reason: &'static str },
     #[error("sandbox.ro_mounts entry `{0}` must be an absolute path")]
     RelativeMount(String),
     #[error("sandbox.ro_mounts entry `{0}` cannot be used: the sandbox puts its own folder at /work, /tmp, /proc and /dev, and `/` would show the whole machine; keep the folder somewhere else (for example under your home folder)")]
@@ -85,6 +87,14 @@ pub struct FsRules {
     /// reported, and not in the patch (D-099).
     #[serde(default)]
     pub scratch: Vec<String>,
+    /// Folders of the repository that are not copied. Commands see the
+    /// original folder, read-only, at the same place in the workspace;
+    /// `fs.read` and `fs.list` read it from the repository. For folders
+    /// that must be at their place in the project and are too big to copy
+    /// at every change, such as `node_modules`. Plain folder paths
+    /// relative to the repository, not globs (D-122).
+    #[serde(default)]
+    pub ro_dirs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -267,6 +277,24 @@ impl Policy {
                 check_glob(g).map_err(|reason| PolicyError::Glob { field, glob: g.clone(), reason })?;
             }
         }
+        for (i, d) in self.filesystem.ro_dirs.iter().enumerate() {
+            let err = |reason| PolicyError::RoDir { dir: d.clone(), reason };
+            if d.is_empty() || d.starts_with('/') || d.ends_with('/') {
+                return Err(err("it must be a folder path relative to the repository, like `node_modules` or `web/node_modules`"));
+            }
+            if d.split('/').any(|c| c.is_empty() || c == "." || c == "..") {
+                return Err(err("it must not contain `.`, `..` or empty parts"));
+            }
+            if d.contains(['*', '?', '[', ']', '{', '}']) {
+                return Err(err("it is a plain folder path, not a glob"));
+            }
+            if self.denied(d).is_some() {
+                return Err(err("a deny rule matches it; a denied folder cannot be shown to commands"));
+            }
+            if self.filesystem.ro_dirs.iter().enumerate().any(|(j, o)| j != i && (o == d || d.starts_with(&format!("{o}/")))) {
+                return Err(err("it is listed twice, or lies inside another entry"));
+            }
+        }
         for (i, rule) in self.exec.allow.iter().enumerate() {
             if rule.is_empty() || rule[0].is_empty() {
                 return Err(PolicyError::EmptyExecRule(i));
@@ -348,9 +376,15 @@ impl Policy {
         first_match("filesystem.skip", &self.filesystem.skip, rel)
     }
 
-    /// Is `rel` a scratch path (a cache)? A denied path never is.
+    /// The `ro_dirs` entry that `rel` is, or lies inside (D-122).
+    pub fn ro_dir(&self, rel: &str) -> Option<&str> {
+        self.filesystem.ro_dirs.iter().map(String::as_str).find(|d| rel == *d || rel.strip_prefix(d).is_some_and(|rest| rest.starts_with('/')))
+    }
+
+    /// Is `rel` a scratch path (a cache)? A denied path never is, and
+    /// nothing in a read-only folder is.
     pub fn scratch(&self, rel: &str) -> bool {
-        self.denied(rel).is_none() && first_match("filesystem.scratch", &self.filesystem.scratch, rel).is_some()
+        self.denied(rel).is_none() && self.ro_dir(rel).is_none() && first_match("filesystem.scratch", &self.filesystem.scratch, rel).is_some()
     }
 
     /// May a *command* leave this path changed? The write globs, plus the
@@ -364,6 +398,12 @@ impl Policy {
     pub fn check_path(&self, access: Access, rel: &str) -> Decision {
         if let Some(rule) = self.denied(rel) {
             return Decision::deny(rule);
+        }
+        // A read-only folder is never written, whatever the write globs say.
+        if access == Access::Write {
+            if let Some(d) = self.ro_dir(rel) {
+                return Decision::deny(format!("filesystem.ro_dirs `{d}` (read-only)"));
+            }
         }
         let (field, globs) = match access {
             Access::Read => ("filesystem.read", &self.filesystem.read),
@@ -533,6 +573,23 @@ max_tool_calls = 20
         assert_eq!(d.rule, r#"filesystem.deny[0] ".env""#);
         assert!(!p.check_path(Access::Read, "secrets/key.pem").allowed);
         assert!(p.check_path(Access::Read, "src/stats.py").allowed);
+    }
+
+    #[test]
+    fn read_only_folders_are_plain_paths_and_never_writable() {
+        let with = |list: &str| Policy::parse(&DEMO.replace("[exec]", &format!("ro_dirs = {list}\n[exec]")));
+        let p = with(r#"["node_modules", "web/node_modules"]"#).unwrap();
+        assert_eq!(p.ro_dir("node_modules"), Some("node_modules"));
+        assert_eq!(p.ro_dir("web/node_modules/a/b.js"), Some("web/node_modules"));
+        assert_eq!(p.ro_dir("node_modules2/x"), None, "a longer name is another folder");
+        assert_eq!(p.ro_dir("src/node_modules"), None);
+        let d = p.check_path(Access::Write, "node_modules/a.js");
+        assert!(!d.allowed && d.rule.contains("filesystem.ro_dirs"));
+        assert!(!p.command_may_change("node_modules/a.js") && !p.scratch("node_modules/.cache/x"));
+        for bad in [r#"[""]"#, r#"["/abs"]"#, r#"["a/"]"#, r#"["a/../b"]"#, r#"["./a"]"#, r#"["a//b"]"#, r#"["node_*"]"#, r#"["a", "a"]"#, r#"["a", "a/b"]"#, r#"["secrets"]"#] {
+            assert!(matches!(with(bad), Err(PolicyError::RoDir { .. })), "{bad}");
+        }
+        assert!(demo().filesystem.ro_dirs.is_empty());
     }
 
     #[test]

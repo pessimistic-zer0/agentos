@@ -2980,6 +2980,38 @@ Other choices inside the filter: a call made with another architecture's numbers
 
 ---
 
+### D-122 — `filesystem.ro_dirs`: a repository folder shown read-only at its place, never copied
+- **Date:** 2026-11-16
+- **Status:** Taken (carries out item B4 of D-114)
+- **Area:** sandbox
+- **ADR:** none
+
+**In plain words.** Some folders must be exactly where the project expects them and are too big to copy: Node's `node_modules` is the usual one. A policy can now list such folders. They are not copied into the workspace; an empty folder stands in their place. When a command runs, the sandbox mounts the folder from the original repository on top of that empty folder, read-only. The agent's `fs.read` and `fs.list` read the same files from the repository. Nobody can write them: not a command, not the agent's file tools.
+
+**The problem.** `skip` leaves a folder out of the copy, and `ro_mounts` shows a host folder at its *host* path. That suits a virtualenv, which works from wherever it is. `node_modules` is found by its place next to the code (second trial, `docs/results/second-stack-trial-nix.md`).
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Bind-mount the repository's folder read-only onto an empty folder in `/work`, per command | Taken | The experiment (`m12-repo-mount`): the kernel's read-only flag refuses every change; the host's workspace keeps only the empty folder, so checkpoints, the revert, the size measurement and the patch need no change |
+| Copy it once into the execution folder, outside the workspace, and mount that copy | Discarded | A frozen copy would be more predictable, but it is a full copy of a large folder per execution, which is the cost this exists to avoid. The price of the choice (the folder is live) is in the threat model |
+| Mount it writable and revert changes | Discarded | The folder would have to be in checkpoints again |
+| Let `skip` + `ro_mounts` take a "mount at" path | Discarded | `ro_mounts` are host folders the policy author vouches for; a folder of the repository under the agent's project has different rules (deny globs apply) |
+| Globs in `ro_dirs` | Discarded | A mount needs a folder, not a pattern. Plain relative paths, checked when the policy is read |
+| Refuse to start if anything in the folder matches a deny rule | Taken | Design rule 6: denied files never reach the workspace. A mount would bring them. Copying could skip single files; a mount cannot |
+| File tools read the folder from the repository (same `openat2` confinement, rooted at the repository; the resolved path must stay inside the folder) | Taken | Otherwise the agent would see an empty folder where commands see packages. An agent reads library code (second trial, call 2 and 3) |
+| File tools simply cannot see the folder | Discarded | Simpler, but a silent difference between what the agent and its commands see |
+| Writes by `fs.write` / `fs.edit` under the folder: denied before the write globs are looked at | Taken | A write would land in the hidden empty folder on the host and never be seen by a command |
+| The sandbox checks that every folder on the way to the mount point is a real folder | Taken | A mount follows symlinks. The gateway's revert already puts a swapped mount point back (it is never a writable path), so this is a second line; it is tested through the library because the product cannot reach it |
+
+**What this means for the code.** `FilesystemRules.ro_dirs` with validation (`PolicyError::RoDir`), `Policy::ro_dir`, a `Write` check that denies with rule `filesystem.ro_dirs`; `scratch` is false there. `workspace::create` and `survey` make the empty folder, refuse a missing folder, a symlink, or denied paths inside (`check_ro_dir`). `SandboxSpec.ro_dirs`; `ns::build_root` mounts them after `/work`. `Gateway` keeps the repository path (on a resume, from the `execution.created` event) and routes reads. `agentos check` lists them. Design rule 10 holds: the repository is only read. Since the folder is live, it is in no checkpoint and a rollback does not restore it.
+
+**Evidence.** Experiment `experiments/m12-repo-mount/NOTES.md`. `tests/rodirs.rs`, 7 tests, and a policy unit test. With the read-only remount removed, `commands_use_the_folder_and_cannot_change_it` fails; with the symlink check removed, `the_sandbox_refuses_a_mount_point_that_is_a_symlink` fails. First version of one test expected a command to fail after an earlier command swapped the mount point for a symlink; it ran normally, because the revert had already put the folder back. The test was rewritten to assert that. The Node session of the second trial with `ro_dirs = ["node_modules"]`: `check` shows 8 files to copy instead of 24, the same ten calls give the same results, `node --test` exit 0, the original unchanged. Not yet verified on `fhs`.
+
+**Concepts to learn.** Bind mount; mount flags (`MS_RDONLY`) and why they do not depend on file permissions; mount namespaces as the reason the host never sees the mount; why a mount follows symlinks; live view vs snapshot.
+
+---
+
 ## Still open
 
 | Question | Notes |
@@ -3058,6 +3090,7 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-16 | Commit `048e7e5` (the disk limit) was made with four failing tests. The suite had passed; then `workspace_mb` was added to the two preset policies, and the new tests' helper asserted that the preset has no such line. The suite was started again but the commit was made in the same command, before its result was read | Run the suite after the *last* change and read the result before committing. Fixed in the next commit; history is not rewritten, so `048e7e5` stays a commit whose tests fail |
 | 2026-11-16 | 200-kill suite on `nix` after M11 (seccomp, file-size limit, the measuring watchdog, scratch-free checkpoints): 4,800 + 1,600 runs, 0 violations, 0 duplicated effects; recovery p50 20.3 ms, p99 61.1 ms (M9: 19.6 and 54.0). `docs/results/recovery-200-nix-m11.md` | Changing a checkpoint by editing only its temporary copy added no recovery state, and the suite agrees. The suite does not reach the disk limit's undo path under kills; that is tested without kills only |
 | 2026-11-16 | With `fs.edit`, the local 4B model solved the two-module ticket (INV-102) in 7 calls and 36 s; without it, it had failed three times, twice because a whole-file `fs.write` did not fit in one reply. Its fix passes the named tests but hard-codes `USD` where the ticket asks for the settings' default | The tool's shape decided whether a small model could work at all. And passing tests are not the ticket: the trial record says what the tests did not check |
+| 2026-11-16 | A test for `ro_dirs` expected a command to fail after an earlier command replaced the mount point with a symlink. It ran normally: the revert after the first command had already restored the folder, because a read-only folder is never a writable path | Two defences were stacked and the outer one hid the inner. The inner one (the sandbox's own check) had to be tested through the library, with a workspace prepared by hand |
 
 ---
 
@@ -3141,3 +3174,4 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | RLIMIT_FSIZE | A per-process kernel limit on how large any one file it writes may become; the write that would pass it fails with EFBIG or the process gets SIGXFSZ |
 | Measured (polled) limit | A limit enforced by checking again and again; what happens between two checks is not prevented, only caught |
 | Sparse file / allocated blocks | A file can claim a length without using that much disk; `st_blocks` says what it really uses |
+| Bind mount | Making an existing folder appear at a second place in the file tree; with the read-only flag, the second place cannot be used to change it |

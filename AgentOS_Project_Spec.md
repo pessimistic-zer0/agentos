@@ -1083,7 +1083,7 @@ Uncommitted. Some are research projects on their own.
 - **Still parked from the walk-through and the trial (2026-11-14):**
   - **Binary files and file modes through the file tools.** `agentos apply` exists now (M10, D-108) and carries them when a command made them; letting the agent's own `fs.read` and `fs.write` handle them is a separate question.
   - **`apply` on top of the user's own edits** (a merge). Today it refuses and points at the patch.
-  - **A read-only folder inside the workspace** (for `node_modules`, which must be at its place in the project; `skip` only suits folders that work from their own path).
+  - **A read-only folder inside the workspace** (built 2026-11-16 as `filesystem.ro_dirs`, D-122) (for `node_modules`, which must be at its place in the project; `skip` only suits folders that work from their own path).
   - **A narrower way to allow one script** than a full argv rule per script.
 - **From the M9 re-trial (2026-11-15):** an HTTP error from the model's server ended the run as `interrupted`. Built on 2026-11-15 (D-111): busy answers are retried, a wrong key is an error that names the settings, and a reply the server cannot use is told to the model, then ends the run as `stopped` with its patch.
 

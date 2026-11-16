@@ -245,7 +245,13 @@ The shipped policies fit the demo. For a real repository, copy one and change fo
      [sandbox.env]
      PYTHONPATH = "/home/me/deps"
      ```
-   Everything under a mount can be read by the code the agent runs (never written). Do not mount a folder that holds secrets.
+   - *A folder that must be at its place in the project* (`node_modules`): name it in `ro_dirs`. It is not copied; commands see the repository's own folder there, read-only, and `fs.read` and `fs.list` read it from the repository.
+
+     ```toml
+     [filesystem]
+     ro_dirs = ["node_modules"]
+     ```
+   Everything under a mount or a read-only folder can be read by the code the agent runs (never written). Do not mount a folder that holds secrets. A read-only folder is the live original: it is not in checkpoints, and the run will not start if something in it matches a deny rule.
 4. **The limits.** `call_timeout_s` (60) must be longer than your test suite takes; `max_tool_calls` (50) is the whole run's budget; `max_output_kb` (64) is also the largest file `fs.read` returns; `workspace_mb` (2048) is how large the workspace may get before a command is stopped and undone.
 
 Then run `agentos check --policy my-policy.toml --repo /home/me/proj`. It says what `run` would refuse, and how many files and megabytes would be copied; if that number is large, add the big folders to `skip`.

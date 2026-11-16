@@ -37,3 +37,18 @@ Everything real before this was Python with `pytest`. This trial asks whether th
 - **A lock file that the test command creates** (`Cargo.lock`, when the repo has none) is reverted and reported on every run: `1 change(s) outside write globs reverted`. Correct by the rules, noisy in practice. The user's answer today is to commit the lock file or put it in the write paths.
 - **No network means no downloads.** Both projects worked because their dependencies were already there (`node_modules` in the repo, no crates). A project that needs `npm install` or a crate download inside the sandbox cannot get it; the dependencies must be on disk first and reachable (in the repo, or mounted).
 - **`skip` still does not suit `node_modules`**; here it was small enough to copy.
+
+## The Node session again with `node_modules` as a read-only folder (2026-11-16, D-122)
+
+Commit `1a94149` plus the uncommitted `ro_dirs` change, debug build, on a copy of `shortlink-node`. The policy of run 2 with one more line: `ro_dirs = ["node_modules"]`. The same ten scripted calls.
+
+| | `node_modules` copied (run 2) | `node_modules` in `ro_dirs` |
+|---|---|---|
+| `agentos check` | 24 files would be copied | 8 files; `not copied, shown to commands read-only from the repository: node_modules` |
+| `fs.list node_modules`, `fs.read node_modules/ms/package.json` | work | work (4 entries; 125 bytes), read from the repository |
+| `node --test` after the three writes | exit 0 | exit 0 |
+| `fs.write package.json`, `npm test`, `node -e …` | denied | denied |
+| `work/node_modules` on the host | the copied packages | an empty folder |
+
+The original project was unchanged afterwards (`git status` empty). This project's `node_modules` is 68 KB, so the saving here is 16 files per checkpoint; the point is that a large one no longer has to be copied to be at its place.
+

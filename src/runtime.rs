@@ -157,7 +157,7 @@ pub fn create(opts: &RunOptions, agent: &dyn Agent) -> Result<(Gateway, File)> {
 
     // Whatever the agent needs to be rebuilt after a crash (the script).
     agent.persist(&dir)?;
-    Ok((Gateway::new(dir.clone(), log, policy, programs, sandbox, 1, base), lock))
+    Ok((Gateway::new(dir.clone(), log, policy, programs, sandbox, 1, base, repo), lock))
 }
 
 /// Run recovery on an interrupted execution and print what it decided.
@@ -232,7 +232,13 @@ pub fn resume(state_dir: &Path, id: &str, agent: &mut dyn Agent, verbose: bool) 
     let last_cp = crate::log::named_checkpoints(&events).pop().context("no checkpoint in the log")?;
     let history = crate::recovery::history(&events, &crate::blob::BlobStore::new(&dir.blobs()))?;
     agent.restore(&history, &events)?;
-    let mut gw = Gateway::new(dir.clone(), log, policy, programs, sandbox, next_call_id, last_cp);
+    // Where the repository was when the execution started; only used for
+    // the policy's read-only folders (D-122).
+    let repo = events
+        .iter()
+        .find_map(|e| if let EventBody::ExecutionCreated { repo, .. } = &e.body { Some(PathBuf::from(repo)) } else { None })
+        .context("no execution.created event in the log")?;
+    let mut gw = Gateway::new(dir.clone(), log, policy, programs, sandbox, next_call_id, last_cp, repo);
     if verbose {
         println!("{id}  RESUMING after {} calls", history.len());
     }
@@ -462,6 +468,9 @@ pub fn check(policy_path: Option<&Path>, repo: Option<&Path>) -> usize {
                 };
                 list("deny", &report.denied);
                 list("skip", &report.skipped);
+                if !report.ro_dirs.is_empty() {
+                    println!("  not copied, shown to commands read-only from the repository: {}", report.ro_dirs.join(", "));
+                }
             }
             Err(e) => fail("repo", format!("--repo {}: {e:#}", repo.display())),
         },

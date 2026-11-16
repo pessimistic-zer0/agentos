@@ -56,6 +56,7 @@ fn main() -> Result<()> {
             uid: nix::unistd::getuid().as_raw(),
             gid: nix::unistd::getgid().as_raw(),
             max_file_bytes: policy.limits.workspace_bytes(),
+            ro_dirs: Vec::new(),
         };
         let t = Instant::now();
         let cg = cgroups.create(&name, &policy.limits)?;

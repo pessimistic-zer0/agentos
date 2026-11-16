@@ -65,6 +65,11 @@ pub struct SandboxSpec {
     pub gid: u32,
     /// No file the command writes may grow past this (`RLIMIT_FSIZE`; D-117).
     pub max_file_bytes: u64,
+    /// `filesystem.ro_dirs`: (the folder in the original repository, its
+    /// path relative to the workspace). Mounted read-only at
+    /// `/work/<path>` (D-122).
+    #[serde(default)]
+    pub ro_dirs: Vec<(PathBuf, String)>,
 }
 
 /// The fd the status pipe is placed on in the helper.
@@ -325,6 +330,30 @@ fn build_root(spec: &SandboxSpec) -> Result<()> {
     fs::create_dir_all(new("work"))?;
     bind(&host(&spec.workspace), &new("work"), false)?;
     remount(&new("work"), MsFlags::MS_NOSUID | MsFlags::MS_NODEV)?;
+
+    // Folders of the original repository, read-only, at their place inside
+    // /work (D-122). The mount point is an empty folder the runtime made in
+    // the workspace. Code from an earlier command could have replaced it or
+    // a folder above it with a symlink, and a mount follows symlinks, so
+    // every step of the way is checked to be a real folder first. Nothing
+    // can change it between the check and the mount: no sandboxed process
+    // exists yet.
+    for (src, rel) in &spec.ro_dirs {
+        let mut at = new("work");
+        for comp in rel.split('/') {
+            at.push(comp);
+            let meta = fs::symlink_metadata(&at).with_context(|| format!("the mount point for read-only folder `{rel}` is missing in the workspace"))?;
+            if !meta.is_dir() {
+                bail!("the mount point for read-only folder `{rel}` is not a plain folder in the workspace any more");
+            }
+        }
+        let src = host(src);
+        if !fs::symlink_metadata(&src).map(|m| m.is_dir()).unwrap_or(false) {
+            bail!("read-only folder `{rel}` is no longer a folder in the repository");
+        }
+        bind(&src, &at, false)?;
+        remount(&at, MsFlags::MS_RDONLY | MsFlags::MS_NOSUID | MsFlags::MS_NODEV)?;
+    }
 
     // Read-only system folders from the policy (D-012).
     for m in &spec.ro_mounts {

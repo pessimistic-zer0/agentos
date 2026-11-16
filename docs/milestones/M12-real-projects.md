@@ -5,7 +5,7 @@
 | Weeks in the plan | v1.0 (D-114); no week plan |
 | Started / finished | 2026-11-16 / in progress |
 | Commits | `ad2b302` … (tag `m12` only after a green CI run, D-113) |
-| Status | In progress: B5 (`fs.edit`) built on `nix`; B4 and B6 not started |
+| Status | In progress: B5 (`fs.edit`) and B4 (`ro_dirs`) built on `nix`; B6 not started |
 
 Write this document for a reader who is new to Rust and Linux internals. Plain words first, the real term next to it. Fill it in while working.
 
@@ -22,7 +22,13 @@ Three gaps the trials on real projects found (D-114). **B5:** an edit tool, so a
 | B5: policy and confinement as for `fs.write`, plus read access | On `nix` yes | `an_edit_needs_write_and_read_access_and_stays_in_the_workspace` (fails with the read check removed) |
 | B5: a kill at any crash point leaves the edit not done or wholly done, and a resumed run applies it once | On `nix` yes | `an_edit_is_recovered_like_a_write`: 8 points × 50 kills by hand, 400 runs, 0 violations; reports 22 violations when recovery is deliberately broken |
 | B5: a small model can use it | Yes, one run | Qwen3-VL-4B, ticket INV-102: 7 calls, 36 s, solved; three failures before (`docs/results/real-repo-trial-nix.md`) |
-| B4: a read-only folder inside the workspace | Not started | |
+| B4: commands can use the folder and cannot change it; the original repository is untouched | On `nix` yes; `fhs` not yet verified | `tests/rodirs.rs`: `commands_use_the_folder_and_cannot_change_it` (ten kinds of change refused; fails without the read-only flag) |
+| B4: it is never copied: not in the workspace on the host, not in a checkpoint, not in the patch, not touched by `apply` | On `nix` yes | the same test |
+| B4: the file tools read it and can never write it or leave it | On `nix` yes | `the_file_tools_read_it_from_the_repository_and_never_write_it` |
+| B4: a denied path inside, a missing folder or a symlink stops the run before it starts | On `nix` yes | `a_denied_file_in_the_folder_stops_the_run_before_it_starts`, `a_folder_that_is_missing_or_a_symlink_is_refused` |
+| B4: a mount point cannot be redirected | On `nix` yes | `a_command_that_swaps_the_way_to_the_mount_point_is_reverted`, `the_sandbox_refuses_a_mount_point_that_is_a_symlink` |
+| B4: it is there again after a kill and a resume | On `nix` yes | `the_folder_is_still_there_after_a_kill_and_a_resume` |
+| B4: the real case | Yes, one session | the Node project with `ro_dirs = ["node_modules"]` (`docs/results/second-stack-trial-nix.md`, last part) |
 | B6: binary files and file modes through the file tools | Not started | |
 
 ## 3. What you need to know first
@@ -35,7 +41,8 @@ Three gaps the trials on real projects found (D-114). **B5:** an edit tool, so a
 
 | Experiment | What it tried | What happened | What it taught |
 |---|---|---|---|
-| (none in `experiments/`) | The mechanism is string replacement feeding the existing write path; the open question was whether a small model can use the tool, which needs the tool (D-120) | The trial with the real model is in §2 | |
+| `experiments/m12-repo-mount/` | Mounted a repository folder read-only onto an empty folder in a copy, in a private mount namespace, and tried nine ways to change it | All refused except renaming a parent folder; the host never saw the mount | The read-only flag is enough; the host's workspace stays empty there, so nothing that reads it needs to change |
+| (none in `experiments/` for `fs.edit`) | The mechanism is string replacement feeding the existing write path; the open question was whether a small model can use the tool, which needs the tool (D-120) | The trial with the real model is in §2 | |
 
 ## 5. What was built
 
@@ -46,7 +53,12 @@ Three gaps the trials on real projects found (D-114). **B5:** an edit tool, so a
 | `src/gateway.rs` | `decide` turns an allowed edit into an approved write of the whole new content |
 | `src/recovery.rs` | An edit is reconciled by the rule for a write |
 | `src/agent/llm.rs` | The tool `fs_edit`, the system prompt, the wording of results |
-| `tests/edit.rs`, `tests/recovery/main.rs`, `tests/llm_agent.rs` | Tests |
+| `tests/edit.rs`, `tests/recovery/main.rs`, `tests/llm_agent.rs` | Tests for `fs.edit` |
+| `src/policy.rs` | `filesystem.ro_dirs`, its validation, `ro_dir()`, the write refusal |
+| `src/workspace.rs` | The empty folder in the copy; `check_ro_dir` refuses denied paths inside, a symlink, a missing folder |
+| `src/sandbox/ns.rs` | The read-only mounts onto `/work/<folder>`, after checking the way to each mount point |
+| `src/gateway.rs`, `src/runtime.rs` | The gateway knows the repository path; reads of paths in a read-only folder are opened beneath the repository |
+| `tests/rodirs.rs` | Tests for `ro_dirs` |
 
 ```text
 fs.edit {path, old_str, new_str}
@@ -77,21 +89,32 @@ if let Some(more) = content[next..].find(old_str) { /* "more than once (at line 
 
 **Recovery.** One line: `LoggedCall::FsWrite { .. } | LoggedCall::FsEdit { .. }`. The intent has the same fields. If the edit was applied and the agent asks for it again after a resume, `old_str` is no longer in the file and the call fails cleanly, so an edit cannot land twice.
 
+**`ro_dirs`, in the order things happen.**
+
+1. *The policy is read* (`Policy::validate`): each entry must be a plain relative folder path, not matched by a deny rule, not inside another entry.
+2. *The workspace is copied* (`workspace::copy_dir`): when the walk reaches such a folder it calls `check_ro_dir` (a real folder? nothing denied inside?), makes an empty folder in the copy and goes on without descending.
+3. *A command starts* (`ns::build_root`): after `/work` is mounted, for each entry the sandbox walks from `/newroot/work` down the path with `symlink_metadata`, which does not follow links, and stops if any step is not a real folder. Then `bind(repo/<folder>, /newroot/work/<folder>)` and a remount with `MS_RDONLY`. A bind mount starts with the flags of where it came from; the remount is what makes it read-only.
+4. *The agent reads* (`Gateway::decide`): the requested path is normalised as text (`lexical_rel`) only to choose the root: the workspace, or the repository if the path is in a read-only folder. The open itself is still `openat2` beneath that root, and the path the kernel resolved must still be inside the folder; a link in `node_modules` that points at `../src/x` is refused instead of quietly reading the repository's `src/x`.
+5. *The agent writes*: `Policy::check_path(Write, …)` refuses before looking at the write globs.
+
 ## 7. Decisions made
 
 | Entry | Decision | Discarded alternatives |
 |---|---|---|
+| D-122 | `filesystem.ro_dirs`: the repository's folder bind-mounted read-only at its place; never copied; file tools read it from the repository | A frozen copy per execution; a writable mount; globs; hiding it from the file tools |
 | D-120 | `fs.edit`, exactly one occurrence, turned into a write before the intent; read and write access needed | A separate effect and recovery rule; `replace_all`; loose matching; creating files; a diff tool |
 
 ## 8. Problems hit
 
-None so far that changed the design. One clippy warning (a complex type in the new recovery test) was fixed before the commit.
+1. One clippy warning (a complex type in the new recovery test for `fs.edit`) was fixed before the commit.
+2. **A test that expected the wrong thing.** For `ro_dirs`, a test had a command replace the mount point with a symlink and expected the *next* command to fail in the sandbox's check. The next command ran normally: the revert after the first command had already put the folder back, because a read-only folder is never a writable path. The test now asserts the revert, and the sandbox's own check is tested through the library with a workspace made by hand. Findings row 2026-11-16.
 
 ## 9. How to run it
 
 ```sh
-nix develop -c make test       # 146 passed on nix
+nix develop -c make test       # 154 passed on nix
 systemd-run --user --scope -p Delegate=yes cargo test --test edit
+systemd-run --user --scope -p Delegate=yes cargo test --test rodirs
 AGENTOS_RECOVERY_RUNS=50 systemd-run --user --scope -p Delegate=yes cargo test --test recovery an_edit -- --nocapture
 ```
 
@@ -110,6 +133,8 @@ new_str = "len(values)"
 - `fs.edit` replaces one occurrence; there is no "replace all" (parked).
 - It edits UTF-8 text only (binary files: B6).
 - The model trial is one run of one model on one ticket.
+- A folder in `ro_dirs` is the live original: not in checkpoints, not restored by a rollback, and a change made to it during a run is seen at once (`docs/threat-model.md` §5).
+- Mounts below such a folder on the host are not carried in (the bind is not recursive).
 
 ## 11. Check your understanding
 
