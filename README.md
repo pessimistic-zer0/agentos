@@ -198,7 +198,7 @@ write = ["src/**", "tests/**", "**/__pycache__/**"]
 deny  = [".env", ".env.*", "**/.env", "**/.env.*", "secrets/**", ".git/**", "**/*.pem", "**/id_rsa*"]
 deny_except = [".env.example", ".env.sample", ".env.template", "**/.env.example", "**/.env.sample", "**/.env.template"]
 skip    = []                       # not copied into the workspace, e.g. [".venv/**"]
-scratch = [".pytest_cache/**"]     # caches: commands may write here; not reported, not in the patch
+scratch = [".pytest_cache/**"]     # caches: commands may write here; not reported, not in the patch or checkpoints
 
 [exec]
 allow = [["pytest"], ["python3", "-m", "pytest"]]   # argv prefixes

@@ -1076,7 +1076,7 @@ Uncommitted. Some are research projects on their own.
 - **Built in M10 (2026-11-15, D-108):** `agentos apply`.
 - **Built in M9 (2026-11-15, D-098 to D-107)**, so no longer parked: a clean-up command (`agentos rm`), leaving folders out of the copy (`filesystem.skip`), starting itself under `systemd-run`, a message on Ctrl-C, a check command, reading part of a file, a hint for an inactive virtualenv, exceptions to deny rules, caches as non-violations (`filesystem.scratch`), a clearer end when the model gives up.
 - **From the trial on a Node and a Rust project (2026-11-15, `docs/results/second-stack-trial-nix.md`):** helper programs were built at once (`exec.helpers`, D-112). Parked:
-  - **Scratch folders outside the checkpoints.** A build folder (`target/`) is copied at every change: 64 MB after two `cargo test` calls.
+  - **Scratch folders outside the checkpoints** (built 2026-11-16, D-118). A build folder (`target/`) is copied at every change: 64 MB after two `cargo test` calls.
   - **Lock files a command creates** (`Cargo.lock`) are reverted and reported on every run unless the policy lets them be written.
   - **Dependencies that have to be downloaded.** No network in the sandbox, so they must be on disk first. A one-time, allow-listed fetch step would be a large change to the threat model.
 - **Still parked from the walk-through and the trial (2026-11-14):**

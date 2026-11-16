@@ -153,7 +153,7 @@ impl Gateway {
                     faults::point("P4", Some(call_id)); // effect done, no checkpoint yet
                     let name = checkpoint::name(checkpoint::number(&self.last_checkpoint).unwrap_or(0) + 1);
                     faults::arm("P5", Some(call_id)); // kill during the copy
-                    if let Err(e) = checkpoint::create(&self.dir.work(), &self.dir.checkpoints(), &name) {
+                    if let Err(e) = checkpoint::create(&self.dir.work(), &self.dir.checkpoints(), &name, |rel| self.policy.scratch(rel)) {
                         // Only a command can leave files that cannot be
                         // copied; for it this is the call's failure (D-085).
                         if !matches!(call, ToolCall::Exec { .. }) {

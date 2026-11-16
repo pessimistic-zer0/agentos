@@ -165,7 +165,10 @@ fn reconcile(dir: &ExecDir, c: &CallRecord, last: &str, named: &[String]) -> Res
                 // The file has the new content: the rename happened.
                 Some(Some(h)) if h == new_hash => {
                     let name = checkpoint::name(named.iter().filter_map(|n| checkpoint::number(n)).max().unwrap_or(0) + 1);
-                    checkpoint::create(&dir.work(), &dir.checkpoints(), &name)?;
+                    // The policy saved with the execution says which paths
+                    // are caches and stay out of checkpoints (D-118).
+                    let (policy, _) = crate::policy::Policy::load(&dir.policy()).context("reading the execution's saved policy")?;
+                    checkpoint::create(&dir.work(), &dir.checkpoints(), &name, |rel| policy.scratch(rel))?;
                     Ok(Outcome {
                         applied: true,
                         reason: format!("file has the new content; checkpoint {name} taken"),

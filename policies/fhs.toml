@@ -21,7 +21,8 @@ deny_except = [".env.example", ".env.sample", ".env.template", "**/.env.example"
 # Not copied into the workspace (big, and not needed there). For a virtualenv
 # that is mounted in [sandbox] ro_mounts, put its folder here: skip = [".venv/**"]
 skip = []
-# Caches: commands may write here; it is not reported and not in the patch.
+# Caches: commands may write here; it is not reported, not in the patch and
+# not in checkpoints (after a rollback a cache is gone and is built again).
 scratch = [".pytest_cache/**"]
 
 [exec]

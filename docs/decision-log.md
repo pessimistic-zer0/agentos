@@ -2871,6 +2871,34 @@ Other choices inside the filter: a call made with another architecture's numbers
 
 ---
 
+### D-118 — Scratch paths are left out of checkpoints: copied, then deleted from the copy
+- **Date:** 2026-11-16
+- **Status:** Taken
+- **Area:** durability
+- **ADR:** none (ADR 0007, directory checkpoints, stands)
+
+**In plain words.** A checkpoint is a full copy of the workspace, made after every change. A build folder such as Rust's `target/` is a cache: it can always be made again, yet every checkpoint stored it again. Now the paths a policy lists as `scratch` are removed from each checkpoint before it is finished. The workspace keeps its caches, so the next command is still fast. The price: when the workspace is rolled back (after a crash, or after a command that had to be undone), it comes back without its caches and the next build starts from nothing.
+
+**The problem.** Second trial (`docs/results/second-stack-trial-nix.md`): 64 MB after two `cargo test` calls, nearly all of it `target/` in the checkpoints.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| `cp -a` as before, then delete scratch paths from the temporary copy, then rename it into place | Taken | The workspace is never touched and there is no new state for a crash to leave: a kill leaves a `.tmp-` folder, which recovery already removes. Costs the time of copying the cache once per checkpoint on filesystems without shared blocks |
+| Move scratch folders out of the workspace, copy, move them back | Discarded | Fastest without shared blocks (about 10 ms against 33 to 45 ms in the experiment), but it changes the workspace during a checkpoint, and a kill in between leaves caches stashed outside: one more state for recovery, in the part of the program that is tested hardest |
+| A copier written in Rust that skips scratch paths | Discarded | Would have to reproduce everything `cp -a` keeps (modes, links, special files, shared blocks); D-007 chose `cp -a` because it is exact |
+| Mount scratch folders from outside the workspace | Discarded | Only works for a fixed folder, not for a glob; a larger change to the sandbox |
+| Bring the caches across on a rollback | Discarded | After a kill a cache may be half written; an empty cache is always correct |
+| Checkpoint pruning | Not done | A different idea (delete old checkpoints); still parked |
+
+**What this means for the code.** `checkpoint::create` takes a `scratch` test and calls `drop_scratch` on the temporary copy. The gateway and the run start pass the policy's; recovery's roll-forward of an `fs.write` loads the policy saved in the execution folder. `tests/deps.rs`: the cache test used to require "workspace equals last checkpoint" including the cache; it now requires that no checkpoint holds a cache file, that the workspace does, and that everything else is equal. That is a changed requirement, not a weakened test: the old one described the behaviour this decision replaces. New unit test in `src/checkpoint.rs` (nested folders, a symlink pointing outside, a locked folder, rollback).
+
+**Evidence.** Experiment `experiments/m11-scratch-checkpoints/` (14 MB workspace, all of it `target/`): one checkpoint holds 14 MB as before, 1 MB with either method; times in its notes. The updated cache test fails with `drop_scratch` switched off (`cp-0001 holds cache files`) and passes with it. The Rust session of the second trial (6 calls, two `cargo test`), same repo copy, script and policy: execution folder 86 MB before, 21 MB after (the workspace itself, with its `target/`, is most of the 21). `make test` on `nix`: 138 passed. Not yet verified on `fhs`.
+
+**Concepts to learn.** Cache vs state; why "do it on the copy" needs no recovery code; reflink (shared blocks) and what it does not save (metadata, and nothing on ext4).
+
+---
+
 ## Still open
 
 | Question | Notes |

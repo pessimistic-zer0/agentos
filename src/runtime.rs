@@ -137,7 +137,7 @@ pub fn create(opts: &RunOptions, agent: &dyn Agent) -> Result<(Gateway, File)> {
         );
     }
     let base = checkpoint::name(0);
-    checkpoint::create(&dir.work(), &dir.checkpoints(), &base)?;
+    checkpoint::create(&dir.work(), &dir.checkpoints(), &base, |rel| policy.scratch(rel))?;
     log.append(EventBody::WorkspaceCreated {
         files_copied: report.files_copied,
         denied: report.denied.clone(),

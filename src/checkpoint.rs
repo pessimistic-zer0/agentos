@@ -16,7 +16,14 @@ pub fn name(n: u64) -> String {
 }
 
 /// Copy `work` to `<checkpoints>/<name>` and return the new folder's path.
-pub fn create(work: &Path, checkpoints: &Path, name: &str) -> Result<PathBuf> {
+///
+/// `scratch` says which paths are caches (`filesystem.scratch`). They are
+/// left out of the checkpoint (D-118): a build folder would otherwise be
+/// stored again at every change. They are deleted from the temporary copy
+/// before it gets its real name, so the workspace itself is never touched
+/// and a crash leaves only a `.tmp-` folder, as before. A rollback
+/// therefore gives a workspace without its caches.
+pub fn create(work: &Path, checkpoints: &Path, name: &str, scratch: impl Fn(&str) -> bool) -> Result<PathBuf> {
     std::fs::create_dir_all(checkpoints)?;
     let final_path = checkpoints.join(name);
     if final_path.exists() {
@@ -26,12 +33,38 @@ pub fn create(work: &Path, checkpoints: &Path, name: &str) -> Result<PathBuf> {
     if tmp.exists() {
         remove_tree(&tmp)?; // left over from an earlier crash
     }
-    if let Err(e) = run_cp(work, &tmp) {
+    if let Err(e) = run_cp(work, &tmp).and_then(|()| drop_scratch(&tmp, &scratch)) {
         let _ = remove_tree(&tmp); // do not leave half a copy behind
         return Err(e);
     }
     std::fs::rename(&tmp, &final_path).with_context(|| format!("renaming {} into place", tmp.display()))?;
     Ok(final_path)
+}
+
+/// Delete every scratch path from a fresh copy of the workspace. The copy is
+/// outside the sandbox and nothing else uses it yet. `scan` does not follow
+/// symlinks, so every path it returns has only real folders on the way.
+fn drop_scratch(copy: &Path, scratch: &impl Fn(&str) -> bool) -> Result<()> {
+    let entries = scan(copy)?;
+    // Sorted by path: a folder comes before what is in it. Once a folder is
+    // removed, skip its contents.
+    let mut removed: Option<String> = None;
+    for (rel, entry) in &entries {
+        if rel.is_empty() || !scratch(rel) {
+            continue;
+        }
+        if removed.as_ref().is_some_and(|r| rel.starts_with(&format!("{r}/"))) {
+            continue;
+        }
+        let path = copy.join(rel);
+        if entry.kind == Kind::Dir {
+            remove_tree(&path)?;
+            removed = Some(rel.clone());
+        } else {
+            std::fs::remove_file(&path).with_context(|| format!("removing scratch path {rel} from the checkpoint"))?;
+        }
+    }
+    Ok(())
 }
 
 /// Delete a folder tree that code in the sandbox may have shaped.
@@ -825,4 +858,44 @@ pub fn apply_changes(base: &Path, work: &Path, target: &Path, scratch: impl Fn(&
 fn symlink_on_the_way(root: &Path, rel: &str) -> Option<String> {
     let parts: Vec<&str> = rel.split('/').collect();
     (1..parts.len()).map(|i| parts[..i].join("/")).find(|anc| std::fs::symlink_metadata(root.join(anc)).is_ok_and(|m| m.file_type().is_symlink()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scratch_paths_are_left_out_of_a_checkpoint_and_stay_in_the_workspace() {
+        let root = std::env::temp_dir().join(format!("agentos-cp-scratch-{}", std::process::id()));
+        let _ = remove_tree(&root);
+        let (work, outside) = (root.join("work"), root.join("outside"));
+        std::fs::create_dir_all(work.join("target/debug/deps")).unwrap();
+        std::fs::create_dir_all(work.join("src/cache")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("keep"), "outside").unwrap();
+        std::fs::write(work.join("target/debug/deps/a.o"), "obj").unwrap();
+        std::fs::write(work.join("src/lib.rs"), "code").unwrap();
+        std::fs::write(work.join("src/cache/x"), "cached").unwrap();
+        // A link inside a scratch folder to a folder outside: the link goes,
+        // what it points at stays.
+        std::os::unix::fs::symlink(&outside, work.join("target/link")).unwrap();
+        // A folder the command locked (B-010) inside a scratch folder.
+        std::fs::create_dir(work.join("target/locked")).unwrap();
+        std::fs::write(work.join("target/locked/f"), "x").unwrap();
+        std::fs::set_permissions(work.join("target/locked"), std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        let scratch = |rel: &str| rel.starts_with("target/") || rel.starts_with("src/cache/");
+        let cp = create(&work, &root.join("checkpoints"), "cp-0001", scratch).unwrap();
+        assert_eq!(std::fs::read_to_string(cp.join("src/lib.rs")).unwrap(), "code");
+        assert_eq!(std::fs::read_dir(cp.join("target")).unwrap().count(), 0, "target is kept as an empty folder");
+        assert_eq!(std::fs::read_dir(cp.join("src/cache")).unwrap().count(), 0);
+        assert!(work.join("target/debug/deps/a.o").exists() && work.join("src/cache/x").exists(), "the workspace keeps its caches");
+        assert_eq!(std::fs::read_to_string(outside.join("keep")).unwrap(), "outside");
+        assert!(!root.join("checkpoints/.tmp-cp-0001").exists());
+
+        // A rollback gives the workspace without its caches.
+        restore(&work, &cp).unwrap();
+        assert!(work.join("src/lib.rs").exists() && !work.join("target/debug").exists());
+        remove_tree(&root).unwrap();
+    }
 }

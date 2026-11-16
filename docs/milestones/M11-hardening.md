@@ -5,7 +5,7 @@
 | Weeks in the plan | v1.0 (D-114); no week plan |
 | Started / finished | 2026-11-16 / in progress |
 | Commits | `8628ac0` (scope) … (tag `m11` only after a green CI run, D-113) |
-| Status | In progress: A1 and A2 built; A3 not started |
+| Status | Built on `nix` (A1, A2, A3); waiting for a green CI run on `fhs` before the tag |
 
 Write this document for a reader who is new to Rust and Linux internals. Plain words first, the real term next to it. Fill it in while working.
 
@@ -23,7 +23,7 @@ Before the first item, CI on `main` was red: the TOCTOU race test's own check th
 | A1: namespaces, mounts, `bpf`, `ptrace`, `io_uring`, `perf_event_open`, key rings refused inside the sandbox | On `nix` yes; `fhs` not yet verified | `seccomp_refuses_namespaces_mounts_and_kernel_interfaces`: fails before the change (`unshare-user OK`, `unshare-mount OK`, `ptrace OK`), passes after |
 | A1: real test commands still work | On `nix` yes | Experiment `m11-seccomp`; `agentos run` with the second trial's Rust and npm policies gives the trial's results; `make test` 133 passed |
 | A2: a command cannot take the workspace past `limits.workspace_mb` and leave it there | On `nix` yes; `fhs` not yet verified | `tests/hardening.rs`: `a_command_that_fills_the_workspace_is_stopped_and_undone`, `one_file_cannot_grow_past_the_limit`, `fs_write_past_the_limit_writes_nothing`, `a_repository_larger_than_the_limit_is_refused_at_the_start`; all four fail with the limit switched off by hand. It is a measured limit, not a hard cap (D-117) |
-| A3: scratch folders out of checkpoints | Not started | |
+| A3: no checkpoint holds a scratch path; the workspace keeps them | On `nix` yes; `fhs` not yet verified | `a_cache_is_scratch_and_an_example_env_file_is_not_a_secret` (fails with the change switched off); unit test in `src/checkpoint.rs`; the Rust trial session: 86 MB before, 21 MB after |
 | Both presets pass | `nix` yes; `fhs` not yet verified | needs a push and a CI run |
 
 ## 3. What you need to know first
@@ -40,6 +40,7 @@ Before the first item, CI on `main` was red: the TOCTOU race test's own check th
 
 | Experiment | What it tried | What happened | What it taught |
 |---|---|---|---|
+| `experiments/m11-scratch-checkpoints/` | Three ways to checkpoint a 14 MB workspace that is all build folder: as today, copy then delete, move aside then copy | 14 MB per checkpoint as today, 1 MB with either; move-aside is faster without shared blocks | Both fix the size; copy-then-delete was chosen because it never touches the workspace (D-118) |
 | `experiments/m11-disk-limit/` | Timed a size walk; raced a 2.3 GB/s writer against a watcher; tried `RLIMIT_FSIZE` | Walk: 2 µs per entry. Overshoot 20 to 40 MB at 20 to 100 ms. `RLIMIT_FSIZE` stops one file exactly | Measuring is cheap enough; the overshoot is speed × interval and must be stated; the per-file cap is worth adding |
 | `experiments/m11-seccomp/` | The planned filter, by hand with `libc`, run on its own and in front of cargo, node, pytest, Python's threads, subprocess and multiprocessing, a shell pipe | Refused calls give `EPERM`, `clone3` `ENOSYS`; every toolchain gives the same results as without the filter | A deny list breaks none of the trial projects; `clone3` must say `ENOSYS`; no new crate is needed |
 
@@ -51,6 +52,8 @@ Before the first item, CI on `main` was red: the TOCTOU race test's own check th
 |---|---|
 | `src/sandbox/seccomp.rs` | The list of refused calls, the BPF program, `install()`, two unit tests |
 | `src/sandbox/ns.rs` | `init` (the sandbox's PID 1) installs the filter right after Landlock |
+| `src/checkpoint.rs` | `create` takes a scratch test; `drop_scratch` empties scratch paths from the temporary copy; a unit test |
+| `src/recovery.rs` | Loads the saved policy when it must take a checkpoint itself |
 | `src/policy.rs` | `limits.workspace_mb` (optional, default 2048) |
 | `src/sandbox/mod.rs` | `disk_usage`, `DiskLimit`, `Stopped`; the watchdog thread now also measures |
 | `src/gateway.rs` | A command over the limit is rolled back and FAILED; `write_fits` for `fs.write` |
@@ -113,12 +116,15 @@ Starting a process or a thread uses `clone` or `clone3`, and both can also ask f
 
 **`Gateway::run_exec`** measures once more after the command ends, because it may have ended between two looks. Over the limit either way: restore the last checkpoint, fail the call. That keeps the rule that FAILED means "nothing changed".
 
+**`checkpoint::drop_scratch`.** After `cp -a` has filled `.tmp-cp-000N`, the copy is scanned (the same `scan` the revert uses; it never follows a symlink) and every path the policy calls scratch is deleted from it. The scan is sorted, so a folder comes before its contents; once a folder is deleted its contents are skipped. Only then is the copy renamed to its real name. Because all of this happens on the copy, a kill at any moment leaves what it always left: a `.tmp-` folder that recovery deletes.
+
 ## 7. Decisions made
 
 | Entry | Decision | Discarded alternatives |
 |---|---|---|
 | D-114 | The v1.0 scope: eleven items, milestones M11 to M14 | A smaller list; hardening and release only |
 | D-115 | The TOCTOU test repeats the run (up to five) and adds the counts; bars unchanged | Lowering the bar; spinning instead of sleeping; rerunning CI |
+| D-118 | Scratch paths deleted from the checkpoint copy before it is renamed into place | Moving caches aside; a Rust copier; mounting; carrying caches across a rollback |
 | D-117 | `limits.workspace_mb`: measured every 50 ms, `RLIMIT_FSIZE` per file, the command undone when over | tmpfs, quotas, loop image (ADR 0010); checking only at the end; counting checkpoints |
 | D-116 | seccomp as a hand-written deny list in C after Landlock; `EPERM`, `ENOSYS` for `clone3` | Allow list; a seccomp crate; killing; a policy switch; installing in G |
 
@@ -133,7 +139,7 @@ Starting a process or a thread uses `clone` or `clone3`, and both can also ask f
 ## 9. How to run it
 
 ```sh
-nix develop -c make test                     # 137 passed on nix
+nix develop -c make test                     # 138 passed on nix
 systemd-run --user --scope -p Delegate=yes cargo test --test security seccomp -- --nocapture
 cd experiments/m11-seccomp && nix develop ../.. -c cargo build --offline && target/debug/m11-seccomp selftest
 ```
@@ -142,8 +148,21 @@ cd experiments/m11-seccomp && nix develop ../.. -c cargo build --offline && targ
 
 - The filter is a deny list. Every call not on it is allowed, which is more kernel surface than an allow list leaves.
 - The disk limit is measured: a fast writer passes it by about speed × 50 ms before it is stopped. It bounds the workspace, not the execution: checkpoints add up and are never pruned.
+- After a rollback the caches are gone; the next build starts cold. Without shared blocks (ext4) the cache is still copied once per checkpoint before being deleted, which costs time, not space.
+- Checkpoints are still never pruned.
 - Only x86_64 has been built and run; the aarch64 numbers come from `libc` and are untested.
 
 ## 11. Check your understanding
 
-(Filled in when the milestone is finished.)
+1. What is a system call, and why can a seccomp filter see `clone`'s flags but not `clone3`'s?
+2. Why does the filter answer `clone3` with `ENOSYS` and not `EPERM`?
+3. What is the difference between a deny list and an allow list, and what does AgentOS give up by using a deny list?
+4. Why must the filter check the architecture first?
+5. Why is the seccomp filter installed after Landlock, and why in the sandbox's init and not in the command?
+6. The seccomp test asks for `EPERM` exactly. What would be wrong with "the call raised an error"?
+7. Why can a folder's size not be capped without root in a way that survives `kill -9`? (ADR 0010)
+8. How far past `workspace_mb` can a command get, and what decides it?
+9. What does `RLIMIT_FSIZE` cap, and what does it not?
+10. Why is a command that went over the limit undone and not just stopped?
+11. Why are scratch paths deleted from the copy and not moved out of the workspace first?
+12. The TOCTOU test failed on CI with nothing wrong in the runtime. What was wrong, and why was lowering the bar not the fix?

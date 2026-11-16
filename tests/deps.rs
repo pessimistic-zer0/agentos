@@ -317,9 +317,18 @@ fn a_cache_is_scratch_and_an_example_env_file_is_not_a_secret() {
     assert!(!work.join(".env").exists());
     // Scratch is for commands. The agent's own fs.write still needs a write glob.
     assert_eq!(denied(6).as_deref(), Some("\"no matching rule\""));
-    // A cache change alone is not a change: the workspace still matches its checkpoint.
+    // The cache stays in the workspace for the next command, and is in no
+    // checkpoint (D-118; before that, every checkpoint held a copy of it).
+    // Everything else in the workspace still matches its last checkpoint.
+    let below_cache = |line: &String| line.split(' ').nth(1).is_some_and(|rel| rel.starts_with(".pytest_cache/"));
+    assert!(tree_digest(&work).iter().any(below_cache), "the cache has files in the workspace");
+    for cp in std::fs::read_dir(t.exec_dir(&id).join("checkpoints")).unwrap() {
+        let cp = cp.unwrap().path();
+        assert!(!tree_digest(&cp).iter().any(below_cache), "{} holds cache files", cp.display());
+    }
     let last = t.exec_dir(&id).join("checkpoints/cp-0003");
-    assert_eq!(tree_digest(&work), tree_digest(&last));
+    let without_cache = |dir: &Path| tree_digest(dir).into_iter().filter(|l| !below_cache(l) && !l.starts_with("D .pytest_cache ")).collect::<Vec<_>>();
+    assert_eq!(without_cache(&work), without_cache(&last));
 }
 
 #[test]
