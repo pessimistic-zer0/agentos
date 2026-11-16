@@ -24,7 +24,7 @@ The end result of a run is a **patch** (a file listing the changes). Your origin
 
 In one line: *AgentOS runs a coding agent's tool calls inside a rootless Linux sandbox and survives `kill -9` without losing track of what happened.*
 
-It is a **learning and portfolio project**, not a product. It deliberately does one thing: one agent, one copy of one repository, four tools, and a command line.
+It is a **learning and portfolio project**, not a product. It deliberately does one thing: one agent, one copy of one repository, five tools, and a command line.
 
 ---
 
@@ -88,13 +88,14 @@ What happens for one tool call:
         the sandbox sees work/ and nothing else of the execution folder
 ```
 
-The four tools the agent can ask for:
+The tools the agent can ask for (four in v0.1; `fs.edit` was added for v1.0, D-120):
 
 | Tool | What it does | Changes anything? |
 |---|---|---|
 | `fs.read` | Read one file from the workspace | No |
 | `fs.list` | List a folder in the workspace | No |
 | `fs.write` | Write one file in the workspace | Yes |
+| `fs.edit` | Replace one piece of text in an existing file; the text must occur exactly once | Yes |
 | `exec` | Run an allowed command (for example `pytest`) in the sandbox | Yes, anything inside `/work` |
 
 ---

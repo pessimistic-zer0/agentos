@@ -959,3 +959,165 @@ fn external_calls_hold_under_kills_and_timeouts() {
     // Each cell must really have produced its situation, or it proves nothing.
     assert!(not_as_intended.is_empty(), "cells that mostly did not go as intended: {not_as_intended:?}");
 }
+
+// ---------------------------------------------------------------------------
+// fs.edit (D-120): an edit is a write whose content the runtime works out, so
+// a kill must leave it either not done or wholly done, never in between, and
+// a resumed run must apply it exactly once.
+// ---------------------------------------------------------------------------
+
+fn edit_file(mark: &str) -> String {
+    // ~400 KB with one marked line in the middle, so the temp-file write
+    // takes long enough for a kill to land in it.
+    let filler = "a line of text for the fs.edit fault-injection workload\n".repeat(4000);
+    format!("{filler}value = {mark}\n{filler}")
+}
+
+/// Kill the run at `point` while it handles the first edit (call 2), recover,
+/// resume. Returns (killed, violations).
+fn run_edit_trial(point: &'static str, n: usize, seed: u64) -> (bool, Vec<String>) {
+    let mut rng = Rng::new(seed);
+    let mut v = Vec::new();
+    let t = TestEnv::new(&format!("rec-edit-{point}-{n}")).with_policy_text(&policy_text());
+    let repo = t.root.join("repo");
+    make_repo(&repo);
+    std::fs::write(repo.join("src/a.txt"), edit_file("OLD")).unwrap();
+    // The second edit only fits if the first was applied exactly once.
+    let script = t.write_script(
+        "edit.toml",
+        "task = \"edit workload\"\n[[step]]\ntool = \"fs.read\"\npath = \"src/small.txt\"\n\
+         [[step]]\ntool = \"fs.edit\"\npath = \"src/a.txt\"\nold_str = \"value = OLD\\n\"\nnew_str = \"value = MID\\nextra = 1\\n\"\n\
+         [[step]]\ntool = \"fs.edit\"\npath = \"src/a.txt\"\nold_str = \"value = MID\"\nnew_str = \"value = NEW\"\n",
+    );
+    let (old, mid, new) = (content_hash(edit_file("OLD").as_bytes()), content_hash(edit_file("MID\nextra = 1").as_bytes()), content_hash(edit_file("NEW\nextra = 1").as_bytes()));
+    let first_point = if point == "P8" { ["P2", "P3", "P4", "P5", "P6"][rng.below(5) as usize] } else { point };
+    let status = t
+        .cmd(&["run", "--quiet", "--repo", repo.to_str().unwrap(), "--policy", t.policy.to_str().unwrap(), "--script", script.to_str().unwrap()])
+        .env("AGENTOS_CRASH_AT", first_point)
+        .env("AGENTOS_CRASH_CALL", "2")
+        .env("AGENTOS_CRASH_DELAY_US", "4000")
+        .output()
+        .unwrap();
+    let crashed = status.status.signal() == Some(9);
+    if !crashed && !status.status.success() {
+        return (false, vec![format!("run failed without being killed: {}", String::from_utf8_lossy(&status.stderr))]);
+    }
+    let id = std::fs::read_dir(t.state.join("executions")).unwrap().next().unwrap().unwrap().file_name().to_string_lossy().into_owned();
+    let dir = t.exec_dir(&id);
+    let work = dir.join("work");
+    let file = work.join("src/a.txt");
+
+    // What the kill left, read from the file itself.
+    let before = events_of(&t, &id);
+    let (_, all_open) = pending(&before);
+    let at_crash = file_hash(&file);
+    if at_crash.as_deref() != Some(old.as_str()) && at_crash.as_deref() != Some(mid.as_str()) && at_crash.as_deref() != Some(new.as_str()) {
+        v.push("after the kill the file is neither the old nor the edited text".into());
+    }
+    let expect_applied = all_open.contains(&2).then(|| intent_of(&before, 2).is_some() && at_crash.as_deref() == Some(mid.as_str()));
+
+    if point == "P8" {
+        let _ = t.cmd(&["recover", "--quiet", &id]).env("AGENTOS_CRASH_AT", "P8").env("AGENTOS_CRASH_HIT", (1 + rng.below(5)).to_string()).output().unwrap();
+    }
+    let st = t.output(&["recover", "--quiet", &id]);
+    if !st.status.success() {
+        v.push(format!("recover failed: {}", String::from_utf8_lossy(&st.stderr)));
+        return (crashed, v);
+    }
+    let after = events_of(&t, &id);
+    let settled = |events: &[Value], when: &str, v: &mut Vec<String>| {
+        let named = named_checkpoints(events);
+        if tree_digest(&work) != tree_digest(&dir.join("checkpoints").join(named.last().unwrap())) {
+            v.push(format!("{when}: workspace differs from the last checkpoint"));
+        }
+        let mut on_disk: Vec<String> = std::fs::read_dir(dir.join("checkpoints")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        on_disk.sort();
+        let mut want = named.clone();
+        want.sort();
+        if on_disk != want || dir.join("work.restore-tmp").exists() {
+            v.push(format!("{when}: leftovers (checkpoints on disk {on_disk:?}, named {want:?})"));
+        }
+        if std::fs::read_dir(work.join("src")).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().starts_with(".agentos-tmp-")) {
+            v.push(format!("{when}: a temporary file was left in the workspace"));
+        }
+    };
+    settled(&after, "after recovery", &mut v);
+    if let Some(want) = expect_applied {
+        let got = after.iter().find(|e| e["type"] == "tool.reconciled" && e["call_id"] == 2).map(|e| e["applied"] == true);
+        if got != Some(want) {
+            v.push(format!("edit: the file says applied={want}, recovery said {got:?}"));
+        }
+        let now = file_hash(&file);
+        if now.as_deref() != Some(if want { mid.as_str() } else { old.as_str() }) {
+            v.push("after recovery the file does not match what recovery decided".into());
+        }
+    }
+
+    let st = t.output(&["run", "--quiet", "--resume", &id]);
+    if !st.status.success() {
+        v.push(format!("resume failed: {}", String::from_utf8_lossy(&st.stderr)));
+        return (crashed, v);
+    }
+    let end = events_of(&t, &id);
+    settled(&end, "after resume", &mut v);
+    if !end.iter().any(|e| e["type"] == "execution.finished" && e["status"] == "completed") {
+        v.push("resumed run did not complete".into());
+    }
+    if file_hash(&file).as_deref() != Some(new.as_str()) {
+        v.push("final: the file is not what an uninterrupted run leaves (an edit was lost or made twice)".into());
+    }
+    if end.iter().any(|e| e["type"] == "tool.failed") {
+        v.push("final: an edit failed (the second edit did not find its text)".into());
+    }
+    if v.is_empty() {
+        let _ = std::fs::remove_dir_all(&t.root);
+    }
+    (crashed, v)
+}
+
+/// (crash point, run number, was killed, violations)
+type EditTrial = (&'static str, usize, bool, Vec<String>);
+
+#[test]
+fn an_edit_is_recovered_like_a_write() {
+    let runs: usize = std::env::var("AGENTOS_RECOVERY_RUNS").ok().and_then(|v| v.parse().ok()).unwrap_or(3);
+    let workers: usize = std::env::var("AGENTOS_RECOVERY_JOBS").ok().and_then(|v| v.parse().ok()).unwrap_or(8);
+    let points = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8"];
+    let jobs: Vec<(&'static str, usize)> = points.iter().flat_map(|p| (0..runs).map(move |n| (*p, n))).collect();
+    let seed0 = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() as u64;
+    let next = AtomicUsize::new(0);
+    let results: Mutex<Vec<EditTrial>> = Mutex::new(Vec::new());
+    let started = Instant::now();
+    std::thread::scope(|s| {
+        for _ in 0..workers {
+            s.spawn(|| loop {
+                let i = next.fetch_add(1, Ordering::SeqCst);
+                let Some((point, n)) = jobs.get(i) else { break };
+                let (crashed, v) = run_edit_trial(point, *n, seed0.wrapping_add(i as u64 * 7919));
+                results.lock().unwrap().push((point, *n, crashed, v));
+            });
+        }
+    });
+    let results = results.into_inner().unwrap();
+    println!("\n| point | tool | runs | killed | violations |");
+    println!("|---|---|---|---|---|");
+    let (mut total_viol, mut total_killed) = (0, 0);
+    for p in points {
+        let rs: Vec<_> = results.iter().filter(|r| r.0 == p).collect();
+        let killed = rs.iter().filter(|r| r.2).count();
+        let viol: usize = rs.iter().map(|r| r.3.len()).sum();
+        println!("| {p} | fs.edit | {} | {killed} | {viol} |", rs.len());
+        total_viol += viol;
+        total_killed += killed;
+        // P3 kills at a random moment in the effect and can come too late;
+        // every other point is a fixed place and must always kill.
+        if p != "P3" {
+            assert_eq!(killed, rs.len(), "{p}: every run must be killed, or the cell proves nothing");
+        }
+    }
+    println!("fs.edit total: {} runs, {total_killed} killed, {total_viol} violations; harness took {:.0} s with {workers} workers", results.len(), started.elapsed().as_secs_f64());
+    for r in results.iter().filter(|r| !r.3.is_empty()).take(20) {
+        println!("VIOLATION {} #{}: {:?}", r.0, r.1, r.3);
+    }
+    assert_eq!(total_viol, 0, "violations");
+}

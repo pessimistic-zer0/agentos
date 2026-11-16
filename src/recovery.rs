@@ -155,7 +155,8 @@ fn reconcile(dir: &ExecDir, c: &CallRecord, last: &str, named: &[String]) -> Res
         LoggedCall::FsRead { .. } | LoggedCall::FsList { .. } => Ok(not_applied("read-only call; nothing to undo")),
         LoggedCall::Exec { .. } => rollback("a command's effects cannot be known after a crash"),
         LoggedCall::ExtCall { service, payload_hash, .. } => reconcile_external(dir, c.call_id, service, payload_hash, plan),
-        LoggedCall::FsWrite { .. } => {
+        // An edit's intent is a write's intent (D-120): same fields, same check.
+        LoggedCall::FsWrite { .. } | LoggedCall::FsEdit { .. } => {
             let field = |k: &str| plan.get(k).and_then(Value::as_str).map(str::to_string);
             let path = field("path").context("fs.write intent has no path")?;
             let new_hash = field("new_hash").context("fs.write intent has no new_hash")?;

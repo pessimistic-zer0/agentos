@@ -255,12 +255,18 @@ pub fn open_for_write(work: &Path, path: &str) -> Result<OpenedParent, ToolError
 /// A symlink or any other non-regular file there is refused: replacing it
 /// would make reconciliation ambiguous, and following it is never wanted.
 pub fn current_hash(t: &WriteTarget) -> Result<Option<String>, ToolError> {
+    Ok(current_bytes(t)?.map(|bytes| content_hash(&bytes)))
+}
+
+/// The bytes of the file at the target now, or `None` if there is none.
+/// Refuses a symlink or any other non-regular file, as `current_hash` says.
+pub fn current_bytes(t: &WriteTarget) -> Result<Option<Vec<u8>>, ToolError> {
     if !t.missing.is_empty() {
         return Ok(None); // its folder does not exist yet, so neither does the file
     }
     match openat(&t.parent, t.name.as_str(), OFlag::O_RDONLY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC | OFlag::O_NONBLOCK, Mode::empty()) {
         Err(Errno::ENOENT) => Ok(None),
-        Err(Errno::ELOOP) => Err(ToolError::new(format!("`{}` is a symlink; fs.write only replaces regular files", t.rel))),
+        Err(Errno::ELOOP) => Err(ToolError::new(format!("`{}` is a symlink; fs.write and fs.edit only replace regular files", t.rel))),
         Err(e) => Err(errno(&t.rel, e)),
         Ok(fd) => {
             let st = fstat(&fd).map_err(|e| errno(&t.rel, e))?;
@@ -269,9 +275,48 @@ pub fn current_hash(t: &WriteTarget) -> Result<Option<String>, ToolError> {
             }
             let mut bytes = Vec::new();
             File::from(fd).read_to_end(&mut bytes).map_err(|e| io(&t.rel, e))?;
-            Ok(Some(content_hash(&bytes)))
+            Ok(Some(bytes))
         }
     }
+}
+
+/// The text of `fs.edit` (D-120): `content` with its one occurrence of
+/// `old_str` replaced by `new_str`, and the line (from 1) where it began.
+///
+/// "Exactly once" also counts occurrences that overlap (`aa` is in `aaa`
+/// twice): if the model's text fits in two places, the edit is ambiguous
+/// and nothing is changed. The messages say what to do next, because the
+/// reader is a model.
+pub fn edited(content: &str, old_str: &str, new_str: &str, rel: &str) -> Result<(String, u64), ToolError> {
+    if old_str.is_empty() {
+        return Err(ToolError::new("old_str is empty; give the exact text to replace (to make a new file use fs.write)".to_string()));
+    }
+    if old_str == new_str {
+        return Err(ToolError::new("old_str and new_str are the same; nothing would change".to_string()));
+    }
+    let Some(at) = content.find(old_str) else {
+        return Err(ToolError::new(format!(
+            "old_str was not found in `{rel}`. It must match the file exactly, including spaces, tabs and line breaks. \
+             Read the file again with fs.read and copy the text from there. Nothing was changed."
+        )));
+    };
+    // A second occurrence may begin anywhere after the first one begins.
+    let next = at + old_str.chars().next().map_or(1, char::len_utf8);
+    if let Some(more) = content[next..].find(old_str) {
+        let line = |pos: usize| content[..pos].matches('\n').count() + 1;
+        return Err(ToolError::new(format!(
+            "old_str occurs more than once in `{rel}` (at line {} and at line {}). \
+             Add more of the surrounding lines to old_str so that it matches one place only. Nothing was changed.",
+            line(at),
+            line(next + more)
+        )));
+    }
+    let line = content[..at].matches('\n').count() as u64 + 1;
+    let mut out = String::with_capacity(content.len() - old_str.len() + new_str.len());
+    out.push_str(&content[..at]);
+    out.push_str(new_str);
+    out.push_str(&content[at + old_str.len()..]);
+    Ok((out, line))
 }
 
 /// Temporary file name used while writing `call_id`'s new content.
@@ -365,4 +410,34 @@ fn errno(rel: &str, e: Errno) -> ToolError {
 
 fn io(rel: &str, e: std::io::Error) -> ToolError {
     ToolError::new(format!("`{}`: {e}", show(rel)))
+}
+
+#[cfg(test)]
+mod edit_tests {
+    use super::edited;
+
+    #[test]
+    fn replaces_the_one_occurrence_and_reports_its_line() {
+        let (out, line) = edited("a\nb = 1\nc\n", "b = 1", "b = 2", "f").unwrap();
+        assert_eq!((out.as_str(), line), ("a\nb = 2\nc\n", 2));
+        // At the very start and the very end, and with text of another length.
+        assert_eq!(edited("abc", "a", "xyz", "f").unwrap(), ("xyzbc".to_string(), 1));
+        assert_eq!(edited("a\nb", "b", "", "f").unwrap(), ("a\n".to_string(), 2));
+        // Non-ASCII text: positions are bytes, cut only at character borders.
+        assert_eq!(edited("é = 1\nü = 2\n", "ü = 2", "ü = 3 ✓", "f").unwrap(), ("é = 1\nü = 3 ✓\n".to_string(), 2));
+    }
+
+    #[test]
+    fn refuses_when_the_text_fits_no_place_or_more_than_one() {
+        let msg = |r: Result<(String, u64), crate::tools::ToolError>| r.unwrap_err().0;
+        assert!(msg(edited("abc", "x", "y", "f")).contains("was not found in `f`"));
+        assert!(msg(edited("x\ny\nx\n", "x", "z", "f")).contains("at line 1 and at line 3"));
+        // Overlapping occurrences count: `aa` fits `aaa` in two places.
+        assert!(msg(edited("aaa", "aa", "b", "f")).contains("more than once"));
+        assert!(msg(edited("ééé", "éé", "b", "f")).contains("more than once"));
+        assert!(msg(edited("abc", "", "y", "f")).contains("empty"));
+        assert!(msg(edited("abc", "b", "b", "f")).contains("the same"));
+        // Whitespace is part of the match: a tab is not four spaces.
+        assert!(msg(edited("\tx = 1\n", "    x = 1", "y", "f")).contains("was not found"));
+    }
 }

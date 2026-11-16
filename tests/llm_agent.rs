@@ -361,3 +361,48 @@ fn a_wrong_key_is_an_error_that_names_the_settings() {
     assert!(!err.contains("KEY-CANARY-123"), "the key was printed");
     assert_eq!(seen.lock().unwrap().len(), 1, "no second try with a key that is wrong");
 }
+
+// ---------------------------------------------------------------------------
+// fs_edit (D-120): the model changes one line without sending the file.
+// ---------------------------------------------------------------------------
+
+/// Reads the file, sends an edit whose text is not in the file (a common
+/// slip: wrong indentation), is told so, sends the right one, runs the tests.
+fn fixes_with_an_edit(messages: &[Value]) -> Value {
+    let results: Vec<&Value> = messages.iter().filter(|m| m["role"] == "tool").collect();
+    let n = results.len();
+    let edit = |old: &str| tool_call(n + 1, "fs_edit", json!({"path": "src/stats.py", "old_str": old, "new_str": "    return sum(values) / len(values)"}));
+    match n {
+        0 => tool_call(1, "fs_read", json!({"path": "src/stats.py"})),
+        1 => edit("return sum(values) / (len(values) - 1)  "),
+        2 if results[1]["content"].as_str().unwrap().contains("was not found") => edit("    return sum(values) / (len(values) - 1)"),
+        3 => tool_call(4, "exec", json!({"argv": ["pytest", "-q"]})),
+        4 => json!({"role": "assistant", "content": "Fixed mean() with a one-line edit. The tests pass."}),
+        _ => json!({"role": "assistant", "content": "unexpected"}),
+    }
+}
+
+#[test]
+fn a_model_fixes_the_demo_with_one_edit_and_is_told_when_its_text_is_not_found() {
+    let t = TestEnv::new("llm-edit");
+    let (url, seen) = start_mock_with(fixes_with_an_edit);
+    let out = run_llm(&t, &url, &[]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let id = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    let events = t.events(&id);
+    assert!(events.iter().any(|e| e["type"] == "execution.finished" && e["status"] == "completed"), "{events:#?}");
+    assert_eq!(exec_exit_codes(&t, &events), vec![Some(0)]);
+    // The model is offered the tool and told when to use it.
+    let first = &seen.lock().unwrap()[0];
+    let names: Vec<&str> = first["tools"].as_array().unwrap().iter().map(|t| t["function"]["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["fs_list", "fs_read", "fs_edit", "fs_write", "exec"]);
+    assert!(first["messages"][0]["content"].as_str().unwrap().contains("use fs_edit"));
+    // What it was told after each edit.
+    let told: Vec<&str> = events.iter().filter(|e| e["type"] == "agent.message" && e["message"]["role"] == "tool").map(|e| e["message"]["content"].as_str().unwrap()).collect();
+    assert!(told[1].starts_with("FAILED: old_str was not found"), "{}", told[1]);
+    assert!(told[2].starts_with("OK: replaced the text that began at line 8"), "{}", told[2]);
+    // The file differs from the original in that one line only, and the
+    // model's requests held 2 short strings, not the file.
+    let now = std::fs::read_to_string(t.exec_dir(&id).join("work/src/stats.py")).unwrap();
+    assert_eq!(now, FIXED);
+}

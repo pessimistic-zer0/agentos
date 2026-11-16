@@ -125,6 +125,8 @@ Run everything inside the dev shell (`flake.nix`): `nix develop -c <command>`, o
 - Demo: `nix develop -c make demo` (the fix, then a deliberate kill, recover and resume). By hand: `systemd-run --user --scope -p Delegate=yes cargo run -- run --repo examples/demo-repo --policy policies/nix.toml --agent scripted --script examples/scripts/fix-demo.toml`, then `cargo run -- trace`.
 - M0 practice program: `cd experiments/m0-ramp && cargo test`. Other experiments: see each `experiments/*/NOTES.md`.
 - Bonus tool by hand: `cargo run --example fake_service` (port 8099; `FAKE_SERVICE_FAULTS='order-1=drop_after'` loses an answer), add the `[external]` section it prints to a copy of a policy, and use a script step `tool = "ext.call"`. Tests: `tests/external.rs`; the external fault cells are the second test in `tests/recovery/main.rs` (report: `target/recovery-ext-report.json`).
+- `fs.edit` (D-120): `tests/edit.rs`; its kill cells are the test `an_edit_is_recovered_like_a_write` in `tests/recovery/main.rs`.
+- The disk limit `limits.workspace_mb` (D-117): the last four tests of `tests/hardening.rs`.
 - Hostile leftovers and folder-making writes: `tests/hardening.rs` (part of `make test`; alone: `systemd-run --user --scope -p Delegate=yes cargo test --test hardening`).
 - Packages from outside the repo (a mounted virtualenv, `[sandbox.env]`): `tests/deps.rs`. First messages, the patch's notes, the startup probe: `tests/hardening.rs`.
 - Ubuntu without the system-wide sysctl: `packaging/apparmor/agentos` (install steps in its header and in the README); CI job `fhs-apparmor`.
@@ -154,6 +156,8 @@ M9 (tag `m9` locally; `docs/milestones/M9-conveniences.md`), 2026-11-15: ten of 
 After M10, 2026-11-15, no new tag yet: the model server's answers are sorted into wait, error and tell-the-model (D-111; verified on `fhs` by CI run 43733350171 on `2a6a3d1`, D-113), and helper programs for commands (`exec.helpers`, D-112), found in a trial on a Node and a Rust project (`docs/results/second-stack-trial-nix.md`; the two projects are in `~/Temp/AgentOS_temp/`). On `nix`: `make test` 130 passed. D-112 is verified on `fhs` by CI run 43844369387 (D-119). `main`, and the tags up to `m10`, are on GitHub, pushed by Prince.
 
 Next: v1.0 (D-114), milestones M11 to M14. M11 (`docs/milestones/M11-hardening.md`) is built on `nix`, `make test` 138 passed: the TOCTOU test repeats its race until it happened often enough (D-115, after CI run 43742105191 failed on 925 swaps); the seccomp filter (D-116); the measured disk limit `limits.workspace_mb` (D-117); scratch paths left out of checkpoints (D-118). On `fhs`: D-112, D-115 and D-116 are verified by CI run 43844369387 on `caeb948` (D-119), both jobs green. D-117 and D-118 are **not yet verified on `fhs`**; no tag `m11` until they are (D-113). Commit `048e7e5` has four failing tests, fixed in `b340a51`.
+
+M12 (`docs/milestones/M12-real-projects.md`) is started: `fs.edit` is built (D-120), `make test` 146 passed on `nix`, not yet verified on `fhs`. With it the local 4B model solved the two-module ticket it had failed three times (`docs/results/real-repo-trial-nix.md`, last part). Left in M12: a read-only folder inside the workspace, binary files and file modes through the file tools.
 
 Open, and only Prince can close them:
 

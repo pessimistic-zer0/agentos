@@ -93,16 +93,18 @@ impl LlmConfig {
 }
 
 const SYSTEM_PROMPT: &str = "You are a coding agent working on a copy of a code repository. \
-You can only act through the tools: fs_list, fs_read, fs_write and exec. Paths are relative to the repository root.\n\
+You can only act through the tools: fs_list, fs_read, fs_edit, fs_write and exec. Paths are relative to the repository root.\n\
 Rules:\n\
 1. Call exactly one tool per reply, and keep any text short.\n\
-2. fs_write REPLACES THE WHOLE FILE. The content you send becomes the entire file. To change one line, \
-first fs_read the file, then send back every line of it, unchanged, except the line you are fixing. \
-Never send only the changed function: every other function in the file would be deleted.\n\
-3. exec runs one allowed command as a list of arguments (no shell). The policy decides which commands are allowed; \
+2. To change an existing file, use fs_edit: first fs_read the file, then give old_str (the exact text to replace, \
+copied from the file, with enough of the lines around it that it occurs only once) and new_str (what to put there). \
+The rest of the file stays as it is.\n\
+3. fs_write is for a NEW file. It REPLACES THE WHOLE FILE: the content you send becomes the entire file. \
+Never fs_write only the changed function of an existing file: every other function in it would be deleted.\n\
+4. exec runs one allowed command as a list of arguments (no shell). The policy decides which commands are allowed; \
 a refusal names the rule.\n\
-4. After a change, run the tests. If they fail, read the error, fs_read the file you changed to see what it really contains now, and fix it.\n\
-5. When the tests pass, reply with one or two sentences in plain text and no tool call. Do not stop before the tests pass.";
+5. After a change, run the tests. If they fail, read the error, fs_read the file you changed to see what it really contains now, and fix it.\n\
+6. When the tests pass, reply with one or two sentences in plain text and no tool call. Do not stop before the tests pass.";
 
 /// Upper bound on one reply from the model.
 const MAX_REPLY_TOKENS: u32 = 4096;
@@ -263,7 +265,7 @@ impl LlmAgent {
     /// Count a call. A write changes the workspace, so earlier reads may
     /// rightly be repeated after it: the counts start again.
     fn note_call(&mut self, call: &ToolCall) {
-        if matches!(call, ToolCall::FsWrite { .. }) {
+        if matches!(call, ToolCall::FsWrite { .. } | ToolCall::FsEdit { .. }) {
             self.repeats.clear();
             self.last_key = None;
             return;
@@ -284,6 +286,14 @@ impl LlmAgent {
         match (self.last_call.take()?, &result.output) {
             (ToolCall::FsRead { path, .. }, Some(ToolOutput::Read { content, .. })) => {
                 self.seen.insert(path, content.clone());
+                None
+            }
+            // Keep the remembered text in step with the file, so a later
+            // fs_write of it is compared with what is really there.
+            (ToolCall::FsEdit { path, old_str, new_str }, _) => {
+                if let Some(text) = self.seen.get_mut(&path) {
+                    *text = text.replacen(&old_str, &new_str, 1);
+                }
                 None
             }
             (ToolCall::FsWrite { path, content }, _) => {
@@ -486,6 +496,10 @@ fn tool_schemas() -> Value {
           json!({"path": path,
                  "start_line": {"type": "integer", "description": "Optional. First line to return, counting from 1"},
                  "max_lines": {"type": "integer", "description": "Optional. How many lines to return"}}), &["path"]),
+        f("fs_edit", "Change part of an existing text file: replace old_str with new_str. old_str must be in the file exactly once, character for character. Use this, not fs_write, to change a file that exists.",
+          json!({"path": path,
+                 "old_str": {"type": "string", "description": "The exact text to replace, copied from the file; include enough surrounding lines that it occurs only once"},
+                 "new_str": {"type": "string", "description": "The text that takes its place"}}), &["path", "old_str", "new_str"]),
         f("fs_write", "Replace a file with new content (the whole file). A new file may be in a folder that does not exist yet; the folder is made.",
           json!({"path": path, "content": {"type": "string", "description": "The complete new content of the file"}}), &["path", "content"]),
         f("exec", "Run an allowed command, given as a list of arguments (no shell). Example: [\"pytest\", \"-q\"].",
@@ -498,6 +512,8 @@ fn parse_call(name: &str, args: &str) -> Result<ToolCall> {
     struct Args {
         path: Option<String>,
         content: Option<String>,
+        old_str: Option<String>,
+        new_str: Option<String>,
         argv: Option<Vec<String>>,
         start_line: Option<u64>,
         max_lines: Option<u64>,
@@ -508,8 +524,13 @@ fn parse_call(name: &str, args: &str) -> Result<ToolCall> {
         "fs_list" => ToolCall::FsList { path: path()? },
         "fs_read" => ToolCall::FsRead { path: path()?, start_line: a.start_line, max_lines: a.max_lines },
         "fs_write" => ToolCall::FsWrite { path: path()?, content: a.content.clone().context("missing `content`")? },
+        "fs_edit" => ToolCall::FsEdit {
+            path: path()?,
+            old_str: a.old_str.clone().context("missing `old_str`")?,
+            new_str: a.new_str.clone().context("missing `new_str`")?,
+        },
         "exec" => ToolCall::Exec { argv: a.argv.clone().context("missing `argv`")? },
-        other => bail!("unknown tool `{other}`; the tools are fs_list, fs_read, fs_write, exec"),
+        other => bail!("unknown tool `{other}`; the tools are fs_list, fs_read, fs_edit, fs_write, exec"),
     })
 }
 
@@ -531,6 +552,9 @@ fn render_result(r: &ToolResult) -> String {
         (ToolOutcome::Ok, Some(ToolOutput::Write { bytes })) => format!(
             "OK: the file now holds exactly the {bytes} bytes you sent. Everything that was in it before and that you did not send is gone."
         ),
+        (ToolOutcome::Ok, Some(ToolOutput::Edit { bytes, line })) => {
+            format!("OK: replaced the text that began at line {line}. The rest of the file is unchanged; it is now {bytes} bytes.")
+        }
         (ToolOutcome::Ok, Some(ToolOutput::Exec(e))) => {
             let mut s = format!("{}\n", ToolOutput::Exec(e.clone()).summary());
             if !e.stdout.is_empty() {

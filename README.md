@@ -4,7 +4,7 @@ A small Rust runtime that runs a coding agent's tool calls inside a rootless Lin
 
 The agent (a script, or an LLM) never touches anything itself. It asks; a gateway checks a policy, writes down what is about to happen, does it, and writes down that it is done. If the runtime dies in between, recovery can say for every call whether it happened, and it never silently runs an uncertain call again.
 
-It is a learning and portfolio project, not a product. It does one thing: one agent, one copy of a repository, four tools (plus one bonus tool, off by default), a command line.
+It is a learning and portfolio project, not a product. It does one thing: one agent, one copy of a repository, five tools (plus one bonus tool, off by default), a command line.
 
 ## Status
 
@@ -253,7 +253,7 @@ Then run `agentos check --policy my-policy.toml --repo /home/me/proj`. It says w
 Things to know before the first run:
 
 - **The result is a patch**, printed at the end as `patch: <path>`. A run never changes your repository. Read the patch, then either apply it yourself (`git apply <path>` or `patch -p1 < <path>`) or run `agentos apply <id>`, which copies every change into the repository the run was started on. A patch is text: if the run added a binary file or an empty file, changed a file's mode or made an empty folder, the run ends with `NOT in the patch: …` and the patch lists them; `agentos apply` carries them across. It refuses, and changes nothing, if any file the run changed has changed in your repository since; then the patch is the way, because merging is yours to do. `agentos apply <id> --dry-run` shows the list first.
-- **The file tools read and write text.** `fs.read` returns at most `max_output_kb` at a time; for a larger file the agent asks for lines (`start_line`, `max_lines`). `fs.write` replaces a whole file. Binary files cannot be read or written by the agent, only by a command you allow.
+- **The file tools read and write text.** `fs.read` returns at most `max_output_kb` at a time; for a larger file the agent asks for lines (`start_line`, `max_lines`). `fs.write` replaces a whole file; `fs.edit` replaces one piece of text in an existing file, which must occur in it exactly once. Binary files cannot be read or written by the agent, only by a command you allow.
 - **`.git` is not in the workspace** (the shipped deny list leaves it out), so commands that ask git for something will not find a repository.
 - **The whole workspace is copied** at the start and again after every change. On btrfs and XFS the copies share disk blocks. Elsewhere a repository with a large `node_modules` or `target/` folder is slow and takes space: 20,000 small files took 5.4 s for a 7-call run here, against 0.6 s for the demo. `skip` leaves a folder out, but then it is not in the workspace at all; that suits a virtualenv (it is used from its own path) and does not suit `node_modules`.
 - **If you stop a run** (Ctrl-C, or the terminal closes), it says how to go on: `agentos run --resume <id>`. `agentos status` shows it as `interrupted`.

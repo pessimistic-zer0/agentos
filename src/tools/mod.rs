@@ -32,6 +32,11 @@ pub enum ToolCall {
     FsList { path: String },
     #[serde(rename = "fs.write")]
     FsWrite { path: String, content: String },
+    /// Replace one piece of text in an existing file (D-120). `old_str` must
+    /// occur in the file exactly once; the rest of the file is untouched, so
+    /// a model need not send a whole file to change one line.
+    #[serde(rename = "fs.edit")]
+    FsEdit { path: String, old_str: String, new_str: String },
     #[serde(rename = "exec")]
     Exec { argv: Vec<String> },
     /// Ask an outside service, named in the policy, to act on `payload`.
@@ -46,6 +51,7 @@ impl ToolCall {
             ToolCall::FsRead { .. } => "fs.read",
             ToolCall::FsList { .. } => "fs.list",
             ToolCall::FsWrite { .. } => "fs.write",
+            ToolCall::FsEdit { .. } => "fs.edit",
             ToolCall::Exec { .. } => "exec",
             ToolCall::ExtCall { .. } => "ext.call",
         }
@@ -55,7 +61,7 @@ impl ToolCall {
     /// `ext.call` has an effect too, but outside the workspace, where a
     /// checkpoint cannot reach it.
     pub fn is_mutating(&self) -> bool {
-        matches!(self, ToolCall::FsWrite { .. } | ToolCall::Exec { .. })
+        matches!(self, ToolCall::FsWrite { .. } | ToolCall::FsEdit { .. } | ToolCall::Exec { .. })
     }
 
     /// The form stored in the log. File contents are replaced by their hash;
@@ -70,6 +76,13 @@ impl ToolCall {
                 path: path.clone(),
                 content_hash: content_hash(content.as_bytes()),
                 bytes: content.len() as u64,
+            },
+            ToolCall::FsEdit { path, old_str, new_str } => LoggedCall::FsEdit {
+                path: path.clone(),
+                old_hash: content_hash(old_str.as_bytes()),
+                new_hash: content_hash(new_str.as_bytes()),
+                old_bytes: old_str.len() as u64,
+                new_bytes: new_str.len() as u64,
             },
             ToolCall::Exec { argv } => LoggedCall::Exec { argv: argv.clone() },
             ToolCall::ExtCall { service, payload } => LoggedCall::ExtCall {
@@ -97,6 +110,9 @@ pub enum LoggedCall {
     FsList { path: String },
     #[serde(rename = "fs.write")]
     FsWrite { path: String, content_hash: String, bytes: u64 },
+    /// The two texts are in the blob store under their hashes.
+    #[serde(rename = "fs.edit")]
+    FsEdit { path: String, old_hash: String, new_hash: String, old_bytes: u64, new_bytes: u64 },
     #[serde(rename = "exec")]
     Exec { argv: Vec<String> },
     /// The payload is in the blob store under `payload_hash`; recovery
@@ -111,6 +127,7 @@ impl LoggedCall {
             LoggedCall::FsRead { .. } => "fs.read",
             LoggedCall::FsList { .. } => "fs.list",
             LoggedCall::FsWrite { .. } => "fs.write",
+            LoggedCall::FsEdit { .. } => "fs.edit",
             LoggedCall::Exec { .. } => "exec",
             LoggedCall::ExtCall { .. } => "ext.call",
         }
@@ -128,6 +145,7 @@ impl LoggedCall {
                 }
             }
             LoggedCall::FsWrite { path, bytes, .. } => format!("{path} ({bytes} bytes)"),
+            LoggedCall::FsEdit { path, old_bytes, new_bytes, .. } => format!("{path} ({old_bytes} bytes -> {new_bytes} bytes)"),
             LoggedCall::Exec { argv } => argv.join(" "),
             LoggedCall::ExtCall { service, bytes, .. } => format!("{service} ({bytes} bytes)"),
         }
@@ -162,6 +180,9 @@ pub enum ToolOutput {
     },
     List { entries: Vec<ListEntry> },
     Write { bytes: u64 },
+    /// An `fs.edit` replaced its one occurrence, which began on `line`; the
+    /// file now has `bytes` bytes.
+    Edit { bytes: u64, line: u64 },
     Exec(ExecOutput),
     /// The service's answer to an `ext.call`. `attempts` is how many
     /// requests it took (all with the same idempotency key).
@@ -210,6 +231,7 @@ impl ToolOutput {
             ToolOutput::Read { content, lines: Some(l) } => format!("{} bytes, lines {}-{} of {}", content.len(), l.first, l.last, l.total),
             ToolOutput::List { entries } => format!("{} entries", entries.len()),
             ToolOutput::Write { bytes } => format!("wrote {bytes} bytes"),
+            ToolOutput::Edit { bytes, line } => format!("replaced at line {line}; file is {bytes} bytes"),
             ToolOutput::External { status, attempts, .. } => {
                 format!("HTTP {status} after {attempts} request{}", if *attempts == 1 { "" } else { "s" })
             }

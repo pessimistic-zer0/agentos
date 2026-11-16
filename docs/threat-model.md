@@ -64,6 +64,7 @@ All tests are in `tests/security/main.rs` unless another file is named. Results:
 | 31 | Output flood | Output read on threads and cut at `max_output_kb`; log stores hashes | `output_flood_is_truncated_and_does_not_fill_the_log` |
 | 32 | Rewriting history (the log) | No tool reaches it (rows 8, 11); events are only ever inserted | covered by 8 and 11 |
 | 33 | Reaching more of the kernel from inside: nested user or mount namespaces, `mount`, `bpf`, `ptrace`, `io_uring`, `perf_event_open`, key rings (added for v1.0, D-116) | A seccomp deny list installed after Landlock; these calls fail with `EPERM`, `clone3` with `ENOSYS` (so libc falls back to `clone`, whose namespace flags are checked). Passes on both presets (`fhs`: CI run 43844369387, D-119) | `seccomp_refuses_namespaces_mounts_and_kernel_interfaces` |
+| 34 | Using `fs.edit` to reach or learn about a file the agent may not touch (added for v1.0, D-120) | The same path handling as `fs.write` (`openat2` beneath the workspace, no symlink followed, deny rules), and the file must be readable by policy as well as writable, because the answers ("not found", "found at lines 6 and 13") describe its content | `tests/edit.rs`: `an_edit_needs_write_and_read_access_and_stays_in_the_workspace` |
 | — | The API key ending up on disk | Sent as a header only; excluded from serialization | `tests/llm_agent.rs`: `llm_loop_fixes_the_demo_and_logs_the_conversation` |
 | — | Refusing ordinary work (false denials) | — | `tests/benign.rs`: 23 operations, 0 false denials |
 

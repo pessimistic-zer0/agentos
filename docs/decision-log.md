@@ -2923,6 +2923,38 @@ Other choices inside the filter: a call made with another architecture's numbers
 
 ---
 
+### D-120 — `fs.edit`: replace one piece of text; inside the runtime it is an `fs.write`
+- **Date:** 2026-11-16
+- **Status:** Taken (carries out the edit tool approved in D-114; the idea was parked in D-060)
+- **Area:** tooling
+- **ADR:** none
+
+**In plain words.** To change one line, a model had to send the whole file back through `fs.write`. Small models cannot: a 7 KB file does not fit in what they can write in one reply. `fs.edit` takes a path and two texts: the exact text to replace, and what to put there. The old text must be in the file exactly once. The runtime reads the file, makes the replacement in memory, and from that moment treats the call as an ordinary `fs.write` of the whole new content. So nothing new had to be invented for crashes: the same intent, the same atomic replace, the same recovery rule.
+
+**The problem.** `docs/results/real-repo-trial-nix.md`: the local 4B model failed the two-module ticket three times, twice because its reply was cut off in the middle of sending a file. Prince chose the form in D-114.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| `fs.edit {path, old_str, new_str}`, exactly one occurrence | Taken | D-114. The shape models are trained on; easy to check; a wrong edit fails instead of landing in the wrong place |
+| Work out the new content before the intent and reuse the write path (`Approved::Write`) | Taken | Recovery's rule for a write depends only on `pre_hash` and `new_hash`. An edit that is "half applied" cannot exist, because the effect is one rename |
+| A separate effect and a separate recovery rule for edits | Discarded | A second copy of the most delicate code, for no gain |
+| Count overlapping occurrences (`aa` in `aaa` is two) | Taken | If the text fits in two places the request is ambiguous, however a search function counts |
+| Require read access as well as write access | Taken | The answers ("not found", "found at lines 6 and 13") tell the agent about the file's content. A policy can make a path writable and not readable |
+| Replace all occurrences (a `replace_all` flag) | Discarded | Not asked for; one more way to change more than was meant. Parked |
+| Match loosely (ignore indentation or trailing spaces) | Discarded | The runtime would be guessing what the model meant. The error says to read the file and copy the text |
+| A unified diff (`fs.patch`); a line range in `fs.write` | Discarded | D-114 |
+| Let `fs.edit` make a new file when `old_str` is empty | Discarded | `fs.write` does that; an empty `old_str` is far more often a mistake |
+| A throwaway experiment in `experiments/` first | Not done | The mechanism is string replacement feeding the existing write path, and the open question was whether a small model can use it; that needs the real tool. The trial below is the experiment |
+
+**What this means for the code.** `ToolCall::FsEdit`, `LoggedCall::FsEdit` (the log holds the two texts' hashes and sizes; the texts and the resulting file go to the blob store), `ToolOutput::Edit { bytes, line }`. `tools::fs::edited` does the replacement; `Gateway::decide` turns an edit into `Approved::Write { edit_line: Some(..) }`. `recovery::reconcile` treats `FsEdit` as `FsWrite`. The LLM agent offers `fs_edit`, its system prompt says to use it for existing files and `fs_write` for new ones, and its memory of a file's text is updated after an edit. The scripted agent needs nothing (a step is a `ToolCall`). The tool list is now `fs.read`, `fs.list`, `fs.write`, `fs.edit`, `exec`, and the bonus `ext.call`. No policy change: an edit needs what a write needs, and read access.
+
+**Evidence.** `make test` on `nix`: 146 passed (138 before), clippy clean. New: `tests/edit.rs` (4 tests), two unit tests of `edited`, one LLM-loop test with a mock model, and `an_edit_is_recovered_like_a_write` in `tests/recovery/main.rs`: 8 crash points on an edit, 50 kills each by hand: 400 runs, 400 killed, 0 violations. With recovery deliberately made to roll every edit back, that test reports 22 violations in 24 runs; with the read-access check removed, the policy test fails. Real model: Qwen3-VL-4B on ticket INV-102 solved it in 7 calls and 36 s with two edits (312 and 718 bytes sent), where three earlier attempts without the tool failed; applied to a fresh clone, the project's suite gives 77 passed, 1 failed (75 and 3 before; the remaining failure is another ticket). One run. Not yet verified on `fhs`.
+
+**Concepts to learn.** Why reducing a new operation to an existing one keeps recovery simple; overlapping string matches; what an error message can leak; idempotence (an applied edit cannot be applied twice, because its old text is gone).
+
+---
+
 ## Still open
 
 | Question | Notes |
@@ -3000,6 +3032,7 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-16 | CI run 43742105191 on `9cec493` (`fhs` job) failed in `toctou_symlink_swap_during_writes_and_reads_never_escapes`: the swapper made 925 swaps, under the required 1,000. Nothing escaped; the `fhs-apparmor` job passed. Earlier runs had 6,400 to 6,750 swaps on the development machine (D-062) | A test that checks its own precondition can fail when the machine is slower, not when the code is wrong. The fix must make the race happen enough on a slow runner, not lower the bar (D-115). Because the file stopped `cargo test`, the suites after it did not run, so D-112 is still unverified on `fhs` |
 | 2026-11-16 | Commit `048e7e5` (the disk limit) was made with four failing tests. The suite had passed; then `workspace_mb` was added to the two preset policies, and the new tests' helper asserted that the preset has no such line. The suite was started again but the commit was made in the same command, before its result was read | Run the suite after the *last* change and read the result before committing. Fixed in the next commit; history is not rewritten, so `048e7e5` stays a commit whose tests fail |
 | 2026-11-16 | 200-kill suite on `nix` after M11 (seccomp, file-size limit, the measuring watchdog, scratch-free checkpoints): 4,800 + 1,600 runs, 0 violations, 0 duplicated effects; recovery p50 20.3 ms, p99 61.1 ms (M9: 19.6 and 54.0). `docs/results/recovery-200-nix-m11.md` | Changing a checkpoint by editing only its temporary copy added no recovery state, and the suite agrees. The suite does not reach the disk limit's undo path under kills; that is tested without kills only |
+| 2026-11-16 | With `fs.edit`, the local 4B model solved the two-module ticket (INV-102) in 7 calls and 36 s; without it, it had failed three times, twice because a whole-file `fs.write` did not fit in one reply. Its fix passes the named tests but hard-codes `USD` where the ticket asks for the settings' default | The tool's shape decided whether a small model could work at all. And passing tests are not the ticket: the trial record says what the tests did not check |
 
 ---
 

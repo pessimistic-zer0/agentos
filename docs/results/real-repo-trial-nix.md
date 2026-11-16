@@ -80,3 +80,24 @@ The M9 session's result, applied to a fresh clone of the inventory project with 
 ## The 4B model on the two-module ticket, third time (2026-11-15, after D-111)
 
 The same seven calls and the same cut-off reply as in the M9 re-trial. The difference is the ending: `STOPPED  the model's replies could not be used three times in a row; the server's last answer: HTTP 500: Failed to parse tool call arguments as JSON …`, after 94 s, with a patch that holds the model's change to `parsing.py`, and `agentos status` showing `stopped`. Being told did not help this model: the file it wanted to send whole does not fit in what it can write. That is the model's limit, and now it ends as one.
+
+## The 4B model on the two-module ticket, fourth time: with `fs.edit` (2026-11-16, D-120)
+
+Commit `10cab11` plus the uncommitted `fs.edit` change, debug build. The same model (Qwen3-VL-4B, local `llama-server`, 8,192-token context), the same task text, the same policy (`run/policy3.toml`) as the three attempts above. One run, by hand; a record, not a benchmark.
+
+| Call | | Result |
+|---|---|---|
+| 1 | `exec pytest -q tests/test_parsing.py tests/test_pipeline.py` | exit 1 |
+| 2 | `fs.read src/inventory/parsing.py` | 7,557 bytes |
+| 3 | `fs.edit src/inventory/parsing.py` | replaced at line 203; the model sent 312 bytes, not the file |
+| 4 | `exec pytest …` | exit 1 (the second module is not fixed yet) |
+| 5 | `fs.read src/inventory/pricing.py` | 3,440 bytes |
+| 6 | `fs.edit src/inventory/pricing.py` | replaced at line 66 |
+| 7 | `exec pytest …` | exit 0 |
+
+`COMPLETED` after 7 calls and 36 s. Before `fs.edit` this ticket ended three times without a fix: once after one call, twice when the model's reply was cut off while it tried to send a 7 KB file whole.
+
+Checked outside AgentOS: `agentos apply` to a fresh clone (2 files changed), then the project's whole suite there: **77 passed, 1 failed**. Before any change it is 75 passed, 3 failed; the one still failing belongs to ticket INV-101, which was not asked for. The original repository was untouched.
+
+About the quality of the fix, which is the model's and not the runtime's: in `parsing.py` it wrote `record.get("currency", "USD")`, so an order without a currency is given `USD` there instead of being left to the default in the settings, as the ticket says. The two named tests do not check that case.
+
