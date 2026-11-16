@@ -30,7 +30,7 @@ jobs:
           echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
           echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
           sleep 3
-      - name: The system under test (kept in the log: the kernel version was missing from earlier records)
+      - name: The system under test (kernel version, missing from earlier records)
         run: |
           . /etc/os-release && echo "system: $PRETTY_NAME"
           echo "kernel: $(uname -r)"
