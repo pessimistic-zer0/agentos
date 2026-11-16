@@ -90,7 +90,9 @@ fn start_mock_with(reply_for: fn(&[Value]) -> Value) -> (String, Arc<Mutex<Vec<V
                 Some(code) => (code, message["_body"].as_str().unwrap_or("").to_string()),
                 None => (200, json!({"choices": [{"index": 0, "message": message}]}).to_string()),
             };
-            let _ = write!(stream, "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", text.len(), text);
+            // "_retry_after": seconds, sent as the Retry-After header.
+            let extra = message["_retry_after"].as_str().map(|s| format!("Retry-After: {s}\r\n")).unwrap_or_default();
+            let _ = write!(stream, "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n{}", text.len(), text);
         }
     });
     (url, seen)
@@ -405,4 +407,64 @@ fn a_model_fixes_the_demo_with_one_edit_and_is_told_when_its_text_is_not_found()
     // model's requests held 2 short strings, not the file.
     let now = std::fs::read_to_string(t.exec_dir(&id).join("work/src/stats.py")).unwrap();
     assert_eq!(now, FIXED);
+}
+
+// ---------------------------------------------------------------------------
+// D-124: a rate-limited server says how long to wait; the runtime waits that
+// long instead of its own short pauses.
+// ---------------------------------------------------------------------------
+
+/// Over the rate limit at the second request: asks for 3 s, and refuses
+/// every request that comes back sooner than that, as a real limit would.
+fn rate_limited(messages: &[Value]) -> Value {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    static OPEN_AT: Mutex<Option<Instant>> = Mutex::new(None);
+    let n = CALLS.fetch_add(1, Ordering::SeqCst);
+    let mut open_at = OPEN_AT.lock().unwrap();
+    if n == 1 {
+        *open_at = Some(Instant::now() + Duration::from_secs(3));
+    }
+    if let Some(at) = *open_at {
+        let left = at.saturating_duration_since(Instant::now());
+        if !left.is_zero() {
+            return json!({"_status": 429, "_body": "rate limit reached", "_retry_after": format!("{:.1}", left.as_secs_f64())});
+        }
+    }
+    reply_for(messages)
+}
+
+fn limit_for_a_day(_: &[Value]) -> Value {
+    json!({"_status": 429, "_body": "daily limit reached", "_retry_after": "7200"})
+}
+
+#[test]
+fn a_rate_limited_server_is_given_the_time_it_asks_for() {
+    let t = TestEnv::new("llm-rate");
+    let (url, seen) = start_mock_with(rate_limited);
+    let started = std::time::Instant::now();
+    let out = run_llm(&t, &url, &[]);
+    let took = started.elapsed();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let id = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    assert!(t.events(&id).iter().any(|e| e["type"] == "execution.finished" && e["status"] == "completed"));
+    // One refusal only: the runtime came back when the server said, not
+    // after its own 0.5 s pause (which would have been refused again).
+    assert_eq!(seen.lock().unwrap().len(), 7, "one refusal and the six requests of the usual run");
+    assert!(took >= std::time::Duration::from_secs(3), "{took:?}");
+}
+
+#[test]
+fn a_wait_longer_than_agentos_waits_ends_the_run_at_once_and_resumably() {
+    let t = TestEnv::new("llm-day");
+    let (url, seen) = start_mock_with(limit_for_a_day);
+    let started = std::time::Instant::now();
+    let out = run_llm(&t, &url, &[]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("asked for a wait of 7200 s") && err.contains("--resume"), "{err}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "no pointless waiting: {:?}", started.elapsed());
+    assert_eq!(seen.lock().unwrap().len(), 1, "one request, no retries");
 }

@@ -149,12 +149,19 @@ enum Reply {
 
 enum Tried {
     Done(Reply),
-    /// "Not now": worth sending again after a pause.
-    Busy(String),
+    /// "Not now": worth sending again after a pause. The second value is
+    /// how long the server asked us to wait (its `Retry-After` header), if
+    /// it said.
+    Busy(String, Option<Duration>),
 }
 
 /// Pauses between attempts when the server is busy: four attempts in all.
 const RETRY_WAITS_MS: [u64; 3] = [500, 2_000, 6_000];
+/// When the server names a wait itself (`Retry-After`), that is used in
+/// place of the pause above, up to this long. A hosted API with a
+/// tokens-per-minute limit asks for up to a minute; a wait longer than this
+/// (a daily limit) ends the run as interrupted at once (D-124).
+const MAX_SERVER_WAIT: Duration = Duration::from_secs(90);
 
 /// Start of the message that tells the model it stopped too early. Also how
 /// `restore` finds out, from the log, that the message was already sent.
@@ -188,20 +195,35 @@ impl LlmAgent {
     /// | The server said | Meaning | What happens |
     /// |---|---|---|
     /// | 200 with a message | an answer | `Reply::Message` |
-    /// | 429, 502, 503, 504 | busy or restarting | wait and send again; if it stays so, an error: the run stops as interrupted and can be resumed later |
+    /// | 429, 502, 503, 504 | busy, restarting, or over a rate limit | wait (as long as the server's `Retry-After` says, if it says; D-124) and send again; if it stays so, an error: the run stops as interrupted and can be resumed later |
     /// | 401, 403, 404 | wrong key, model or address | an error at once, naming the settings |
     /// | any other status | this request will not get a better answer (the model's reply could not be used, or the conversation is too long) | `Reply::Unusable`: the caller tells the model, and gives up cleanly if it goes on |
     /// | no connection | the server is gone | an error: interrupted, resumable |
     fn complete(&self) -> Result<Reply> {
         let mut last = String::new();
         for wait_ms in RETRY_WAITS_MS.iter().copied().map(Some).chain([None]) {
-            match self.complete_once()? {
+            let asked = match self.complete_once()? {
                 Tried::Done(reply) => return Ok(reply),
-                Tried::Busy(why) => last = why,
-            }
-            match wait_ms {
-                Some(ms) => std::thread::sleep(Duration::from_millis(ms)),
-                None => break,
+                Tried::Busy(why, asked) => {
+                    last = why;
+                    asked
+                }
+            };
+            let Some(ms) = wait_ms else { break };
+            match asked {
+                Some(wait) if wait > MAX_SERVER_WAIT => {
+                    last = format!("{last}; it asked for a wait of {} s, longer than agentos waits", wait.as_secs());
+                    break;
+                }
+                // A little longer than asked: the server's clock decides.
+                Some(wait) => {
+                    let wait = wait + Duration::from_millis(500);
+                    if wait >= Duration::from_secs(5) {
+                        eprintln!("  the model's server asked for a pause (rate limit): waiting {} s", wait.as_secs());
+                    }
+                    std::thread::sleep(wait);
+                }
+                None => std::thread::sleep(Duration::from_millis(ms)),
             }
         }
         bail!(
@@ -233,6 +255,16 @@ impl LlmAgent {
         }
         let mut resp = req.send_json(&body).with_context(|| format!("calling the LLM at {url}"))?;
         let status = resp.status().as_u16();
+        // `Retry-After: <seconds>` (whole or with a fraction). The other
+        // form the header may take, a date, is not used by the APIs this
+        // talks to and is ignored.
+        let retry_after = resp
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .filter(|s| s.is_finite() && *s >= 0.0)
+            .map(Duration::from_secs_f64);
         let text = resp.body_mut().read_to_string().context("reading the LLM's reply")?;
         let shown: String = text.chars().take(400).collect();
         Ok(match status {
@@ -241,7 +273,7 @@ impl LlmAgent {
                 let message = reply["choices"][0]["message"].as_object().map(|m| Value::Object(m.clone())).context("the LLM's reply has no choices[0].message")?;
                 Tried::Done(Reply::Message(message))
             }
-            429 | 502 | 503 | 504 => Tried::Busy(format!("HTTP {status}: {shown}")),
+            429 | 502 | 503 | 504 => Tried::Busy(format!("HTTP {status}: {shown}"), retry_after),
             401 | 403 | 404 => bail!(
                 "the LLM endpoint at {url} answered HTTP {status}: {shown}\n  \
                  That is a wrong key, model name or address, not something the model did. Check AGENTOS_LLM_API_KEY, \

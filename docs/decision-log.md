@@ -3047,6 +3047,34 @@ Other choices inside the filter: a call made with another architecture's numbers
 
 ---
 
+### D-124 — A busy model server that says how long to wait is given that long (extends D-111)
+- **Date:** 2026-11-16
+- **Status:** Taken
+- **Area:** tooling
+- **ADR:** none
+
+**In plain words.** When the model's server answers "too many requests" (HTTP 429), agentos waited half a second, then two, then six, and then stopped the run. A hosted API with a limit of so many tokens per minute needs up to a minute, and it says so in a header called `Retry-After`. agentos now waits what that header asks for, up to 90 seconds, and says on the screen that it is waiting. If the server asks for longer than that (a daily limit), the run stops at once as interrupted, to be resumed later; waiting would be pointless.
+
+**The problem.** First request to a hosted model in the M13 trial (Groq, `qwen/qwen3.8-27b`, a key limited to 8,000 tokens per minute): the run solved its ticket's bug in three calls and was then stopped by a 429 after about 15 seconds. The fixed pauses of D-111 were chosen with a local `llama-server` that is loading a model.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Use the server's `Retry-After` (seconds) in place of the fixed pause, capped at 90 s | Taken | The server knows; the smallest change that makes D-111's "wait" work for a hosted API |
+| Longer fixed pauses for everyone | Discarded | Slower for the local case, still a guess for the hosted one |
+| Read the wait out of the error text ("try again in 12.5s") | Discarded | Text differs per provider; the header is the standard place |
+| Wait as long as asked, without a cap | Discarded | A daily limit asks for hours. Stopping resumably is what D-111 already does for a server that stays busy |
+| More attempts than four | Discarded | After waiting what the server asked, the next attempt should pass; if not, the run is resumable |
+| A client-side budget (count tokens, pace requests) | Discarded | A new mechanism; parked |
+
+**What this means for the code.** `Tried::Busy` carries the wait the server named; `LlmAgent::complete` uses it (plus half a second), prints a line when it is 5 s or more, and stops at once when it is over `MAX_SERVER_WAIT`. No new dependency. The date form of `Retry-After` is ignored.
+
+**Evidence.** Groq's headers on a small request, read with `curl -D -`: `x-ratelimit-limit-tokens: 8000`, `x-ratelimit-limit-requests: 1000`, the same for all three chat models tried. `tests/llm_agent.rs`: `a_rate_limited_server_is_given_the_time_it_asks_for` (a mock that refuses any request sooner than the 3 s it asked for sees exactly one refusal) and `a_wait_longer_than_agentos_waits_ends_the_run_at_once_and_resumably`; with the header ignored both fail (9 requests instead of 7; no stop). Not yet verified on `fhs`.
+
+**Concepts to learn.** HTTP 429 and `Retry-After`; rate limits by requests and by tokens; backoff.
+
+---
+
 ## Still open
 
 | Question | Notes |
@@ -3127,6 +3155,7 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-16 | With `fs.edit`, the local 4B model solved the two-module ticket (INV-102) in 7 calls and 36 s; without it, it had failed three times, twice because a whole-file `fs.write` did not fit in one reply. Its fix passes the named tests but hard-codes `USD` where the ticket asks for the settings' default | The tool's shape decided whether a small model could work at all. And passing tests are not the ticket: the trial record says what the tests did not check |
 | 2026-11-16 | A test for `ro_dirs` expected a command to fail after an earlier command replaced the mount point with a symlink. It ran normally: the revert after the first command had already restored the folder, because a read-only folder is never a writable path | Two defences were stacked and the outer one hid the inner. The inner one (the sandbox's own check) had to be tested through the library, with a workspace prepared by hand |
 | 2026-11-16 | A write that keeps a file's content and only makes it executable has the same hash before and after. Recovery decided by hash alone, so a kill *before* such a write was reported as APPLIED. Found while designing `executable`, shown by a test, fixed by putting the mode in the intent (D-123) | A recovery rule is only as good as what the intent records. Each new thing a write can change needs its own evidence in the intent |
+| 2026-11-16 | First run against a hosted model: stopped after three calls by HTTP 429. The key allows 8,000 tokens per minute; agentos retried for 8.5 s in total and gave up, while the server's `Retry-After` header said how long to wait | Retry rules tuned on a local server do not fit a hosted one. Ask the other side how long to wait when it tells you (D-124) |
 
 ---
 
@@ -3213,3 +3242,4 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | Bind mount | Making an existing folder appear at a second place in the file tree; with the read-only flag, the second place cannot be used to change it |
 | Base64 | A way to write any bytes with 64 printable characters, three bytes as four characters; used to carry binary data in text formats such as JSON |
 | Executable bit | The permission bit that lets a file be run as a program; mode 755 has it, 644 does not |
+| Rate limit / HTTP 429 | A server's cap on requests or tokens per minute; 429 "Too Many Requests" is its answer when the cap is hit, often with a `Retry-After` header saying when to come back |
