@@ -19,12 +19,12 @@ Before the first item, CI on `main` was red: the TOCTOU race test's own check th
 
 | Requirement | Met? | Evidence (command and result) |
 |---|---|---|
-| CI's red TOCTOU test fixed without lowering a bar | On `nix` yes; `fhs` not yet verified | D-115; `cargo test --test security toctou` passes in 1 attempt (7,022 swaps); slowed by hand: passes in 3 attempts at 5 ms, fails after 5 at 60 ms |
-| A1: namespaces, mounts, `bpf`, `ptrace`, `io_uring`, `perf_event_open`, key rings refused inside the sandbox | On `nix` yes; `fhs` not yet verified | `seccomp_refuses_namespaces_mounts_and_kernel_interfaces`: fails before the change (`unshare-user OK`, `unshare-mount OK`, `ptrace OK`), passes after |
+| CI's red TOCTOU test fixed without lowering a bar | Yes, both presets (`fhs`: CI run 43844369387, D-119) | D-115; `cargo test --test security toctou` passes in 1 attempt (7,022 swaps); slowed by hand: passes in 3 attempts at 5 ms, fails after 5 at 60 ms |
+| A1: namespaces, mounts, `bpf`, `ptrace`, `io_uring`, `perf_event_open`, key rings refused inside the sandbox | Yes, both presets (CI run 43844369387, D-119) | `seccomp_refuses_namespaces_mounts_and_kernel_interfaces`: fails before the change (`unshare-user OK`, `unshare-mount OK`, `ptrace OK`), passes after |
 | A1: real test commands still work | On `nix` yes | Experiment `m11-seccomp`; `agentos run` with the second trial's Rust and npm policies gives the trial's results; `make test` 133 passed |
 | A2: a command cannot take the workspace past `limits.workspace_mb` and leave it there | On `nix` yes; `fhs` not yet verified | `tests/hardening.rs`: `a_command_that_fills_the_workspace_is_stopped_and_undone`, `one_file_cannot_grow_past_the_limit`, `fs_write_past_the_limit_writes_nothing`, `a_repository_larger_than_the_limit_is_refused_at_the_start`; all four fail with the limit switched off by hand. It is a measured limit, not a hard cap (D-117) |
 | A3: no checkpoint holds a scratch path; the workspace keeps them | On `nix` yes; `fhs` not yet verified | `a_cache_is_scratch_and_an_example_env_file_is_not_a_secret` (fails with the change switched off); unit test in `src/checkpoint.rs`; the Rust trial session: 86 MB before, 21 MB after |
-| Both presets pass | `nix` yes; `fhs` not yet verified | needs a push and a CI run |
+| Both presets pass | `nix` yes; `fhs` yes for the TOCTOU fix and A1 (CI run 43844369387 on `caeb948`); A2 and A3 not yet verified | needs a push of `1600435` or later and a CI run |
 
 ## 3. What you need to know first
 

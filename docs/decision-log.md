@@ -2899,6 +2899,30 @@ Other choices inside the filter: a call made with another architecture's numbers
 
 ---
 
+### D-119 — `exec.helpers`, the TOCTOU test fix and the seccomp filter count as verified on `fhs` by CI run 43844369387
+- **Date:** 2026-11-16
+- **Status:** Taken
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** Prince pushed `caeb948`. CI ran it on Ubuntu and both jobs passed. That commit holds three things that had only run on NixOS: helper programs for commands (D-112), the race test that repeats itself (D-115) and the seccomp filter (D-116). They now count as verified on both systems. The disk limit (D-117) and scratch-free checkpoints (D-118) were committed after that push and are still not verified on `fhs`.
+
+**The problem.** CLAUDE.md: a change is "not yet verified" on `fhs` until a CI run on that commit is green.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Record the run for the three changes it contains | Taken | The rule, applied |
+| Tag `m11` now | Discarded | M11 has three items and two of them are not in this run |
+
+**What this means for the code.** None. Documents that said "not yet verified on `fhs`" for D-112, D-115 and D-116 are updated.
+
+**Evidence.** `gh run view 43844369387`: completed, success, head `caeb948`; jobs `fhs` and `fhs-apparmor` both success. From the log of the `fhs` job: 133 tests passed (29 + 6 + 1 + 11 + 14 + 22 + 9 + 4 + 33 + 4), `seccomp_refuses_namespaces_mounts_and_kernel_interfaces ... ok` in both jobs; 200-kill step: `4800 runs, 4800 killed, 0 invariant violations, 0 duplicated effects, 3706/3706`, recovery p50 32.3 ms, p99 200.9 ms; external cells `1600 runs, 0 invariant violations, 0 duplicated effects, 944/944`. How many attempts the TOCTOU test needed is not in the log (the test step does not print test output); it passed. The run before it on `main` (43742105191) is the failure described in D-115.
+
+**Concepts to learn.** None new.
+
+---
+
 ## Still open
 
 | Question | Notes |
