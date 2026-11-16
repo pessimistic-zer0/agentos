@@ -100,3 +100,43 @@ jobs:
       - name: Security, benign, vertical-slice and dependency suites, with the profile
         run: systemd-run --user --scope -q -p Delegate=yes cargo test --test vertical_slice --test security --test benign --test deps
 
+  # The release as a user gets it (D-127): built with --release, packed by
+  # packaging/release.sh, unpacked somewhere else and run from there. Then the
+  # three benchmarks with the `fhs` preset. A shared CI machine is a poor
+  # place to measure time: the numbers are kept as a record of this machine
+  # (docs/results/bench-fhs), not as the project's figures.
+  release:
+    runs-on: ubuntu-24.04
+    env:
+      AGENTOS_TEST_PRESET: fhs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install pytest and hyperfine
+        run: sudo apt-get update && sudo apt-get install -y python3-pytest python3-venv hyperfine
+      - name: Allow unprivileged user namespaces (the archive is run from a temporary folder, where the AppArmor profile does not apply)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Start a systemd user session for the runner (needed for cgroup delegation)
+        run: |
+          sudo loginctl enable-linger "$(id -un)"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
+          sleep 3
+      - name: Build the release, pack it, and run the demo task from the unpacked archive
+        run: packaging/release.sh --check
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agentos-release-x86_64-linux
+          path: |
+            target/dist/*.tar.gz
+            target/dist/*.sha256
+      - name: Benchmarks (sandbox spawn, fs.write, end to end)
+        run: |
+          make bench
+          cat docs/results/bench-fhs/summary.md
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-fhs
+          path: docs/results/bench-fhs
+

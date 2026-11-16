@@ -4,7 +4,7 @@
 |---|---|
 | Weeks in the plan | v1.0 (D-114); no week plan |
 | Started / finished | 2026-11-16 / in progress |
-| Commits | (first: the compatibility promise) … |
+| Commits | `3036816` … |
 | Status | In progress. Done on `nix`: the compatibility promise (D10) and the CHANGELOG. Open: release build and benchmarks in CI, install instructions, version 1.0.0, another distribution, the name (Prince), and M13, which is blocked on an API key |
 
 Write this document for a reader who is new to Rust and Linux internals. Plain words first, the real term next to it. Fill it in while working.
@@ -19,9 +19,9 @@ Turn the code of M11 and M12 into something that can be called 1.0: say what sta
 |---|---|---|
 | D10: a stated compatibility promise for the policy format and the event log | On `nix` yes; `fhs` not yet verified | `docs/compatibility.md`; `tests/compat.rs` (4 tests) against files written by the `v0.1` binary |
 | D9: a CHANGELOG | Yes | `CHANGELOG.md` |
-| D9: a release build in CI | Not started | |
-| D9: benchmarks run on Ubuntu | Not started | |
-| D9: install instructions | Not started | |
+| D9: a release build in CI | Written; not yet run in CI | `packaging/release.sh --check` on `nix`: packs a 3.7 MB archive and runs the demo task from it; CI job `release` (D-127) |
+| D9: benchmarks run on Ubuntu | Written; not yet run in CI | the same job runs `make bench` and uploads `docs/results/bench-fhs` |
+| D9: install instructions | Yes | README, "Installing it" |
 | D9: Cargo version 1.0.0 | Not started (last step) | |
 | D11: one more distribution in CI, or a written reason why not | Not started | |
 | D8: the project name | Open; only Prince decides | |
@@ -48,6 +48,8 @@ Turn the code of M11 and M12 into something that can be called 1.0: say what sta
 | `docs/compatibility.md` | The promise, and what is not promised |
 | `tests/compat.rs`, `tests/fixtures/compat/` | Today's code against two v0.1 presets and two v0.1 execution folders (in a tar file, so the trees are exact) |
 | `CHANGELOG.md` | What changed for a user since 0.1 |
+| `packaging/release.sh` | Builds the release, packs the archive; `--check` runs the demo task from the unpacked archive |
+| `.github/workflows/ci.yml` | Job `release`: the script above, then the benchmarks on Ubuntu; both uploaded |
 
 ## 6. The code, explained
 
@@ -57,6 +59,7 @@ Turn the code of M11 and M12 into something that can be called 1.0: say what sta
 
 | Entry | Decision | Discarded alternatives |
 |---|---|---|
+| D-127 | One archive made by a script, checked by running from it, in its own CI job; CI benchmarks are a record only | Publishing from CI; a static build; distribution packages |
 | D-126 | Backward compatibility for format version 1 of policy files and execution folders, tested against frozen v0.1 files | Promising the other direction; promising screen output or the library |
 
 ## 8. Problems hit

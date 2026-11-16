@@ -3128,6 +3128,35 @@ Other choices inside the filter: a call made with another architecture's numbers
 
 ---
 
+### D-127 — The release is one archive made by a script, built and run from in CI; benchmarks on Ubuntu are a record, not the project's numbers
+- **Date:** 2026-11-16
+- **Status:** Taken (carries out part of item D9 of D-114)
+- **Area:** tooling
+- **ADR:** none
+
+**In plain words.** A user should be able to get the program without the development setup. `packaging/release.sh` builds the optimised program and packs it into one archive together with the policy presets, the AppArmor profile, the demo project and the documents. With `--check` it unpacks that archive in another folder and runs the demo task with only what is in it, so an archive that is missing something fails. CI does this on Ubuntu on every push and keeps the archive. The same CI job runs the three benchmarks on Ubuntu, which had never been done.
+
+**The problem.** D-114 asks for a release build in CI, install instructions, and benchmarks run on Ubuntu. Until now only debug builds were tested, and "how do I install it" had no answer except "build it in the dev shell".
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| One shell script that builds, packs and (with `--check`) runs from the archive | Taken | The same script runs on the development machine and in CI; what users get is what was tested |
+| Strip debug information from the packed program | Taken | 48 MB becomes 8.8 MB (the archive 3.7 MB). Function names stay, so a panic still names its place. The build in `target/` keeps its line tables for profiling |
+| A separate CI job `release` | Taken | A failing benchmark or packing step must not hide the test jobs (the lesson of B-014: one red step hides what comes after) |
+| Publish the archive as a GitHub release from CI | Discarded | Publishing is Prince's step, like pushing. CI keeps it as a build artifact only |
+| A statically linked program (musl) | Discarded for now | Would run on any Linux, but `rusqlite` builds SQLite from C and the dev shell has no musl toolchain; a new build path to maintain. The archive says which C library it needs. Parked |
+| `.deb` / `.rpm` packages, `cargo install` from crates.io | Discarded | The name is not settled (D-023), and `publish = false` |
+| Treat CI benchmark numbers as results of record for the README | Discarded | A shared runner's timings vary from run to run. They are downloaded into `docs/results/bench-fhs/` as a record of that machine; the README's numbers stay those of the development machine, each with its script |
+
+**What this means for the code.** `packaging/release.sh`; a third CI job `release` (build, pack, run from the archive, upload; then `make bench` and upload `docs/results/bench-fhs`); README section "Installing it". No runtime change. Whether the job passes on Ubuntu is not known until a push: the benchmarks have never run there (B-013 was found the last time they were tried in CI).
+
+**Evidence.** On the development machine: `nix develop -c packaging/release.sh --check` prints `packed: …/agentos-0.1.0-x86_64-linux.tar.gz (3.7M)`, `agentos 0.1.0`, and `check: the packed program ran the demo task from the archive; the patch holds the fix`. Sizes: `target/release/agentos` 48,560,384 bytes; after `strip --strip-debug` 8,783,792. The workflow file parses as YAML with three jobs. The CI job itself: not yet run.
+
+**Concepts to learn.** Release and debug builds; debug information and stripping; dynamic and static linking, and why a program built on one system may not start on an older one; build artifacts.
+
+---
+
 ## Still open
 
 | Question | Notes |
@@ -3137,7 +3166,7 @@ Other choices inside the filter: a call made with another architecture's numbers
 | ~~License~~ | Answered by D-069: dual MIT OR Apache-2.0 |
 | ~~Public repo from day one, or after v0.1?~~ | Answered by events: Prince pushed `main` to GitHub on 2026-11-12, after v0.1 was tagged locally |
 | ~~Does the `fhs` preset pass on Ubuntu?~~ | Answered by D-072: yes on Ubuntu 24.04, CI run 43385661105 (third run; the first two found B-007 and B-008) |
-| Do the benchmarks and `make demo` work on Ubuntu? | Not run. CI runs the test suites only (D-072) |
+| Do the benchmarks work on Ubuntu? | `make demo` runs in CI since M8. The benchmarks are in the CI job `release` since D-127; no run of it yet |
 | ~~Which LLM for the demo: local llama.cpp server or a hosted API?~~ | Answered by D-058: local llama.cpp |
 
 ---

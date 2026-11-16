@@ -76,6 +76,23 @@ sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
 If something is missing, `agentos` stops at startup and says what (for example, how to get a delegated cgroup).
 
+### Installing it
+
+`agentos` is one program. It needs no service and no root; `agentos check` tells you whether your machine can run it.
+
+```sh
+# From source (any Linux that meets the list above):
+cargo build --release
+install -m 755 target/release/agentos ~/.local/bin/agentos      # or, with sudo, /usr/local/bin
+agentos check --policy policies/fhs.toml                        # on NixOS: policies/nix.toml
+
+# Or pack it and move the archive to another machine with the same or a newer C library:
+packaging/release.sh --check       # builds, packs target/dist/agentos-<version>-<machine>-linux.tar.gz, runs the demo from it
+tar -xzf agentos-*.tar.gz && cd agentos-*/ && ./agentos check --policy policies/fhs.toml
+```
+
+The archive holds the program, the two policy presets, the AppArmor profile, the demo project and the documents. CI builds it on Ubuntu 24.04 and runs the demo task from the unpacked archive (job `release`); it is kept as a build artifact of each run. There are no packages for a distribution's package manager.
+
 ## What it shows
 
 Three suites, one command (`nix develop -c make eval`). Results of record, with raw data, are in [`docs/results/`](docs/results/). The `fhs` column is from one CI run, after two that failed.
