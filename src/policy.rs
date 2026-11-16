@@ -134,6 +134,23 @@ pub struct Limits {
     pub max_output_kb: u64,
     /// The run stops after this many tool calls.
     pub max_tool_calls: u64,
+    /// Size of the workspace on disk, in MiB, that a call may not take it past
+    /// (D-117). Measured while a command runs, so a fast writer can get past it
+    /// by about its write speed times the measuring interval; one file can
+    /// never be larger (`RLIMIT_FSIZE`). Optional; policies written before
+    /// v1.0 get the default.
+    #[serde(default = "default_workspace_mb")]
+    pub workspace_mb: u64,
+}
+
+fn default_workspace_mb() -> u64 {
+    2048
+}
+
+impl Limits {
+    pub fn workspace_bytes(&self) -> u64 {
+        self.workspace_mb.saturating_mul(1024 * 1024)
+    }
 }
 
 /// The `[external]` section: which outside services the gateway may call for
@@ -289,6 +306,7 @@ impl Policy {
             ("call_timeout_s", l.call_timeout_s),
             ("max_output_kb", l.max_output_kb),
             ("max_tool_calls", l.max_tool_calls),
+            ("workspace_mb", l.workspace_mb),
         ] {
             if v == 0 {
                 return Err(PolicyError::ZeroLimit(name));

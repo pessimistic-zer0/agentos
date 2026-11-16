@@ -13,7 +13,7 @@ It is a learning and portfolio project, not a product. It does one thing: one ag
 - **What it has been run on.** The demo; a Python project with real PyPI packages in a virtualenv; a Node project with npm packages; a Rust project. On each, tickets were fixed through the gateway and the result applied to a fresh clone, where the project's own tests passed ([`docs/results/real-repo-trial-nix.md`](docs/results/real-repo-trial-nix.md), [`second-stack-trial-nix.md`](docs/results/second-stack-trial-nix.md)). A local 4-billion-parameter model solved a one-line ticket through it and reached its own limit on a two-file one.
 - **Where it is verified.** NixOS 26.05 on the development machine (`nix` preset), and Ubuntu 24.04 in CI (`fhs` preset), including a job that keeps Ubuntu's restriction on user namespaces switched on and uses the AppArmor profile that comes with agentos. Latest green run on everything but the newest change: [43733350171](https://github.com/pessimistic-zer0/agentos/actions/runs/43733350171). Debian, Fedora and Arch use the same `fhs` preset and have not been run.
 - **What the suites say.** 4,800 kills at 8 points with 0 invariant violations, 32 attacks with 0 escapes, 130 tests in all. See [What it shows](#what-it-shows).
-- **What it is not.** Not hardened like a container runtime (a seccomp deny list but no allow list, no disk limit), no network for commands, one agent at a time. Read [what it does not do](#what-it-does-not-do) before trusting it with anything.
+- **What it is not.** Not hardened like a container runtime (a seccomp deny list but no allow list, a measured disk limit but no hard cap), no network for commands, one agent at a time. Read [what it does not do](#what-it-does-not-do) before trusting it with anything.
 - **How it got here.** Fourteen bugs were found on the way: eight by the suites and the first CI runs, and six after every suite had passed (four by using the program on things the suites did not try, one by the benchmarks, one by CI on the other system). Each has a note in [`docs/bugs.md`](docs/bugs.md), and the six are told as a story in [`docs/what-the-suites-missed.md`](docs/what-the-suites-missed.md). The history by milestone is in [`docs/milestones/`](docs/milestones/) (M0 to M10).
 - Licensed under MIT or Apache-2.0, at your option (see [License](#license)).
 
@@ -217,6 +217,7 @@ cpu_percent = 200
 call_timeout_s = 60
 max_output_kb = 64
 max_tool_calls = 50
+workspace_mb   = 2048
 ```
 
 ### On your own project
@@ -245,7 +246,7 @@ The shipped policies fit the demo. For a real repository, copy one and change fo
      PYTHONPATH = "/home/me/deps"
      ```
    Everything under a mount can be read by the code the agent runs (never written). Do not mount a folder that holds secrets.
-4. **The limits.** `call_timeout_s` (60) must be longer than your test suite takes; `max_tool_calls` (50) is the whole run's budget; `max_output_kb` (64) is also the largest file `fs.read` returns.
+4. **The limits.** `call_timeout_s` (60) must be longer than your test suite takes; `max_tool_calls` (50) is the whole run's budget; `max_output_kb` (64) is also the largest file `fs.read` returns; `workspace_mb` (2048) is how large the workspace may get before a command is stopped and undone.
 
 Then run `agentos check --policy my-policy.toml --repo /home/me/proj`. It says what `run` would refuse, and how many files and megabytes would be copied; if that number is large, add the big folders to `skip`.
 
@@ -264,7 +265,7 @@ Things to know before the first run:
 - **It is not hardened like a production container runtime.** The seccomp filter is a short deny list, not an allow list; kernel bugs are out of scope; tested on one kernel and one distribution.
 - **No power-loss guarantee.** The tests kill the process; they do not cut power. Checkpoints are not fsynced.
 - **No exactly-once execution.** A command that was cut off is rolled back and may be issued again by the agent as a new call. An external call is applied once only if the service honours the idempotency key.
-- **No disk limit.** A command can fill the disk. Checkpoints are never pruned.
+- **The disk limit is measured, not a hard cap.** `limits.workspace_mb` stops and undoes a command that takes the workspace past it, but the size is measured every 50 ms, so a fast writer can pass it for a moment. Checkpoints are never pruned, and each holds a copy of the workspace.
 - **No network, ever**, for commands. No web search, no package downloads. The only thing that leaves the runtime is the bonus tool's request to a `127.0.0.1` service that a policy names, and the LLM request.
 - **The sandbox can see** the read-only system folders in full (on NixOS, all of `/nix/store`) and some facts about the host (host name, kernel version, the workspace's path).
 - **Prompt injection is contained, not prevented.** A file can talk the model into asking for something bad; the policy and sandbox then refuse or confine it.

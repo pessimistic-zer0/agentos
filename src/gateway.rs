@@ -33,7 +33,7 @@ use crate::checkpoint;
 use crate::faults;
 use crate::log::{EventBody, EventLog};
 use crate::policy::{Access, Decision, Policy};
-use crate::sandbox::{self, cgroup::CgroupRoot, beneath, SandboxSpec};
+use crate::sandbox::{self, cgroup::CgroupRoot, beneath, SandboxSpec, Stopped};
 use crate::tools::exec::Programs;
 use crate::tools::ext::{self, Answer};
 use crate::tools::fs::{self as fstool, Opened, OpenedParent, WriteTarget};
@@ -340,9 +340,10 @@ impl Gateway {
                 fstool::read(fd, &rel, max, start_line, max_lines).map(|(content, lines)| ToolOutput::Read { content, lines })
             }
             Approved::List { fd, rel } => fstool::list(fd, &rel).map(|entries| ToolOutput::List { entries }),
-            Approved::Write { target, content } => {
-                fstool::write(&target, &content, call_id).map(|bytes| ToolOutput::Write { bytes })
-            }
+            Approved::Write { target, content } => match self.write_fits(&target.rel, content.len() as u64) {
+                Err(e) => Err(e),
+                Ok(()) => fstool::write(&target, &content, call_id).map(|bytes| ToolOutput::Write { bytes }),
+            },
             Approved::Exec { argv } => {
                 let out = match self.run_exec(call_id, &argv)? {
                     Ok(out) => out,
@@ -385,8 +386,7 @@ impl Gateway {
     /// with the intent open, and `agentos recover` deals with it.
     fn undo_exec(&self, why: anyhow::Error) -> Result<ToolError> {
         use anyhow::Context;
-        let base = self.dir.checkpoints().join(&self.last_checkpoint);
-        checkpoint::restore(&self.dir.work(), &base).with_context(|| format!("rolling back the workspace after: {why:#}"))?;
+        self.rollback_workspace().with_context(|| format!("rolling back the workspace after: {why:#}"))?;
         // Host paths mean nothing to the agent; show them from the execution folder.
         let mut text = format!("{why:#}");
         for root in [std::fs::canonicalize(&self.dir.root).ok(), Some(self.dir.root.clone())].into_iter().flatten() {
@@ -396,6 +396,33 @@ impl Gateway {
             "the command left files in the workspace that the runtime cannot record ({text}). \
              Everything this command changed was undone; the workspace is as it was before the call."
         )))
+    }
+
+    /// `fs.write` may not take the workspace past `limits.workspace_mb`
+    /// either (D-117). The size of the file it replaces is looked up by
+    /// name; that is an estimate for a limit, not a confinement check, which
+    /// stays with `openat2`.
+    fn write_fits(&self, rel: &str, len: u64) -> Result<(), ToolError> {
+        use std::os::unix::fs::MetadataExt;
+        let work = self.dir.work();
+        let old = std::fs::symlink_metadata(work.join(rel)).map(|m| m.blocks() * 512).unwrap_or(0);
+        let after = sandbox::disk_usage(&work).saturating_sub(old).saturating_add(len);
+        let max = self.policy.limits.workspace_bytes();
+        if after > max {
+            return Err(ToolError::new(format!(
+                "writing {len} bytes to `{rel}` would make the workspace larger than limits.workspace_mb ({} MiB); nothing was written",
+                self.policy.limits.workspace_mb
+            )));
+        }
+        Ok(())
+    }
+
+    /// Put the workspace back to the last checkpoint, after a command whose
+    /// changes cannot be kept. If this fails the runtime stops with the
+    /// intent open, and `agentos recover` rolls back the same way.
+    fn rollback_workspace(&self) -> Result<()> {
+        let base = self.dir.checkpoints().join(&self.last_checkpoint);
+        checkpoint::restore(&self.dir.work(), &base)
     }
 
     fn run_exec(&mut self, call_id: u64, argv: &[String]) -> Result<Result<ToolOutput, ToolError>> {
@@ -420,14 +447,34 @@ impl Gateway {
             parent_pid: std::process::id() as i32,
             uid: nix::unistd::getuid().as_raw(),
             gid: nix::unistd::getgid().as_raw(),
+            max_file_bytes: self.policy.limits.workspace_bytes(),
         };
         let cg = self.sandbox.cgroups.create(&sandbox::cgroup_name(&self.dir.id, call_id), &self.policy.limits)?;
         let timeout = std::time::Duration::from_secs(self.policy.limits.call_timeout_s);
         let max = (self.policy.limits.max_output_kb * 1024) as usize;
-        let result = sandbox::run(&self.sandbox.helper, &spec, &cg, timeout, max);
+        let disk = sandbox::DiskLimit { dir: work.clone(), max_bytes: self.policy.limits.workspace_bytes() };
+        let result = sandbox::run(&self.sandbox.helper, &spec, &cg, timeout, max, &disk);
         let _ = cg.destroy();
+        // Stopped while running, or over the limit when it ended (it may have
+        // finished between two measurements): either way it is undone, so no
+        // call leaves the workspace over the limit, and the checkpoint after
+        // it never copies what it wrote (D-117).
+        let over = match &result {
+            Ok((_, Some(Stopped::Disk(used)))) => Some(*used),
+            Ok(_) => Some(sandbox::disk_usage(&work)).filter(|u| *u > disk.max_bytes),
+            Err(_) => None,
+        };
+        if let Some(used) = over {
+            self.rollback_workspace()?;
+            return Ok(Err(ToolError::new(format!(
+                "the command made the workspace larger than limits.workspace_mb ({} MiB; measured {} MiB). \
+                 Everything this command changed was undone; the workspace is as it was before the call.",
+                self.policy.limits.workspace_mb,
+                used / (1024 * 1024)
+            ))));
+        }
         let mut out = match result {
-            Ok(out) => out,
+            Ok((out, _)) => out,
             Err(e) => return Ok(Err(e)),
         };
         // D-009: whatever the command changed outside the write globs is put back.

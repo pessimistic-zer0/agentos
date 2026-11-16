@@ -25,7 +25,7 @@ Rule of the project: no number without a script or a record that produces it. Ea
 
 ## What not to claim
 
-- Not "production-ready" or "secure": a seccomp deny list rather than an allow list, no disk limit, kernel bugs out of scope (`docs/threat-model.md` §4).
+- Not "production-ready" or "secure": a seccomp deny list rather than an allow list, a measured disk limit rather than a hard cap, kernel bugs out of scope (`docs/threat-model.md` §4).
 - Not "exactly-once": a cut-off command is rolled back and may be issued again; an external call is applied once only if the service honours the key.
 - Not "power-loss safe": the tests kill the process, they do not cut power.
 - Not "works with LLMs" as a general claim: one local 4B model, one-line tickets (`docs/results/`).

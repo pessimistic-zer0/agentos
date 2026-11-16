@@ -2838,6 +2838,39 @@ Other choices inside the filter: a call made with another architecture's numbers
 
 ---
 
+### D-117 — `limits.workspace_mb`: a measured disk limit; the command over it is killed and undone
+- **Date:** 2026-11-16
+- **Status:** Taken
+- **Area:** sandbox
+- **ADR:** 0010 (a note added; the decision there stands)
+
+**In plain words.** A sandboxed command could write until the disk was full. Now the policy has a size for the workspace. While a command runs, the runtime adds up the workspace's size every 50 ms; if it is over, the command is killed and everything it changed is put back, and the agent is told why. One single file can never grow past the size at all, because the kernel itself refuses that write. It is honest to call this a *measured* limit: between two measurements a very fast writer gets a little past it.
+
+**The problem.** ADR 0010: the only rootless hard cap on a folder is a tmpfs, and a tmpfs disappears when the runtime is killed, which breaks recovery. Quotas and loop-mounted images need root. The threat model listed "filling the disk" as out of scope.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Measure the workspace on the watchdog thread every 50 ms (or 10 × the time one measurement takes, if longer); kill the cgroup when over | Taken | Works without root on any filesystem; 2 µs per entry in the experiment, so a few percent of a core at most |
+| `RLIMIT_FSIZE` = the limit, set by the sandbox's init | Taken, as well | A real kernel cap, exact, but only per file. Covers the one-big-file case the measuring is slowest to catch |
+| Check once more when the command ends | Taken, as well | A command can finish between two measurements; with this no call ever leaves the workspace over the limit |
+| Undo a command that went over (restore the last checkpoint), call FAILED | Taken | Otherwise the checkpoint after it copies everything it wrote. The same rule as D-085: FAILED means nothing changed |
+| `fs.write` checks the size before writing | Taken | The limit would otherwise only hold for commands |
+| Refuse at the start (and in `agentos check`) when the copy of the repo is already over | Taken | Otherwise every command fails at its first measurement with no hint |
+| tmpfs; filesystem quotas; a loop-mounted image per execution | Discarded | ADR 0010: lost on kill, or need root |
+| btrfs qgroups, XFS project quotas | Discarded | Tied to one filesystem, and need privileges |
+| Only check after the command ends | Discarded | The disk is full by then |
+| Count checkpoints into the limit | Discarded for now | The limit is for what a command can do in one call; checkpoint growth is A3 (scratch folders) and pruning, which is parked |
+| Required field in the policy | Discarded | Would break every policy written before v1.0. Optional, default 2048 MiB |
+
+**What this means for the code.** `Limits.workspace_mb` (optional, default 2048, not zero). `sandbox::run` takes a `DiskLimit` and returns why the runtime stopped the command (`Stopped::Timeout` or `Stopped::Disk`); `sandbox::disk_usage` sums allocated blocks without following symlinks. `SandboxSpec.max_file_bytes` becomes `RLIMIT_FSIZE` in `ns::init`. `Gateway::run_exec` rolls back and fails the call when over; `Gateway::write_fits` guards `fs.write`. `runtime` refuses an over-size copy at start and in `check`. Four tests in `tests/hardening.rs`. The limit is the workspace's, not the execution's: checkpoints still add up.
+
+**Evidence.** Experiment `experiments/m11-disk-limit/NOTES.md`: a walk of 3,203 entries takes 5.4 to 6.2 ms; a 2.3 GB/s writer against a 200 MB limit is stopped 37 to 39 MB over at 100 ms and 20 to 23 MB over at 20 ms; `RLIMIT_FSIZE` gives Python `EFBIG` and kills `dd` with `SIGXFSZ`, the file exactly at the limit both times. The four tests pass; with `workspace_bytes()` temporarily returning "no limit" all four fail. `make test` on `nix`: 137 passed; clippy clean. Not yet verified on `fhs`.
+
+**Concepts to learn.** `st_blocks` vs file length (sparse files); `RLIMIT_FSIZE`, `EFBIG`, `SIGXFSZ`; why a polled limit has an overshoot; disk quotas; page cache.
+
+---
+
 ## Still open
 
 | Question | Notes |
@@ -2993,3 +3026,6 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | Classic BPF | A tiny instruction set (load, compare and jump, return) that the kernel runs safely; seccomp filters are written in it |
 | Deny list / allow list | A deny list names what is refused and allows the rest; an allow list names what is allowed and refuses the rest |
 | EPERM / ENOSYS | Error codes: "operation not permitted" and "function not implemented" |
+| RLIMIT_FSIZE | A per-process kernel limit on how large any one file it writes may become; the write that would pass it fails with EFBIG or the process gets SIGXFSZ |
+| Measured (polled) limit | A limit enforced by checking again and again; what happens between two checks is not prevented, only caught |
+| Sparse file / allocated blocks | A file can claim a length without using that much disk; `st_blocks` says what it really uses |

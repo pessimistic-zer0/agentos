@@ -124,6 +124,18 @@ pub fn create(opts: &RunOptions, agent: &dyn Agent) -> Result<(Gateway, File)> {
     }
 
     let report = workspace::create(&repo, &dir.work(), &policy)?;
+    // A copy that is already over the limit would make every command fail
+    // at its first measurement; say so now, with the fix (D-117).
+    let used = crate::sandbox::disk_usage(&dir.work());
+    if used > policy.limits.workspace_bytes() {
+        anyhow::bail!(
+            "the copy of the repository takes {} MiB, more than limits.workspace_mb ({} MiB). \
+             Raise limits.workspace_mb in the policy, or leave large folders out of the copy with filesystem.skip \
+             (they can still be mounted read-only with sandbox.ro_mounts). `agentos rm {id}` removes this execution.",
+            used / (1024 * 1024),
+            policy.limits.workspace_mb
+        );
+    }
     let base = checkpoint::name(0);
     checkpoint::create(&dir.work(), &dir.checkpoints(), &base)?;
     log.append(EventBody::WorkspaceCreated {
@@ -423,7 +435,24 @@ pub fn check(policy_path: Option<&Path>, repo: Option<&Path>) -> usize {
         (Some(_), None) => println!("repo: not checked (it needs a valid policy)"),
         (Some(repo), Some(policy)) => match std::fs::canonicalize(repo).map_err(anyhow::Error::from).and_then(|r| workspace::survey(&r, policy)) {
             Ok((report, bytes)) => {
-                println!("repo: ok ({} files, {:.1} MB would be copied into the workspace, and again at every change)", report.files_copied, bytes as f64 / 1e6);
+                if bytes > policy.limits.workspace_bytes() {
+                    fail(
+                        "repo",
+                        format!(
+                            "{} files, {} MiB would be copied, more than limits.workspace_mb ({} MiB): raise the limit, or leave large folders out with filesystem.skip",
+                            report.files_copied,
+                            bytes / (1024 * 1024),
+                            policy.limits.workspace_mb
+                        ),
+                    );
+                } else {
+                    println!(
+                        "repo: ok ({} files, {:.1} MB would be copied into the workspace, and again at every change; limit {} MiB)",
+                        report.files_copied,
+                        bytes as f64 / 1e6,
+                        policy.limits.workspace_mb
+                    );
+                }
                 let list = |what: &str, paths: &[String]| {
                     if !paths.is_empty() {
                         let shown: Vec<&str> = paths.iter().take(12).map(String::as_str).collect();

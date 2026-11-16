@@ -55,10 +55,12 @@ fn main() -> Result<()> {
             parent_pid: std::process::id() as i32,
             uid: nix::unistd::getuid().as_raw(),
             gid: nix::unistd::getgid().as_raw(),
+            max_file_bytes: policy.limits.workspace_bytes(),
         };
         let t = Instant::now();
         let cg = cgroups.create(&name, &policy.limits)?;
-        let out = sandbox::run(&helper, &spec, &cg, Duration::from_secs(10), 4096).map_err(|e| anyhow::anyhow!("{e}"))?;
+        let disk = sandbox::DiskLimit { dir: work.clone(), max_bytes: policy.limits.workspace_bytes() };
+        let (out, _) = sandbox::run(&helper, &spec, &cg, Duration::from_secs(10), 4096, &disk).map_err(|e| anyhow::anyhow!("{e}"))?;
         let d = t.elapsed();
         if out.exit_code != Some(0) {
             bail!("sandboxed true failed: {out:?}");

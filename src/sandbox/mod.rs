@@ -8,7 +8,7 @@
 //! | Process | user + PID namespace, no capabilities, `no_new_privs` | `ns.rs` |
 //! | System calls | seccomp deny list: namespaces, mounts, `bpf`, `ptrace`, `io_uring`, ... fail with `EPERM` | `seccomp.rs` |
 //! | Network | empty network namespace (loopback only) | `ns.rs` |
-//! | Resources | cgroup v2 limits; watchdog kills the cgroup | `cgroup.rs` |
+//! | Resources | cgroup v2 limits; watchdog kills the cgroup at the time limit or when the workspace is over `workspace_mb` | `cgroup.rs`, here |
 //! | Environment | cleared; only PATH, HOME, LANG | `gateway.rs` |
 
 pub mod beneath;
@@ -32,11 +32,60 @@ use crate::tools::{ExecOutput, ToolError};
 use cgroup::ExecCgroup;
 pub use ns::SandboxSpec;
 
+/// The workspace size limit for one command (D-117).
+#[derive(Debug, Clone)]
+pub struct DiskLimit {
+    /// The workspace on the host.
+    pub dir: PathBuf,
+    pub max_bytes: u64,
+}
+
+/// What ended a command early, if the runtime did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stopped {
+    Timeout,
+    /// The workspace measured this many bytes, over the limit.
+    Disk(u64),
+}
+
+/// The shortest time between two measurements of the workspace.
+const DISK_INTERVAL_MIN: Duration = Duration::from_millis(50);
+
+/// Bytes on disk below `dir`: allocated blocks, so a sparse file counts as
+/// what it really uses. Symlinks are not followed. Entries that vanish or
+/// cannot be read while the command runs are skipped; the walk is a
+/// measurement, not a record. About 2 µs per entry (experiment
+/// `m11-disk-limit`).
+pub fn disk_usage(dir: &Path) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    let mut bytes = 0u64;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else { continue };
+        for e in entries.flatten() {
+            let Ok(m) = e.metadata() else { continue };
+            bytes = bytes.saturating_add(m.blocks() * 512);
+            if m.is_dir() {
+                stack.push(e.path());
+            }
+        }
+    }
+    bytes
+}
+
 /// Run one command in a fresh sandbox inside `cg` and wait for it.
 ///
 /// `helper` is the agentos binary itself (it is started again as
-/// `agentos __sandbox-init`).
-pub fn run(helper: &Path, spec: &SandboxSpec, cg: &ExecCgroup, timeout: Duration, max_output: usize) -> Result<ExecOutput, ToolError> {
+/// `agentos __sandbox-init`). The second value says whether the runtime
+/// stopped the command (timeout or disk limit).
+pub fn run(
+    helper: &Path,
+    spec: &SandboxSpec,
+    cg: &ExecCgroup,
+    timeout: Duration,
+    max_output: usize,
+    disk: &DiskLimit,
+) -> Result<(ExecOutput, Option<Stopped>), ToolError> {
     let start = Instant::now();
     let fail = |m: String| ToolError::new(format!("sandbox: {m}"));
     let json = serde_json::to_string(spec).map_err(|e| fail(e.to_string()))?;
@@ -78,19 +127,39 @@ pub fn run(helper: &Path, spec: &SandboxSpec, cg: &ExecCgroup, timeout: Duration
         s
     });
 
-    // Watchdog: at the wall-clock limit, kill the whole cgroup in one step.
+    // Watchdog: at the wall-clock limit, or when the workspace has grown past
+    // its limit, kill the whole cgroup in one step. The workspace is measured
+    // every 50 ms, or ten times as long as one measurement takes, so a large
+    // workspace does not spend much of a core on being measured (D-117).
     let (done_tx, done_rx) = mpsc::channel::<()>();
     let cg_for_watchdog = cg.clone();
+    let disk = disk.clone();
     let watchdog = std::thread::spawn(move || {
-        if done_rx.recv_timeout(timeout).is_err() {
-            let _ = cg_for_watchdog.kill();
-            return true;
+        let deadline = start + timeout;
+        let mut interval = DISK_INTERVAL_MIN;
+        loop {
+            let now = Instant::now();
+            if now >= deadline {
+                let _ = cg_for_watchdog.kill();
+                return Some(Stopped::Timeout);
+            }
+            match done_rx.recv_timeout(interval.min(deadline - now)) {
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                _ => return None,
+            }
+            let t = Instant::now();
+            let used = disk_usage(&disk.dir);
+            if used > disk.max_bytes {
+                let _ = cg_for_watchdog.kill();
+                return Some(Stopped::Disk(used));
+            }
+            interval = DISK_INTERVAL_MIN.max(t.elapsed() * 10);
         }
-        false
     });
     let wait = child.wait();
     let _ = done_tx.send(());
-    let timed_out = watchdog.join().unwrap_or(false);
+    let stopped = watchdog.join().unwrap_or(None);
+    let timed_out = stopped == Some(Stopped::Timeout);
     let oom = cg.oom_killed();
     let pids_hit = cg.pids_limit_hit();
     // Anything still in the group (there should be nothing once PID 1 is
@@ -129,7 +198,7 @@ pub fn run(helper: &Path, spec: &SandboxSpec, cg: &ExecCgroup, timeout: Duration
     if pids_hit {
         stderr_text.push_str("\n[agentos] the command hit limits.pids; some fork() calls failed\n");
     }
-    Ok(ExecOutput {
+    let out = ExecOutput {
         exit_code,
         signal,
         timed_out,
@@ -138,7 +207,8 @@ pub fn run(helper: &Path, spec: &SandboxSpec, cg: &ExecCgroup, timeout: Duration
         truncated: out_cut || err_cut,
         duration_ms: start.elapsed().as_millis() as u64,
         reverted: Vec::new(),
-    })
+    };
+    Ok((out, stopped))
 }
 
 /// Check, at startup, that this machine can run the sandbox. Returns every

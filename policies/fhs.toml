@@ -54,3 +54,8 @@ cpu_percent    = 200
 call_timeout_s = 60
 max_output_kb  = 64
 max_tool_calls = 50
+# Size of the workspace on disk, in MiB. A command that takes it past this is
+# stopped and undone. Measured every 50 ms, so a fast writer can pass it
+# briefly; one file can never be larger. Each change is also copied into a
+# checkpoint, so an execution can use several times this.
+workspace_mb   = 2048

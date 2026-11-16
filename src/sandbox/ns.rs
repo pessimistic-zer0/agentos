@@ -63,6 +63,8 @@ pub struct SandboxSpec {
     pub parent_pid: i32,
     pub uid: u32,
     pub gid: u32,
+    /// No file the command writes may grow past this (`RLIMIT_FSIZE`; D-117).
+    pub max_file_bytes: u64,
 }
 
 /// The fd the status pipe is placed on in the helper.
@@ -244,6 +246,14 @@ fn init(spec: &SandboxSpec, status: &mut fs::File) -> Result<i32> {
     drop_privileges()?;
     let ro: Vec<&Path> = spec.ro_mounts.iter().map(|p| p.as_path()).collect();
     landlock::restrict(&ro).context("applying Landlock")?;
+    // One file can never be larger than the whole workspace may be. The
+    // kernel enforces it on every write: EFBIG, or SIGXFSZ for programs that
+    // do not ignore that signal. Inherited by the command (D-117).
+    let cap = libc::rlimit { rlim_cur: spec.max_file_bytes, rlim_max: spec.max_file_bytes };
+    // SAFETY: setrlimit reads one rlimit struct that lives on this stack.
+    if unsafe { libc::setrlimit(libc::RLIMIT_FSIZE, &cap) } != 0 {
+        bail!("setting RLIMIT_FSIZE: {}", std::io::Error::last_os_error());
+    }
     // Last: from here on C makes only the calls an init needs (fork, wait,
     // write), none of them refused.
     super::seccomp::install()?;

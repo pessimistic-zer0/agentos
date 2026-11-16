@@ -140,7 +140,7 @@ impl CgroupRoot {
     /// Create a throwaway group, set all three limits, remove it. If this
     /// works, a real exec group will work too.
     fn probe(&self) -> Result<()> {
-        let limits = Limits { memory_mb: 64, pids: 16, cpu_percent: 100, call_timeout_s: 1, max_output_kb: 1, max_tool_calls: 1 };
+        let limits = Limits { memory_mb: 64, pids: 16, cpu_percent: 100, call_timeout_s: 1, max_output_kb: 1, max_tool_calls: 1, workspace_mb: 1 };
         let name = format!("agentos-probe-{}", std::process::id());
         let cg = self
             .create(&name, &limits)

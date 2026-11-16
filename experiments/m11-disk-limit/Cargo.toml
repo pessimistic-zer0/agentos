@@ -1,0 +1,12 @@
+[package]
+name = "m11-disk-limit"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# M11 experiment (D-114, A2): how fast can the size of a workspace be
+# measured, and how far past a limit does a fast writer get before a
+# watcher that measures every N ms stops it? Standard library only.
+[dependencies]
+
+[workspace]

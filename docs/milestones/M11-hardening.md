@@ -5,7 +5,7 @@
 | Weeks in the plan | v1.0 (D-114); no week plan |
 | Started / finished | 2026-11-16 / in progress |
 | Commits | `8628ac0` (scope) … (tag `m11` only after a green CI run, D-113) |
-| Status | In progress: A1 built; A2 and A3 not started |
+| Status | In progress: A1 and A2 built; A3 not started |
 
 Write this document for a reader who is new to Rust and Linux internals. Plain words first, the real term next to it. Fill it in while working.
 
@@ -22,7 +22,7 @@ Before the first item, CI on `main` was red: the TOCTOU race test's own check th
 | CI's red TOCTOU test fixed without lowering a bar | On `nix` yes; `fhs` not yet verified | D-115; `cargo test --test security toctou` passes in 1 attempt (7,022 swaps); slowed by hand: passes in 3 attempts at 5 ms, fails after 5 at 60 ms |
 | A1: namespaces, mounts, `bpf`, `ptrace`, `io_uring`, `perf_event_open`, key rings refused inside the sandbox | On `nix` yes; `fhs` not yet verified | `seccomp_refuses_namespaces_mounts_and_kernel_interfaces`: fails before the change (`unshare-user OK`, `unshare-mount OK`, `ptrace OK`), passes after |
 | A1: real test commands still work | On `nix` yes | Experiment `m11-seccomp`; `agentos run` with the second trial's Rust and npm policies gives the trial's results; `make test` 133 passed |
-| A2: a disk limit | Not started | |
+| A2: a command cannot take the workspace past `limits.workspace_mb` and leave it there | On `nix` yes; `fhs` not yet verified | `tests/hardening.rs`: `a_command_that_fills_the_workspace_is_stopped_and_undone`, `one_file_cannot_grow_past_the_limit`, `fs_write_past_the_limit_writes_nothing`, `a_repository_larger_than_the_limit_is_refused_at_the_start`; all four fail with the limit switched off by hand. It is a measured limit, not a hard cap (D-117) |
 | A3: scratch folders out of checkpoints | Not started | |
 | Both presets pass | `nix` yes; `fhs` not yet verified | needs a push and a CI run |
 
@@ -40,7 +40,10 @@ Before the first item, CI on `main` was red: the TOCTOU race test's own check th
 
 | Experiment | What it tried | What happened | What it taught |
 |---|---|---|---|
+| `experiments/m11-disk-limit/` | Timed a size walk; raced a 2.3 GB/s writer against a watcher; tried `RLIMIT_FSIZE` | Walk: 2 µs per entry. Overshoot 20 to 40 MB at 20 to 100 ms. `RLIMIT_FSIZE` stops one file exactly | Measuring is cheap enough; the overshoot is speed × interval and must be stated; the per-file cap is worth adding |
 | `experiments/m11-seccomp/` | The planned filter, by hand with `libc`, run on its own and in front of cargo, node, pytest, Python's threads, subprocess and multiprocessing, a shell pipe | Refused calls give `EPERM`, `clone3` `ENOSYS`; every toolchain gives the same results as without the filter | A deny list breaks none of the trial projects; `clone3` must say `ENOSYS`; no new crate is needed |
+
+**Measured limit.** The kernel can cap a process's memory (cgroups) but, without root, not a folder's size. So the runtime looks: it adds up the size of every file in the workspace again and again while the command runs. What happens between two looks is not prevented, only caught at the next one. The one thing the kernel does cap without root is the size of a single file a process writes (`RLIMIT_FSIZE`).
 
 ## 5. What was built
 
@@ -48,6 +51,11 @@ Before the first item, CI on `main` was red: the TOCTOU race test's own check th
 |---|---|
 | `src/sandbox/seccomp.rs` | The list of refused calls, the BPF program, `install()`, two unit tests |
 | `src/sandbox/ns.rs` | `init` (the sandbox's PID 1) installs the filter right after Landlock |
+| `src/policy.rs` | `limits.workspace_mb` (optional, default 2048) |
+| `src/sandbox/mod.rs` | `disk_usage`, `DiskLimit`, `Stopped`; the watchdog thread now also measures |
+| `src/gateway.rs` | A command over the limit is rolled back and FAILED; `write_fits` for `fs.write` |
+| `src/runtime.rs` | An over-size repository copy is refused at the start and by `check` |
+| `tests/hardening.rs` | Four disk-limit tests |
 | `tests/security/main.rs` | `seccomp_refuses_namespaces_mounts_and_kernel_interfaces`; the TOCTOU test split into `toctou_attempt` + a loop (D-115) |
 
 Where the filter sits in the start of a command (from `ns.rs`):
@@ -99,12 +107,19 @@ Starting a process or a thread uses `clone` or `clone3`, and both can also ask f
 
 **The test.** A Python script calls each refused system call through `ctypes` with harmless arguments and prints the error name. It requires `EPERM` exactly, because several of these calls fail anyway without a filter (bad arguments give `EFAULT` or `EINVAL`), and "it raised" would prove nothing. `PTRACE_TRACEME` runs in a forked child: if it succeeds (no filter), the process is traced by the sandbox's init and stops at its next signal, which hung the first version of the test for 20 s.
 
+**The watchdog loop (`sandbox::run`).** One thread already waited for "the command ended" or "the time limit passed". It now wakes every `interval`, calls `disk_usage`, and kills the cgroup if the result is over. `interval` starts at 50 ms and becomes ten times the duration of the last walk if that is longer, so measuring never takes more than about a tenth of a core. `recv_timeout` on a channel is how a Rust thread sleeps *until either* a message arrives *or* a time passes.
+
+**`disk_usage`** adds `st_blocks × 512` (what a file really uses on disk; a "sparse" file can claim more than it uses) and does not follow symlinks. Errors are skipped: files vanish while a command runs, and this is a measurement, not a record.
+
+**`Gateway::run_exec`** measures once more after the command ends, because it may have ended between two looks. Over the limit either way: restore the last checkpoint, fail the call. That keeps the rule that FAILED means "nothing changed".
+
 ## 7. Decisions made
 
 | Entry | Decision | Discarded alternatives |
 |---|---|---|
 | D-114 | The v1.0 scope: eleven items, milestones M11 to M14 | A smaller list; hardening and release only |
 | D-115 | The TOCTOU test repeats the run (up to five) and adds the counts; bars unchanged | Lowering the bar; spinning instead of sleeping; rerunning CI |
+| D-117 | `limits.workspace_mb`: measured every 50 ms, `RLIMIT_FSIZE` per file, the command undone when over | tmpfs, quotas, loop image (ADR 0010); checking only at the end; counting checkpoints |
 | D-116 | seccomp as a hand-written deny list in C after Landlock; `EPERM`, `ENOSYS` for `clone3` | Allow list; a seccomp crate; killing; a policy switch; installing in G |
 
 ## 8. Problems hit
@@ -116,7 +131,7 @@ Starting a process or a thread uses `clone` or `clone3`, and both can also ask f
 ## 9. How to run it
 
 ```sh
-nix develop -c make test                     # 133 passed on nix
+nix develop -c make test                     # 137 passed on nix
 systemd-run --user --scope -p Delegate=yes cargo test --test security seccomp -- --nocapture
 cd experiments/m11-seccomp && nix develop ../.. -c cargo build --offline && target/debug/m11-seccomp selftest
 ```
@@ -124,6 +139,7 @@ cd experiments/m11-seccomp && nix develop ../.. -c cargo build --offline && targ
 ## 10. What this milestone does not do
 
 - The filter is a deny list. Every call not on it is allowed, which is more kernel surface than an allow list leaves.
+- The disk limit is measured: a fast writer passes it by about speed × 50 ms before it is stopped. It bounds the workspace, not the execution: checkpoints add up and are never pruned.
 - Only x86_64 has been built and run; the aarch64 numbers come from `libc` and are untested.
 
 ## 11. Check your understanding

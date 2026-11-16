@@ -16,3 +16,6 @@ A command can fill the disk. This is stated as a known limit in the README and t
 
 ## Look again if
 Disk filling matters in practice. Options: filesystem quotas (need root or a project-quota setup), or a loop-mounted image file per execution.
+
+## Later (2026-11-16, D-117)
+Still on disk and still no hard cap. `limits.workspace_mb` adds a measured limit: `RLIMIT_FSIZE` for one file, a size walk every 50 ms for the whole, and the command undone when over.

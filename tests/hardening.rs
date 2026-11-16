@@ -672,3 +672,80 @@ fn stopping_a_run_says_how_to_go_on_and_the_run_can_go_on() {
         assert!(!t.exec_dir(&id).join("work/src/ready").exists(), "{signal}: the stopped command's file was rolled back");
     }
 }
+
+// ---------------------------------------------------------------------------
+// D-117: the workspace size limit (`limits.workspace_mb`).
+// ---------------------------------------------------------------------------
+
+fn policy_with_workspace_mb(mb: u64) -> String {
+    let text = policy_with_python();
+    assert!(!text.contains("workspace_mb"));
+    text.replace("[limits]\n", &format!("[limits]\nworkspace_mb = {mb}\n"))
+}
+
+#[test]
+fn a_command_that_fills_the_workspace_is_stopped_and_undone() {
+    // 1 MB files as fast as Python can write them, far past a 20 MiB limit,
+    // then a long sleep: only the watcher can end the command before the call
+    // timeout, so this tests the measuring while it runs, not only the check
+    // after it ends.
+    let t = TestEnv::new("disk-many").with_policy_text(&policy_with_workspace_mb(20));
+    let code = "os.makedirs('src/fill')\nb = b'x' * (1 << 20)\nfor i in range(500):\n    open(f'src/fill/f{i}', 'wb').write(b)\ntime.sleep(120)";
+    let script = t.write_script("s.toml", &format!("task = \"fill\"\n{}[[step]]\ntool = \"fs.list\"\npath = \"src\"\n", exec_step(code)));
+    let start = Instant::now();
+    let id = t.run_script(script.to_str().unwrap());
+    let events = t.events(&id);
+    let failed = event(&events, "tool.failed", 1).unwrap_or_else(|| panic!("call 1 did not fail: {events:#?}"));
+    let error = failed["error"].as_str().unwrap();
+    assert!(error.contains("limits.workspace_mb (20 MiB") && error.contains("was undone"), "{error}");
+    let listed = t.output_of(&id, &events, 2).expect("call 2 completed");
+    let names: Vec<&str> = listed["entries"].as_array().unwrap().iter().map(|e| e["name"].as_str().unwrap()).collect();
+    assert_eq!(names, vec!["stats.py"], "the command's files are gone");
+    assert_work_equals_last_checkpoint(&t, &id);
+    assert!(start.elapsed() < Duration::from_secs(30), "stopped by the size limit, not by a timeout");
+}
+
+#[test]
+fn one_file_cannot_grow_past_the_limit() {
+    // RLIMIT_FSIZE: the kernel refuses the write that would take one file
+    // past the limit. The command sees EFBIG, cleans up, and its call is kept.
+    let t = TestEnv::new("disk-one").with_policy_text(&policy_with_workspace_mb(8));
+    let code = "f = open('src/big.bin', 'wb')\ntry:\n    for i in range(20):\n        f.write(b'x' * (1 << 20)); f.flush()\nexcept OSError as e:\n    print('refused at', f.tell(), e.strerror)\nf.close()\nos.remove('src/big.bin')";
+    let script = t.write_script("s.toml", &format!("task = \"one file\"\n{}", exec_step(code)));
+    let id = t.run_script(script.to_str().unwrap());
+    let events = t.events(&id);
+    let out = t.output_of(&id, &events, 1).unwrap_or_else(|| panic!("call 1 did not complete: {events:#?}"));
+    assert_eq!(out["stdout"].as_str().unwrap().trim(), format!("refused at {} File too large", 8 << 20));
+}
+
+#[test]
+fn fs_write_past_the_limit_writes_nothing() {
+    let t = TestEnv::new("disk-write").with_policy_text(&policy_with_workspace_mb(1));
+    let big = "x".repeat(1100 * 1024);
+    let script = t.write_script(
+        "s.toml",
+        &format!("task = \"big write\"\n[[step]]\ntool = \"fs.write\"\npath = \"src/big.txt\"\ncontent = \"{big}\"\n[[step]]\ntool = \"fs.write\"\npath = \"src/small.txt\"\ncontent = \"ok\"\n"),
+    );
+    let id = t.run_script(script.to_str().unwrap());
+    let events = t.events(&id);
+    let failed = event(&events, "tool.failed", 1).unwrap_or_else(|| panic!("call 1 did not fail: {events:#?}"));
+    assert!(failed["error"].as_str().unwrap().contains("nothing was written"), "{}", failed["error"]);
+    assert!(event(&events, "tool.completed", 2).is_some(), "a small write still works");
+    assert!(!t.exec_dir(&id).join("work/src/big.txt").exists());
+    assert!(t.exec_dir(&id).join("work/src/small.txt").exists());
+}
+
+#[test]
+fn a_repository_larger_than_the_limit_is_refused_at_the_start() {
+    let t = TestEnv::new("disk-repo").with_policy_text(&policy_with_workspace_mb(1));
+    let repo = t.root.join("bigrepo");
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(repo.join("src/data.bin"), vec![7u8; 2 << 20]).unwrap();
+    let check = t.output(&["check", "--policy", t.policy.to_str().unwrap(), "--repo", repo.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&check.stdout).to_string() + &String::from_utf8_lossy(&check.stderr);
+    assert!(!check.status.success() && text.contains("limits.workspace_mb (1 MiB)"), "check:\n{text}");
+    let script = t.write_script("s.toml", "task = \"x\"\n[[step]]\ntool = \"fs.list\"\npath = \"src\"\n");
+    let out = t.output(&run_args(&t, &script, &repo).iter().map(String::as_str).collect::<Vec<_>>());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success() && err.contains("more than limits.workspace_mb (1 MiB)") && err.contains("filesystem.skip"), "{err}");
+}
