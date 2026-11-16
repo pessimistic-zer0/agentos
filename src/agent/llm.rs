@@ -296,7 +296,9 @@ impl LlmAgent {
                 }
                 None
             }
-            (ToolCall::FsWrite { path, content }, _) => {
+            // Base64 content is not lines of text; nothing to compare.
+            (ToolCall::FsWrite { encoding: Some(_), .. }, _) => None,
+            (ToolCall::FsWrite { path, content, .. }, _) => {
                 let old = self.seen.insert(path.clone(), content.clone())?;
                 let kept: std::collections::HashSet<&str> = content.lines().map(str::trim).collect();
                 let dropped: Vec<&str> = old.lines().map(str::trim).filter(|l| !l.is_empty() && !kept.contains(l)).collect();
@@ -495,13 +497,16 @@ fn tool_schemas() -> Value {
         f("fs_read", "Read a text file. A file that is too large is refused unless you ask for part of it with start_line and max_lines.",
           json!({"path": path,
                  "start_line": {"type": "integer", "description": "Optional. First line to return, counting from 1"},
-                 "max_lines": {"type": "integer", "description": "Optional. How many lines to return"}}), &["path"]),
+                 "max_lines": {"type": "integer", "description": "Optional. How many lines to return"},
+                 "encoding": {"type": "string", "enum": ["base64"], "description": "Optional. Only for a file that is not text: returns its bytes as base64"}}), &["path"]),
         f("fs_edit", "Change part of an existing text file: replace old_str with new_str. old_str must be in the file exactly once, character for character. Use this, not fs_write, to change a file that exists.",
           json!({"path": path,
                  "old_str": {"type": "string", "description": "The exact text to replace, copied from the file; include enough surrounding lines that it occurs only once"},
                  "new_str": {"type": "string", "description": "The text that takes its place"}}), &["path", "old_str", "new_str"]),
         f("fs_write", "Replace a file with new content (the whole file). A new file may be in a folder that does not exist yet; the folder is made.",
-          json!({"path": path, "content": {"type": "string", "description": "The complete new content of the file"}}), &["path", "content"]),
+          json!({"path": path, "content": {"type": "string", "description": "The complete new content of the file"},
+                 "executable": {"type": "boolean", "description": "Optional. true makes the file runnable (a script); leave it out to keep the file as it is"},
+                 "encoding": {"type": "string", "enum": ["base64"], "description": "Optional. Only for a binary file: content is then base64"}}), &["path", "content"]),
         f("exec", "Run an allowed command, given as a list of arguments (no shell). Example: [\"pytest\", \"-q\"].",
           json!({"argv": {"type": "array", "items": {"type": "string"}}}), &["argv"]),
     ])
@@ -514,6 +519,8 @@ fn parse_call(name: &str, args: &str) -> Result<ToolCall> {
         content: Option<String>,
         old_str: Option<String>,
         new_str: Option<String>,
+        encoding: Option<String>,
+        executable: Option<bool>,
         argv: Option<Vec<String>>,
         start_line: Option<u64>,
         max_lines: Option<u64>,
@@ -522,8 +529,13 @@ fn parse_call(name: &str, args: &str) -> Result<ToolCall> {
     let path = || a.path.clone().context("missing `path`");
     Ok(match name {
         "fs_list" => ToolCall::FsList { path: path()? },
-        "fs_read" => ToolCall::FsRead { path: path()?, start_line: a.start_line, max_lines: a.max_lines },
-        "fs_write" => ToolCall::FsWrite { path: path()?, content: a.content.clone().context("missing `content`")? },
+        "fs_read" => ToolCall::FsRead { path: path()?, start_line: a.start_line, max_lines: a.max_lines, encoding: a.encoding.clone() },
+        "fs_write" => ToolCall::FsWrite {
+            path: path()?,
+            content: a.content.clone().context("missing `content`")?,
+            encoding: a.encoding.clone(),
+            executable: a.executable,
+        },
         "fs_edit" => ToolCall::FsEdit {
             path: path()?,
             old_str: a.old_str.clone().context("missing `old_str`")?,
@@ -542,8 +554,9 @@ fn render_result(r: &ToolResult) -> String {
         (ToolOutcome::NotApplied { reason }, _) => {
             format!("NOT APPLIED: the runtime was restarted while this call was in flight. {reason}. If you still need it, call the tool again.")
         }
-        (ToolOutcome::Ok, Some(ToolOutput::Read { content, lines: None })) => content.clone(),
-        (ToolOutcome::Ok, Some(ToolOutput::Read { content, lines: Some(l) })) => {
+        (ToolOutcome::Ok, Some(ToolOutput::Read { content, encoding: Some(e), .. })) => format!("[the file's bytes as {e}]\n{content}"),
+        (ToolOutcome::Ok, Some(ToolOutput::Read { content, lines: None, .. })) => content.clone(),
+        (ToolOutcome::Ok, Some(ToolOutput::Read { content, lines: Some(l), .. })) => {
             format!("[lines {}-{} of {}; this is only part of the file]\n{content}", l.first, l.last, l.total)
         }
         (ToolOutcome::Ok, Some(ToolOutput::List { entries })) => {
@@ -587,16 +600,29 @@ mod tests {
 
     #[test]
     fn tool_calls_are_parsed_strictly() {
-        assert_eq!(parse_call("fs_read", r#"{"path":"a.py"}"#).unwrap(), ToolCall::FsRead { path: "a.py".into(), start_line: None, max_lines: None });
+        assert_eq!(parse_call("fs_read", r#"{"path":"a.py"}"#).unwrap(), ToolCall::FsRead { path: "a.py".into(), start_line: None, max_lines: None, encoding: None });
         assert_eq!(
             parse_call("fs_read", r#"{"path":"big.csv","start_line":100,"max_lines":50}"#).unwrap(),
-            ToolCall::FsRead { path: "big.csv".into(), start_line: Some(100), max_lines: Some(50) }
+            ToolCall::FsRead { path: "big.csv".into(), start_line: Some(100), max_lines: Some(50), encoding: None }
         );
         assert_eq!(
             parse_call("exec", r#"{"argv":["pytest","-q"]}"#).unwrap(),
             ToolCall::Exec { argv: vec!["pytest".into(), "-q".into()] }
         );
         assert!(parse_call("fs_write", r#"{"path":"a.py"}"#).is_err(), "content is required");
+        assert_eq!(
+            parse_call("fs_write", r#"{"path":"run.sh","content":"IyEvYmluL3NoCg==","encoding":"base64","executable":true}"#).unwrap(),
+            ToolCall::FsWrite { path: "run.sh".into(), content: "IyEvYmluL3NoCg==".into(), encoding: Some("base64".into()), executable: Some(true) }
+        );
+        assert_eq!(
+            parse_call("fs_read", r#"{"path":"logo.png","encoding":"base64"}"#).unwrap(),
+            ToolCall::FsRead { path: "logo.png".into(), start_line: None, max_lines: None, encoding: Some("base64".into()) }
+        );
+        // A script step or an old log without the new fields still reads.
+        assert_eq!(
+            serde_json::from_str::<ToolCall>(r#"{"tool":"fs.write","path":"a","content":"x"}"#).unwrap(),
+            ToolCall::FsWrite { path: "a".into(), content: "x".into(), encoding: None, executable: None }
+        );
         assert!(parse_call("shell", r#"{"cmd":"rm -rf /"}"#).is_err(), "unknown tools are refused");
         assert!(parse_call("exec", "not json").is_err());
     }
@@ -607,7 +633,7 @@ mod tests {
         assert!(render_result(&r).starts_with("DENIED by policy"));
         let r = ToolResult { call_id: 1, outcome: ToolOutcome::NotApplied { reason: "rolled back".into() }, output: None };
         assert!(render_result(&r).contains("call the tool again"));
-        let long = ToolResult { call_id: 1, outcome: ToolOutcome::Ok, output: Some(ToolOutput::Read { content: "x".repeat(50_000), lines: None }) };
+        let long = ToolResult { call_id: 1, outcome: ToolOutcome::Ok, output: Some(ToolOutput::Read { content: "x".repeat(50_000), lines: None, encoding: None }) };
         assert!(render_result(&long).len() < 13_000);
     }
 
@@ -619,20 +645,20 @@ mod tests {
     fn a_write_that_drops_lines_gets_a_warning() {
         let mut a = agent();
         let old = "def mean(v):\n    return 1\n\ndef median(v):\n    x = sorted(v)\n    return x[0]\n\ndef mode(v):\n    return v[0]\n";
-        a.last_call = Some(ToolCall::FsRead { path: "s.py".into(), start_line: None, max_lines: None });
-        let read = ToolResult { call_id: 1, outcome: ToolOutcome::Ok, output: Some(ToolOutput::Read { content: old.into(), lines: None }) };
+        a.last_call = Some(ToolCall::FsRead { path: "s.py".into(), start_line: None, max_lines: None, encoding: None });
+        let read = ToolResult { call_id: 1, outcome: ToolOutcome::Ok, output: Some(ToolOutput::Read { content: old.into(), lines: None, encoding: None }) };
         assert_eq!(a.track_file_content(&read), None);
         // Only one function sent back: five lines are gone.
-        a.last_call = Some(ToolCall::FsWrite { path: "s.py".into(), content: "def mean(v):\n    return 2\n".into() });
+        a.last_call = Some(ToolCall::FsWrite { path: "s.py".into(), content: "def mean(v):\n    return 2\n".into(), encoding: None, executable: None });
         let wrote = ToolResult { call_id: 2, outcome: ToolOutcome::Ok, output: Some(ToolOutput::Write { bytes: 10 }) };
         let w = a.track_file_content(&wrote).expect("a warning");
         assert!(w.contains("`def median(v):`"), "{w}");
         // A one-line fix of the whole file: no warning.
         a.seen.insert("s.py".into(), old.into());
-        a.last_call = Some(ToolCall::FsWrite { path: "s.py".into(), content: old.replace("return 1", "return 2") });
+        a.last_call = Some(ToolCall::FsWrite { path: "s.py".into(), content: old.replace("return 1", "return 2"), encoding: None, executable: None });
         assert_eq!(a.track_file_content(&wrote), None);
         // A file never read: nothing to compare with.
-        a.last_call = Some(ToolCall::FsWrite { path: "new.py".into(), content: "x = 1\n".into() });
+        a.last_call = Some(ToolCall::FsWrite { path: "new.py".into(), content: "x = 1\n".into(), encoding: None, executable: None });
         assert_eq!(a.track_file_content(&wrote), None);
     }
 
@@ -644,7 +670,7 @@ mod tests {
             a.note_call(&list);
             assert_eq!(a.repeat_count(), Some(n));
         }
-        a.note_call(&ToolCall::FsWrite { path: "a".into(), content: "x".into() });
+        a.note_call(&ToolCall::FsWrite { path: "a".into(), content: "x".into(), encoding: None, executable: None });
         assert_eq!(a.repeat_count(), None, "a write starts the counts again");
         a.note_call(&list);
         assert_eq!(a.repeat_count(), Some(1));

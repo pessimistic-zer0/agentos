@@ -72,7 +72,7 @@ fn bench(c: &mut Criterion) {
         b.iter(|| {
             i += 1;
             let t = Instant::now();
-            let r = gw.handle(ToolCall::FsWrite { path: "src/bench.py".into(), content: content(i) }).unwrap();
+            let r = gw.handle(ToolCall::FsWrite { path: "src/bench.py".into(), content: content(i), encoding: None, executable: None }).unwrap();
             agentos_samples.push(t.elapsed().as_secs_f64() * 1e6);
             assert_eq!(r.outcome, ToolOutcome::Ok);
         })

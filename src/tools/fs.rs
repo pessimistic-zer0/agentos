@@ -70,12 +70,16 @@ const MAX_SCANNED_BYTES: u64 = 256 * 1024 * 1024;
 /// fit in `max_bytes`. With one (`start_line`, `max_lines`; lines count
 /// from 1): those lines, as many whole lines as fit in `max_bytes`, plus
 /// which lines they are and how many the file has (D-102).
+///
+/// `base64`: return the file's bytes as base64 text instead (D-123). The
+/// limit then applies to that text, which is a third longer than the file.
 pub fn read(
     fd: OwnedFd,
     rel: &str,
     max_bytes: u64,
     start_line: Option<u64>,
     max_lines: Option<u64>,
+    base64: bool,
 ) -> Result<(String, Option<crate::tools::ReadLines>), ToolError> {
     let st = fstat(&fd).map_err(|e| errno(rel, e))?;
     let kind = SFlag::from_bits_truncate(st.st_mode) & SFlag::S_IFMT;
@@ -86,7 +90,23 @@ pub fn read(
         // FIFOs, sockets, devices: reading them can block or never end.
         return Err(ToolError::new(format!("`{}` is not a regular file", show(rel))));
     }
-    let not_text = || ToolError::new(format!("`{}` is not UTF-8 text", show(rel)));
+    let not_text = || ToolError::new(format!("`{}` is not UTF-8 text; to get its bytes, read it with encoding = \"base64\"", show(rel)));
+    if base64 {
+        if start_line.is_some() || max_lines.is_some() {
+            return Err(ToolError::new("start_line and max_lines are for text; they cannot be used with encoding = \"base64\""));
+        }
+        let coded = (st.st_size as u64).div_ceil(3) * 4;
+        if coded > max_bytes {
+            return Err(ToolError::new(format!(
+                "`{}` is {} bytes, which is {coded} characters of base64, more than the {max_bytes}-byte limit (limits.max_output_kb)",
+                show(rel),
+                st.st_size
+            )));
+        }
+        let mut bytes = Vec::new();
+        File::from(fd).take(max_bytes).read_to_end(&mut bytes).map_err(|e| io(rel, e))?;
+        return Ok((crate::tools::base64::encode(&bytes), None));
+    }
     if start_line.is_none() && max_lines.is_none() {
         if st.st_size as u64 > max_bytes {
             return Err(ToolError::new(format!(
@@ -163,7 +183,8 @@ pub fn list(fd: OwnedFd, rel: &str) -> Result<Vec<ListEntry>, ToolError> {
             SFlag::S_IFLNK => "symlink",
             _ => "other",
         };
-        out.push(ListEntry { name, kind: kind.into(), size: st.st_size as u64 });
+        let executable = kind == "file" && st.st_mode & 0o100 != 0;
+        out.push(ListEntry { name, kind: kind.into(), size: st.st_size as u64, executable });
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(out)
@@ -334,9 +355,13 @@ pub fn temp_name(call_id: u64) -> String {
 /// form (also as a symlink), and the new folder is then opened with
 /// `O_NOFOLLOW`, so this never walks through a link. If the write fails
 /// afterwards, the folders are removed again: FAILED means nothing changed.
-pub fn write(t: &WriteTarget, content: &str, call_id: u64) -> Result<u64, ToolError> {
+///
+/// `mode`: the permission bits the file gets. `None` keeps the mode of the
+/// file being replaced (0644 for a new one). The bits are set on the
+/// temporary file before the rename, so content and mode change together.
+pub fn write(t: &WriteTarget, content: &[u8], mode: Option<u32>, call_id: u64) -> Result<u64, ToolError> {
     if t.missing.is_empty() {
-        return write_in(&t.parent, &t.name, &t.rel, content, call_id);
+        return write_in(&t.parent, &t.name, &t.rel, content, mode, call_id);
     }
     // (folder above, name) of each folder made, to undo in reverse order.
     let mut made: Vec<(OwnedFd, &str)> = Vec::new();
@@ -352,7 +377,7 @@ pub fn write(t: &WriteTarget, content: &str, call_id: u64) -> Result<u64, ToolEr
             made.push((cur, comp.as_str()));
             cur = next.map_err(|e| errno(&t.rel, e))?;
         }
-        write_in(&cur, &t.name, &t.rel, content, call_id)
+        write_in(&cur, &t.name, &t.rel, content, mode, call_id)
     })();
     if result.is_err() {
         for (above, name) in made.iter().rev() {
@@ -363,7 +388,7 @@ pub fn write(t: &WriteTarget, content: &str, call_id: u64) -> Result<u64, ToolEr
 }
 
 /// The atomic replace itself, in a folder that exists.
-fn write_in(parent: &OwnedFd, name: &str, rel: &str, content: &str, call_id: u64) -> Result<u64, ToolError> {
+fn write_in(parent: &OwnedFd, name: &str, rel: &str, content: &[u8], mode: Option<u32>, call_id: u64) -> Result<u64, ToolError> {
     struct T<'a> {
         parent: &'a OwnedFd,
         name: &'a str,
@@ -372,9 +397,10 @@ fn write_in(parent: &OwnedFd, name: &str, rel: &str, content: &str, call_id: u64
     let t = T { parent, name, rel };
     let tmp = temp_name(call_id);
     // Keep the mode of the file being replaced; new files get 0644 (minus umask).
-    let mode = match fstatat(t.parent, t.name, nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW) {
-        Ok(st) => Mode::from_bits_truncate(st.st_mode & 0o7777),
-        Err(_) => Mode::from_bits_truncate(0o644),
+    let mode = match (mode, fstatat(t.parent, t.name, nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW)) {
+        (Some(bits), _) => Mode::from_bits_truncate(bits),
+        (None, Ok(st)) => Mode::from_bits_truncate(st.st_mode & 0o7777),
+        (None, Err(_)) => Mode::from_bits_truncate(0o644),
     };
     let result = (|| -> Result<(), ToolError> {
         let fd = openat(
@@ -385,7 +411,7 @@ fn write_in(parent: &OwnedFd, name: &str, rel: &str, content: &str, call_id: u64
         )
         .map_err(|e| errno(t.rel, e))?;
         let mut f = File::from(fd);
-        f.write_all(content.as_bytes()).map_err(|e| io(t.rel, e))?;
+        f.write_all(content).map_err(|e| io(t.rel, e))?;
         f.set_permissions(std::fs::Permissions::from_mode(mode.bits())).map_err(|e| io(t.rel, e))?;
         f.sync_all().map_err(|e| io(t.rel, e))?;
         renameat(t.parent, tmp.as_str(), t.parent, t.name).map_err(|e| errno(t.rel, e))

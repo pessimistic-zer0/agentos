@@ -5,7 +5,7 @@
 | Weeks in the plan | v1.0 (D-114); no week plan |
 | Started / finished | 2026-11-16 / in progress |
 | Commits | `ad2b302` … (tag `m12` only after a green CI run, D-113) |
-| Status | In progress: B5 (`fs.edit`) and B4 (`ro_dirs`) built on `nix`; B6 not started |
+| Status | Built on `nix` (B5, B4, B6); waiting for a green CI run on `fhs` before the tag |
 
 Write this document for a reader who is new to Rust and Linux internals. Plain words first, the real term next to it. Fill it in while working.
 
@@ -29,7 +29,10 @@ Three gaps the trials on real projects found (D-114). **B5:** an edit tool, so a
 | B4: a mount point cannot be redirected | On `nix` yes | `a_command_that_swaps_the_way_to_the_mount_point_is_reverted`, `the_sandbox_refuses_a_mount_point_that_is_a_symlink` |
 | B4: it is there again after a kill and a resume | On `nix` yes | `the_folder_is_still_there_after_a_kill_and_a_resume` |
 | B4: the real case | Yes, one session | the Node project with `ro_dirs = ["node_modules"]` (`docs/results/second-stack-trial-nix.md`, last part) |
-| B6: binary files and file modes through the file tools | Not started | |
+| B6: a binary file is read and written byte for byte | On `nix` yes; `fhs` not yet verified | `tests/binary.rs`: `binary_files_are_read_and_written_byte_for_byte` (compared with the `base64` program); unit tests in `src/tools/base64.rs` |
+| B6: an invalid request changes nothing and says why | On `nix` yes | `requests_that_are_not_valid_change_nothing_and_say_why` |
+| B6: the executable bit can be set, cleared and seen, and is kept otherwise | On `nix` yes | `the_executable_bit_is_set_cleared_kept_and_shown` |
+| B6: a kill around a write that only changes the mode is classified correctly | On `nix` yes | `a_kill_around_a_write_that_only_changes_the_mode_is_classified_by_the_mode` (fails with the mode comparison switched off) |
 
 ## 3. What you need to know first
 
@@ -54,6 +57,9 @@ Three gaps the trials on real projects found (D-114). **B5:** an edit tool, so a
 | `src/recovery.rs` | An edit is reconciled by the rule for a write |
 | `src/agent/llm.rs` | The tool `fs_edit`, the system prompt, the wording of results |
 | `tests/edit.rs`, `tests/recovery/main.rs`, `tests/llm_agent.rs` | Tests for `fs.edit` |
+| `src/tools/base64.rs` | Base64 encode and decode, by hand |
+| `src/tools/mod.rs`, `src/tools/fs.rs`, `src/gateway.rs`, `src/recovery.rs` | `encoding` and `executable` on the existing tools; bytes instead of text on the write path; the mode in the intent and in recovery's check |
+| `tests/binary.rs` | Tests for binary files and the executable bit |
 | `src/policy.rs` | `filesystem.ro_dirs`, its validation, `ro_dir()`, the write refusal |
 | `src/workspace.rs` | The empty folder in the copy; `check_ro_dir` refuses denied paths inside, a symlink, a missing folder |
 | `src/sandbox/ns.rs` | The read-only mounts onto `/work/<folder>`, after checking the way to each mount point |
@@ -97,10 +103,21 @@ if let Some(more) = content[next..].find(old_str) { /* "more than once (at line 
 4. *The agent reads* (`Gateway::decide`): the requested path is normalised as text (`lexical_rel`) only to choose the root: the workspace, or the repository if the path is in a read-only folder. The open itself is still `openat2` beneath that root, and the path the kernel resolved must still be inside the folder; a link in `node_modules` that points at `../src/x` is refused instead of quietly reading the repository's `src/x`.
 5. *The agent writes*: `Policy::check_path(Write, …)` refuses before looking at the write globs.
 
+**Binary files and modes (D-123).**
+
+*Base64* (`tools/base64.rs`): three bytes are 24 bits; cut into four groups of 6 bits, each group is one of 64 characters. A last group of one or two bytes is padded with `=`. `encode` does exactly that with `chunks(3)`. `decode` goes the other way and is strict: wrong length, a foreign character, padding in the middle, or leftover bits that belong to no byte are errors.
+
+*The write path carries bytes.* `Approved::Write.content` was a `String` and is now a `Vec<u8>`; text is just bytes that happen to be UTF-8. `ToolCall::write_bytes()` turns the request into those bytes once, and both the log (hash, size) and the gateway use it.
+
+*The mode travels with the content.* `write_in` creates the temporary file, writes, sets the permission bits on it (`set_permissions`, which is `fchmod`), forces it to disk, then renames it over the target. There is no moment at which the new content has the old mode.
+
+*Recovery.* A hash covers a file's bytes, not its mode. So when a write changes only the mode, "the file has the new hash" is true before and after. The intent now records `mode`, and `reconcile` asks for both: new hash *and* planned mode means APPLIED; otherwise the write did not happen.
+
 ## 7. Decisions made
 
 | Entry | Decision | Discarded alternatives |
 |---|---|---|
+| D-123 | Base64 for binary files, `executable` on `fs.write`, shown by `fs.list`; the mode in the intent | Hex; new tools; a free mode number; a crate |
 | D-122 | `filesystem.ro_dirs`: the repository's folder bind-mounted read-only at its place; never copied; file tools read it from the repository | A frozen copy per execution; a writable mount; globs; hiding it from the file tools |
 | D-120 | `fs.edit`, exactly one occurrence, turned into a write before the intent; read and write access needed | A separate effect and recovery rule; `replace_all`; loose matching; creating files; a diff tool |
 
@@ -112,7 +129,7 @@ if let Some(more) = content[next..].find(old_str) { /* "more than once (at line 
 ## 9. How to run it
 
 ```sh
-nix develop -c make test       # 154 passed on nix
+nix develop -c make test       # 161 passed on nix
 systemd-run --user --scope -p Delegate=yes cargo test --test edit
 systemd-run --user --scope -p Delegate=yes cargo test --test rodirs
 AGENTOS_RECOVERY_RUNS=50 systemd-run --user --scope -p Delegate=yes cargo test --test recovery an_edit -- --nocapture
@@ -130,12 +147,24 @@ new_str = "len(values)"
 
 ## 10. What this milestone does not do
 
+- A binary file must fit in `max_output_kb` as base64 (about 48 KB with the shipped 64); there is no partial read of one. Only the executable bit can be set, not other permission bits.
 - `fs.edit` replaces one occurrence; there is no "replace all" (parked).
-- It edits UTF-8 text only (binary files: B6).
+- It edits UTF-8 text only.
 - The model trial is one run of one model on one ticket.
 - A folder in `ro_dirs` is the live original: not in checkpoints, not restored by a rollback, and a change made to it during a run is seen at once (`docs/threat-model.md` §5).
 - Mounts below such a folder on the host are not carried in (the bind is not recursive).
 
 ## 11. Check your understanding
 
-(Filled in when the milestone is finished.)
+1. Why could a small model not change one line of a 7 KB file with `fs.write`?
+2. `fs.edit` is "a write whose content the runtime works out". What does that buy for crash recovery?
+3. Why must `old_str` occur exactly once, and why do overlapping occurrences count?
+4. Why does `fs.edit` need read access as well as write access?
+5. After a crash, an edit was APPLIED and the agent asks for it again. What happens, and why is that safe?
+6. Why is `node_modules` mounted from the original repository instead of being copied? What is the price?
+7. What makes the mounted folder read-only, and why can a command not undo it?
+8. Why does a run refuse to start when a file in a read-only folder matches a deny rule?
+9. A test expected a command to fail and it did not. Which defence had already acted, and how was the second one tested?
+10. What is base64, and why is the decoded data's hash the one stored in the log?
+11. Why is the file's mode set on the temporary file and not after the rename?
+12. Why can recovery not tell from hashes alone whether a mode-only write happened? What was added to the intent?

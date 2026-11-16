@@ -400,7 +400,7 @@ mod tests {
     fn append_and_read_back_in_order() -> Result<()> {
         let path = tmp("order");
         let mut log = EventLog::create(&path)?;
-        let call = serde_json::to_value(ToolCall::FsRead { path: "a".into(), start_line: None, max_lines: None }.logged())?;
+        let call = serde_json::to_value(ToolCall::FsRead { path: "a".into(), start_line: None, max_lines: None, encoding: None }.logged())?;
         assert_eq!(log.append(EventBody::ToolRequested { call_id: 1, call })?, 1);
         assert_eq!(log.append(EventBody::ToolDenied { call_id: 1, rule: "r".into(), reason: "x".into() })?, 2);
         drop(log);
@@ -419,7 +419,7 @@ mod tests {
     fn illegal_transitions_are_reported() -> Result<()> {
         let path = tmp("illegal");
         let mut log = EventLog::create(&path)?;
-        let call = serde_json::to_value(ToolCall::FsRead { path: "a".into(), start_line: None, max_lines: None }.logged())?;
+        let call = serde_json::to_value(ToolCall::FsRead { path: "a".into(), start_line: None, max_lines: None, encoding: None }.logged())?;
         log.append(EventBody::ToolRequested { call_id: 1, call })?;
         // COMPLETED straight after REQUESTED skips the intent: must be refused.
         log.append(EventBody::ToolCompleted { call_id: 1, summary: "".into(), output: "".into(), checkpoint: None })?;

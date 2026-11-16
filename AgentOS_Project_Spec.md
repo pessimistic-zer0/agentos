@@ -1081,7 +1081,7 @@ Uncommitted. Some are research projects on their own.
   - **Lock files a command creates** (`Cargo.lock`) are reverted and reported on every run unless the policy lets them be written.
   - **Dependencies that have to be downloaded.** No network in the sandbox, so they must be on disk first. A one-time, allow-listed fetch step would be a large change to the threat model.
 - **Still parked from the walk-through and the trial (2026-11-14):**
-  - **Binary files and file modes through the file tools.** `agentos apply` exists now (M10, D-108) and carries them when a command made them; letting the agent's own `fs.read` and `fs.write` handle them is a separate question.
+  - **Binary files and file modes through the file tools** (built 2026-11-16, D-123: base64 and the executable bit; still parked from it: reading part of a large binary file, other permission bits). `agentos apply` exists now (M10, D-108) and carries them when a command made them; letting the agent's own `fs.read` and `fs.write` handle them is a separate question.
   - **`apply` on top of the user's own edits** (a merge). Today it refuses and points at the patch.
   - **A read-only folder inside the workspace** (built 2026-11-16 as `filesystem.ro_dirs`, D-122) (for `node_modules`, which must be at its place in the project; `skip` only suits folders that work from their own path).
   - **A narrower way to allow one script** than a full argv rule per script.

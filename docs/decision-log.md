@@ -3012,6 +3012,41 @@ Other choices inside the filter: a call made with another architecture's numbers
 
 ---
 
+### D-123 — Binary files as base64, and the executable bit, through `fs.read`, `fs.write` and `fs.list`
+- **Date:** 2026-11-16
+- **Status:** Taken (carries out item B6 of D-114)
+- **Area:** tooling
+- **ADR:** none
+
+**In plain words.** The agent's file tools could only handle text, and could not make a script runnable. Now `fs.read` and `fs.write` take `encoding = "base64"`: base64 is a way to write any bytes using only letters, digits, `+` and `/`, so a binary file can travel inside a text message. `fs.write` also takes `executable = true` or `false`, and `fs.list` says which files are executable. No new tool: three optional fields on existing ones.
+
+**The problem.** First trial (`docs/results/real-repo-trial-nix.md`): a gzip fixture could not be read, and a new script was written with mode 644. `agentos apply` already carries binary files and modes when a command made them (D-108); the agent's own tools could not make them.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| `encoding = "base64"` on `fs.read` and `fs.write` | Taken | The usual way to put bytes into JSON; models and the `base64` program know it |
+| Hex | Discarded | Twice the size instead of a third more |
+| New tools (`fs.read_bytes`, `fs.chmod`) | Discarded | D-114 opened the tool list for `fs.edit` only; optional fields change nothing for existing scripts, policies or logs |
+| `executable: true/false` | Taken | The real need (a script the tests run). 755 or 644, nothing else |
+| A free `mode` number | Discarded | setuid, world-writable and "no permissions" have no use here and each is a way to make trouble (B-010 was a folder without permission bits) |
+| Left out means "keep the file's mode" | Taken | What `fs.write` already did; an edit keeps it too |
+| Set the mode on the temporary file before the rename | Taken | Content and mode then change in one atomic step |
+| The intent names the mode; recovery compares it when deciding APPLIED | Taken | A write that changes only the mode has the same hash before and after. Without this, recovery called such a write APPLIED when it had not happened (shown by the test with the check switched off) |
+| The log's `content_hash` and `bytes` are those of the decoded bytes | Taken | They then describe the file, as for text, and the recovery harness's rule "the checkpoint holds the write" stays one rule |
+| Base64 by hand, 40 lines, no crate | Taken | Few dependencies (CLAUDE.md). Tested against the RFC's vectors, every byte value and length, and the `base64` program |
+| Decoder accepts line breaks and spaces, refuses everything else that is off | Taken | The `base64` program wraps at 76 characters; but two texts must not mean the same bytes by accident |
+| Reading part of a binary file (offset, length) | Discarded for now | Parked. A binary file must fit in `max_output_kb` as base64 |
+| A throwaway experiment in `experiments/` | Not done | Nothing here depends on how the kernel behaves; the questions were "is the codec right" and "does recovery classify a mode-only write", and both are tests |
+
+**What this means for the code.** `src/tools/base64.rs`. `ToolCall::FsRead.encoding`, `ToolCall::FsWrite.{encoding, executable}`, `ToolCall::write_bytes`, `LoggedCall::FsWrite.executable`, `ToolOutput::Read.encoding`, `ListEntry.executable`; all optional and left out of the JSON when unset, so old logs and scripts read as before. `fstool::write` takes bytes and an optional mode; `fstool::read` takes `base64`. The intent of a write may hold `mode`; `recovery::inspect_write` returns the file's mode and `reconcile` uses it. The LLM agent's tool descriptions name the two fields. `fs.edit` still refuses a file that is not UTF-8.
+
+**Evidence.** `make test` on `nix`: 161 passed, clippy clean. `tests/binary.rs` (4 tests): a 512-byte file with every byte value reads as exactly what `base64 -w0` prints, and a write of wrapped base64 lands byte for byte; eight invalid requests change nothing; the executable bit set, cleared, kept, shown by `fs.list`, present in checkpoints and carried by `agentos apply`; a mode-only write killed at P2 is NOT APPLIED with mode 644 and at P4 is APPLIED with mode 755. With the mode comparison switched off, the last test fails: recovery says APPLIED with the mode still 644. Three unit tests of the codec. Not yet verified on `fhs`.
+
+**Concepts to learn.** Base64 and why it is a third longer; permission bits and the executable bit; `fchmod` before `rename`; why a hash cannot see a file's mode.
+
+---
+
 ## Still open
 
 | Question | Notes |
@@ -3091,6 +3126,7 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-16 | 200-kill suite on `nix` after M11 (seccomp, file-size limit, the measuring watchdog, scratch-free checkpoints): 4,800 + 1,600 runs, 0 violations, 0 duplicated effects; recovery p50 20.3 ms, p99 61.1 ms (M9: 19.6 and 54.0). `docs/results/recovery-200-nix-m11.md` | Changing a checkpoint by editing only its temporary copy added no recovery state, and the suite agrees. The suite does not reach the disk limit's undo path under kills; that is tested without kills only |
 | 2026-11-16 | With `fs.edit`, the local 4B model solved the two-module ticket (INV-102) in 7 calls and 36 s; without it, it had failed three times, twice because a whole-file `fs.write` did not fit in one reply. Its fix passes the named tests but hard-codes `USD` where the ticket asks for the settings' default | The tool's shape decided whether a small model could work at all. And passing tests are not the ticket: the trial record says what the tests did not check |
 | 2026-11-16 | A test for `ro_dirs` expected a command to fail after an earlier command replaced the mount point with a symlink. It ran normally: the revert after the first command had already restored the folder, because a read-only folder is never a writable path | Two defences were stacked and the outer one hid the inner. The inner one (the sandbox's own check) had to be tested through the library, with a workspace prepared by hand |
+| 2026-11-16 | A write that keeps a file's content and only makes it executable has the same hash before and after. Recovery decided by hash alone, so a kill *before* such a write was reported as APPLIED. Found while designing `executable`, shown by a test, fixed by putting the mode in the intent (D-123) | A recovery rule is only as good as what the intent records. Each new thing a write can change needs its own evidence in the intent |
 
 ---
 
@@ -3175,3 +3211,5 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | Measured (polled) limit | A limit enforced by checking again and again; what happens between two checks is not prevented, only caught |
 | Sparse file / allocated blocks | A file can claim a length without using that much disk; `st_blocks` says what it really uses |
 | Bind mount | Making an existing folder appear at a second place in the file tree; with the read-only flag, the second place cannot be used to change it |
+| Base64 | A way to write any bytes with 64 printable characters, three bytes as four characters; used to carry binary data in text formats such as JSON |
+| Executable bit | The permission bit that lets a file be run as a program; mode 755 has it, 644 does not |

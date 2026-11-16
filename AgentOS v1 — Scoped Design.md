@@ -325,7 +325,7 @@ Decided by Prince after a walk-through as a new user (D-088). The five parts and
 
 5. **`agentos apply`** (M10, approved by Prince on 2026-11-15, D-108): a command the user runs after a run, which copies the result into the repository and refuses if the repository changed since the copy. A run itself still never modifies the original repo.
 
-Held, in the parking lot of `AgentOS_Project_Spec.md` (§22): binary files or file modes through the file tools.
+Held at the time, in the parking lot of `AgentOS_Project_Spec.md` (§22): binary files or file modes through the file tools. (Built for v1.0, D-123.)
 
 ## v1.0 scope (agreed 2026-11-16)
 

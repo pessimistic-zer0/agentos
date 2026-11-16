@@ -162,9 +162,20 @@ fn reconcile(dir: &ExecDir, c: &CallRecord, last: &str, named: &[String]) -> Res
             let new_hash = field("new_hash").context("fs.write intent has no new_hash")?;
             let pre_hash = field("pre_hash");
             let temp = field("temp").context("fs.write intent has no temp name")?;
-            match inspect_write(&dir.work(), &path, &temp)? {
-                // The file has the new content: the rename happened.
-                Some(Some(h)) if h == new_hash => {
+            // The mode the write was going to set, if any. The new file gets
+            // it before the rename, so after the rename both are right. A
+            // write that changes only the mode leaves the same content
+            // either way: then the mode alone says whether it happened.
+            let want_mode = plan.get("mode").and_then(Value::as_u64).map(|m| m as u32);
+            let found = inspect_write(&dir.work(), &path, &temp)?;
+            let now = found.as_ref().map(|f| f.as_ref().map(|(h, _)| h.clone()));
+            let mode_set = match (&found, want_mode) {
+                (Some(Some((_, mode))), Some(want)) => *mode == want,
+                _ => true,
+            };
+            match now {
+                // The file has the new content (and mode): the rename happened.
+                Some(Some(h)) if h == new_hash && mode_set => {
                     let name = checkpoint::name(named.iter().filter_map(|n| checkpoint::number(n)).max().unwrap_or(0) + 1);
                     // The policy saved with the execution says which paths
                     // are caches and stay out of checkpoints (D-118).
@@ -236,7 +247,8 @@ fn reconcile_external(dir: &ExecDir, call_id: u64, service: &str, payload_hash: 
 /// Delete the write's leftover temp file, then hash the target.
 /// `Some(Some(hash))`: a regular file. `Some(None)`: no file. `None`: the
 /// path cannot be reached beneath the workspace or is not a regular file.
-fn inspect_write(work: &Path, rel: &str, temp: &str) -> Result<Option<Option<String>>> {
+/// Also returns the file's permission bits, when there is a file.
+fn inspect_write(work: &Path, rel: &str, temp: &str) -> Result<Option<Option<(String, u32)>>> {
     let (parent_rel, name) = match rel.rsplit_once('/') {
         Some((d, n)) => (d, n),
         None => ("", rel),
@@ -252,12 +264,14 @@ fn inspect_write(work: &Path, rel: &str, temp: &str) -> Result<Option<Option<Str
         Err(_) => Ok(None),
         Ok(fd) => {
             let mut f = std::fs::File::from(fd);
-            if !f.metadata()?.is_file() {
+            let meta = f.metadata()?;
+            if !meta.is_file() {
                 return Ok(None);
             }
             let mut bytes = Vec::new();
             f.read_to_end(&mut bytes)?;
-            Ok(Some(Some(content_hash(&bytes))))
+            use std::os::unix::fs::PermissionsExt;
+            Ok(Some(Some((content_hash(&bytes), meta.permissions().mode() & 0o7777))))
         }
     }
 }

@@ -69,11 +69,13 @@ pub struct Gateway {
 /// What the policy step produced for a call that may go ahead. It holds the
 /// already-opened file handles, so the effect uses exactly what was checked.
 enum Approved {
-    Read { fd: OwnedFd, rel: String, start_line: Option<u64>, max_lines: Option<u64> },
+    Read { fd: OwnedFd, rel: String, start_line: Option<u64>, max_lines: Option<u64>, base64: bool },
     List { fd: OwnedFd, rel: String },
     /// `edit_line` is set when the content came from an `fs.edit`: the line
     /// where the replaced text began.
-    Write { target: WriteTarget, content: String, edit_line: Option<u64> },
+    /// `mode`: permission bits to set (`executable` of `fs.write`), or
+    /// `None` to keep what the file has.
+    Write { target: WriteTarget, content: Vec<u8>, mode: Option<u32>, edit_line: Option<u64> },
     Exec { argv: Vec<String> },
     /// `url` comes from the policy rule that allowed the call, never from the agent.
     Ext { service: String, url: String, payload: String },
@@ -120,8 +122,11 @@ impl Gateway {
         // anything is logged, so every hash the log mentions can be looked up.
         // Recovery needs the payload to send an uncertain request again.
         match &call {
+            // The bytes that are to land in the file (for base64 content,
+            // the decoded ones); bad base64 is refused below, and then its
+            // own text is what the log's hash names.
             ToolCall::FsWrite { content, .. } => {
-                self.blobs.put(content.as_bytes())?;
+                self.blobs.put(&call.write_bytes().unwrap_or_else(|_| content.as_bytes().to_vec()))?;
             }
             ToolCall::FsEdit { old_str, new_str, .. } => {
                 self.blobs.put(old_str.as_bytes())?;
@@ -153,7 +158,7 @@ impl Gateway {
         // The file an edit will produce is content like any other: stored
         // before the intent names its hash.
         if let Approved::Write { content, edit_line: Some(_), .. } = &approved {
-            self.blobs.put(content.as_bytes())?;
+            self.blobs.put(content)?;
         }
 
         let plan = match self.plan(call_id, &approved) {
@@ -239,6 +244,14 @@ impl Gateway {
                 if let Some(d) = requested_denied(path) {
                     return d;
                 }
+                let base64 = match call {
+                    ToolCall::FsRead { encoding, .. } => match encoding.as_deref() {
+                        None | Some("utf8") | Some("utf-8") => false,
+                        Some("base64") => true,
+                        Some(other) => return Decided::Invalid(format!("unknown encoding `{other}`; leave it out for text, or use \"base64\" for a binary file")),
+                    },
+                    _ => false,
+                };
                 let is_list = matches!(call, ToolCall::FsList { .. });
                 // A path in a read-only folder is not in the workspace (only
                 // an empty folder is). It is opened beneath the original
@@ -260,7 +273,7 @@ impl Gateway {
                         }
                         match call {
                             ToolCall::FsRead { start_line, max_lines, .. } => {
-                                Decided::Allow(d, Approved::Read { fd, rel, start_line: *start_line, max_lines: *max_lines })
+                                Decided::Allow(d, Approved::Read { fd, rel, start_line: *start_line, max_lines: *max_lines, base64 })
                             }
                             _ => Decided::Allow(d, Approved::List { fd, rel }),
                         }
@@ -276,10 +289,17 @@ impl Gateway {
                     }
                 }
             }
-            ToolCall::FsWrite { path, content } => {
+            ToolCall::FsWrite { path, executable, .. } => {
                 if let Some(d) = requested_denied(path) {
                     return d;
                 }
+                let content = match call.write_bytes() {
+                    Ok(bytes) => bytes,
+                    Err(why) => return Decided::Invalid(why),
+                };
+                // Runnable by everyone or by no one; never setuid, never
+                // world-writable. Left out: the file keeps its mode.
+                let mode = executable.map(|x| if x { 0o755 } else { 0o644 });
                 match fstool::open_for_write(&work, path) {
                     Ok(OpenedParent::Outside(e)) => escape(e),
                     Ok(OpenedParent::Inside(target)) => {
@@ -292,7 +312,7 @@ impl Gateway {
                         if let Some(rule) = target.new_dirs().iter().find_map(|dir| policy.denied(dir)) {
                             return Decided::Deny(Decision { allowed: false, rule });
                         }
-                        Decided::Allow(d, Approved::Write { target, content: content.clone(), edit_line: None })
+                        Decided::Allow(d, Approved::Write { target, content, mode, edit_line: None })
                     }
                     Err(e) => match beneath::lexical_rel(path).map(|r| policy.check_path(Access::Write, &r)) {
                         Some(d) if d.allowed => Decided::Fail(d, e),
@@ -334,7 +354,7 @@ impl Gateway {
                             },
                         };
                         match fstool::edited(&text, old_str, new_str, &target.rel) {
-                            Ok((content, line)) => Decided::Allow(d, Approved::Write { target, content, edit_line: Some(line) }),
+                            Ok((content, line)) => Decided::Allow(d, Approved::Write { target, content: content.into_bytes(), mode: None, edit_line: Some(line) }),
                             Err(e) => Decided::Fail(d, e),
                         }
                     }
@@ -367,13 +387,19 @@ impl Gateway {
         Ok(match a {
             Approved::Read { rel, start_line: None, max_lines: None, .. } | Approved::List { rel, .. } => json!({ "path": rel }),
             Approved::Read { rel, start_line, max_lines, .. } => json!({ "path": rel, "start_line": start_line, "max_lines": max_lines }),
-            Approved::Write { target, content, .. } => {
+            Approved::Write { target, content, mode, .. } => {
                 let mut plan = json!({
                     "path": target.rel,
                     "pre_hash": fstool::current_hash(target)?,
-                    "new_hash": crate::blob::content_hash(content.as_bytes()),
+                    "new_hash": crate::blob::content_hash(content),
                     "temp": fstool::temp_name(call_id),
                 });
+                // The permission bits the write sets, if it sets any.
+                // Recovery needs them when the content does not change: then
+                // only the mode shows whether the write happened (D-123).
+                if let Some(mode) = mode {
+                    plan["mode"] = json!(mode);
+                }
                 // Folders the write will make first. Recovery rolls back if
                 // it finds this and no new file (D-084).
                 if !target.missing.is_empty() {
@@ -411,13 +437,17 @@ impl Gateway {
     fn effect(&mut self, call_id: u64, a: Approved) -> Result<Result<ToolOutput, ToolError>> {
         let max = self.policy.limits.max_output_kb * 1024;
         Ok(match a {
-            Approved::Read { fd, rel, start_line, max_lines } => {
-                fstool::read(fd, &rel, max, start_line, max_lines).map(|(content, lines)| ToolOutput::Read { content, lines })
+            Approved::Read { fd, rel, start_line, max_lines, base64 } => {
+                fstool::read(fd, &rel, max, start_line, max_lines, base64).map(|(content, lines)| ToolOutput::Read {
+                    content,
+                    lines,
+                    encoding: base64.then(|| "base64".to_string()),
+                })
             }
             Approved::List { fd, rel } => fstool::list(fd, &rel).map(|entries| ToolOutput::List { entries }),
-            Approved::Write { target, content, edit_line } => match self.write_fits(&target.rel, content.len() as u64) {
+            Approved::Write { target, content, mode, edit_line } => match self.write_fits(&target.rel, content.len() as u64) {
                 Err(e) => Err(e),
-                Ok(()) => fstool::write(&target, &content, call_id).map(|bytes| match edit_line {
+                Ok(()) => fstool::write(&target, &content, mode, call_id).map(|bytes| match edit_line {
                     Some(line) => ToolOutput::Edit { bytes, line },
                     None => ToolOutput::Write { bytes },
                 }),

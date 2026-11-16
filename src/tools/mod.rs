@@ -4,6 +4,7 @@
 //! The agent never runs a tool itself (design rule 1). It hands a `ToolCall`
 //! to the gateway, and the gateway decides, logs and dispatches it.
 
+pub mod base64;
 pub mod exec;
 pub mod ext;
 pub mod fs;
@@ -27,11 +28,26 @@ pub enum ToolCall {
         start_line: Option<u64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_lines: Option<u64>,
+        /// `"base64"`: return the file's bytes as base64 text, for a file
+        /// that is not UTF-8 text (D-123). Not together with a line range.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        encoding: Option<String>,
     },
     #[serde(rename = "fs.list")]
     FsList { path: String },
+    /// Write a whole file. `encoding = "base64"`: `content` is base64 and
+    /// its bytes are written (a binary file). `executable`: make the file
+    /// runnable (mode 755) or not (644); left out, a file that exists keeps
+    /// its mode and a new one is not executable (D-123).
     #[serde(rename = "fs.write")]
-    FsWrite { path: String, content: String },
+    FsWrite {
+        path: String,
+        content: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        encoding: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        executable: Option<bool>,
+    },
     /// Replace one piece of text in an existing file (D-120). `old_str` must
     /// occur in the file exactly once; the rest of the file is untouched, so
     /// a model need not send a whole file to change one line.
@@ -57,6 +73,19 @@ impl ToolCall {
         }
     }
 
+    /// The bytes an `fs.write` asks to be written: its text, or what its
+    /// base64 text stands for. `Err` says what is wrong with the request.
+    pub fn write_bytes(&self) -> Result<Vec<u8>, String> {
+        let ToolCall::FsWrite { content, encoding, .. } = self else {
+            return Err("not an fs.write".into());
+        };
+        match encoding.as_deref() {
+            None | Some("utf8") | Some("utf-8") => Ok(content.as_bytes().to_vec()),
+            Some("base64") => base64::decode(content).map_err(|why| format!("content is not valid base64: {why}")),
+            Some(other) => Err(format!("unknown encoding `{other}`; leave it out for text, or use \"base64\" for a binary file")),
+        }
+    }
+
     /// Does this tool change the workspace? Only these get a checkpoint.
     /// `ext.call` has an effect too, but outside the workspace, where a
     /// checkpoint cannot reach it.
@@ -68,15 +97,17 @@ impl ToolCall {
     /// the bytes themselves go to the blob store (ADR 0004).
     pub fn logged(&self) -> LoggedCall {
         match self {
-            ToolCall::FsRead { path, start_line, max_lines } => {
-                LoggedCall::FsRead { path: path.clone(), start_line: *start_line, max_lines: *max_lines }
+            ToolCall::FsRead { path, start_line, max_lines, encoding } => {
+                LoggedCall::FsRead { path: path.clone(), start_line: *start_line, max_lines: *max_lines, encoding: encoding.clone() }
             }
             ToolCall::FsList { path } => LoggedCall::FsList { path: path.clone() },
-            ToolCall::FsWrite { path, content } => LoggedCall::FsWrite {
-                path: path.clone(),
-                content_hash: content_hash(content.as_bytes()),
-                bytes: content.len() as u64,
-            },
+            // The hash and size are those of the bytes that land in the
+            // file. (Text that claims to be base64 and is not never reaches
+            // a file; the call is refused, and its own text is hashed.)
+            ToolCall::FsWrite { path, content, executable, .. } => {
+                let bytes = self.write_bytes().unwrap_or_else(|_| content.as_bytes().to_vec());
+                LoggedCall::FsWrite { path: path.clone(), content_hash: content_hash(&bytes), bytes: bytes.len() as u64, executable: *executable }
+            }
             ToolCall::FsEdit { path, old_str, new_str } => LoggedCall::FsEdit {
                 path: path.clone(),
                 old_hash: content_hash(old_str.as_bytes()),
@@ -105,11 +136,21 @@ pub enum LoggedCall {
         start_line: Option<u64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_lines: Option<u64>,
+        /// `"base64"`: return the file's bytes as base64 text, for a file
+        /// that is not UTF-8 text (D-123). Not together with a line range.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        encoding: Option<String>,
     },
     #[serde(rename = "fs.list")]
     FsList { path: String },
     #[serde(rename = "fs.write")]
-    FsWrite { path: String, content_hash: String, bytes: u64 },
+    FsWrite {
+        path: String,
+        content_hash: String,
+        bytes: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        executable: Option<bool>,
+    },
     /// The two texts are in the blob store under their hashes.
     #[serde(rename = "fs.edit")]
     FsEdit { path: String, old_hash: String, new_hash: String, old_bytes: u64, new_bytes: u64 },
@@ -136,14 +177,16 @@ impl LoggedCall {
     /// Short human description of the arguments, for `agentos trace`.
     pub fn describe(&self) -> String {
         match self {
-            LoggedCall::FsRead { path, start_line: None, max_lines: None } | LoggedCall::FsList { path } => path.clone(),
-            LoggedCall::FsRead { path, start_line, max_lines } => {
+            LoggedCall::FsRead { path, start_line: None, max_lines: None, encoding: None } | LoggedCall::FsList { path } => path.clone(),
+            LoggedCall::FsRead { path, encoding: Some(e), .. } => format!("{path} ({e})"),
+            LoggedCall::FsRead { path, start_line, max_lines, .. } => {
                 let first = start_line.unwrap_or(1);
                 match max_lines {
                     Some(n) => format!("{path} (lines {first}-{})", first.saturating_add(*n).saturating_sub(1)),
                     None => format!("{path} (from line {first})"),
                 }
             }
+            LoggedCall::FsWrite { path, bytes, executable: Some(true), .. } => format!("{path} ({bytes} bytes, executable)"),
             LoggedCall::FsWrite { path, bytes, .. } => format!("{path} ({bytes} bytes)"),
             LoggedCall::FsEdit { path, old_bytes, new_bytes, .. } => format!("{path} ({old_bytes} bytes -> {new_bytes} bytes)"),
             LoggedCall::Exec { argv } => argv.join(" "),
@@ -177,6 +220,9 @@ pub enum ToolOutput {
         /// Set when only part of the file was asked for.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         lines: Option<ReadLines>,
+        /// `"base64"` when `content` is the file's bytes in base64.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        encoding: Option<String>,
     },
     List { entries: Vec<ListEntry> },
     Write { bytes: u64 },
@@ -203,6 +249,9 @@ pub struct ListEntry {
     /// `file`, `dir`, `symlink` or `other`.
     pub kind: String,
     pub size: u64,
+    /// A regular file its owner may run (D-123).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub executable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -227,8 +276,9 @@ impl ToolOutput {
     /// One line for the trace and for `tool.completed.summary`.
     pub fn summary(&self) -> String {
         match self {
-            ToolOutput::Read { content, lines: None } => format!("{} bytes", content.len()),
-            ToolOutput::Read { content, lines: Some(l) } => format!("{} bytes, lines {}-{} of {}", content.len(), l.first, l.last, l.total),
+            ToolOutput::Read { content, encoding: Some(e), .. } => format!("{} characters of {e}", content.len()),
+            ToolOutput::Read { content, lines: None, .. } => format!("{} bytes", content.len()),
+            ToolOutput::Read { content, lines: Some(l), .. } => format!("{} bytes, lines {}-{} of {}", content.len(), l.first, l.last, l.total),
             ToolOutput::List { entries } => format!("{} entries", entries.len()),
             ToolOutput::Write { bytes } => format!("wrote {bytes} bytes"),
             ToolOutput::Edit { bytes, line } => format!("replaced at line {line}; file is {bytes} bytes"),

@@ -230,7 +230,7 @@ Seven bugs in the runtime itself were found by the suites or the demo, each with
 | **Project name** | Open (D-023, D-068) | Prince decides |
 | **A release after `v0.1`** | Not tagged. Rule since D-113: tag only after the CI run on that commit is green | Decide what the release is called and what it must contain |
 | **The newest change on `fhs`** | `exec.helpers` (D-112) has run on `nix` only | A push and a green CI run |
-| **Known limits that are parked** | Binary files through the agent's own file tools; a read-only folder inside the workspace (`node_modules`); build folders outside the checkpoints; downloads in the sandbox; a merge for `apply` | `AgentOS_Project_Spec.md` §22 |
+| **Known limits that are parked** | Downloads in the sandbox; a merge for `apply`; checkpoint pruning. (Built for v1.0: binary files and the executable bit through the file tools, D-123; a read-only folder inside the workspace, D-122; build folders outside the checkpoints, D-118) | `AgentOS_Project_Spec.md` §22 |
 | **Hardening that v1 cut** | seccomp filter built for v1.0 (D-116; verified on `fhs`, D-119); a measured disk limit built (D-117; verified on `fhs`, D-121) | M11 (D-114) |
 
 ### 6.2 The bonus
