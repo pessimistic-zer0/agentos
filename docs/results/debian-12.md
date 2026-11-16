@@ -36,7 +36,7 @@ Date: 2026-11-16. Code: commit `70171f4` plus the uncommitted script `ci/debian-
 | `security` | 33 |
 | `vertical_slice` | 4 |
 
-**What it adds.** A third distribution, and an older kernel: 6.1 against 6.8 on the Ubuntu runner and 7.1 on the development machine. Landlock on 6.1 is two versions behind what the code is written for; the sandbox asks for what the kernel has (best effort) and the security suite passed. Debian needed none of Ubuntu's extra steps for user namespaces.
+**What it adds.** A third distribution, and a kernel older than the development machine's (6.1 against 7.1). The Ubuntu runner's kernel version was never recorded, so no comparison with it is made here; CI prints it from now on. Landlock on 6.1 is two versions behind what the code is written for; the sandbox asks for what the kernel has (best effort) and the security suite passed. Debian needed none of Ubuntu's extra steps for user namespaces.
 
 **What it does not show.** The 200-kill suite, the benchmarks and `make demo` were not run on Debian. One run on one machine.
 
