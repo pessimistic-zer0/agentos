@@ -3075,6 +3075,30 @@ Other choices inside the filter: a call made with another architecture's numbers
 
 ---
 
+### D-125 — `fs.edit` and `filesystem.ro_dirs` count as verified on `fhs` by CI run 43894443267
+- **Date:** 2026-11-16
+- **Status:** Taken
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** Prince pushed `b66298a`, which holds the edit tool (D-120) and the read-only repository folder (D-122). CI ran it on Ubuntu and both jobs passed. Those two count as verified on both systems. Binary files and the executable bit (D-123) and the longer wait for a busy model server (D-124) were committed after that push and are not verified on `fhs` yet, so M12 has no tag yet.
+
+**The problem.** CLAUDE.md: "not yet verified" on `fhs` until a CI run on that commit is green.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Record the run for the two changes it contains | Taken | The rule, applied |
+| Tag `m12` on `b66298a` | Discarded | The third item of M12 is not in that commit |
+
+**What this means for the code.** None.
+
+**Evidence.** `gh run view 43894443267`: completed, success, head `b66298a`, jobs `fhs` and `fhs-apparmor` success. `fhs` log: 154 tests passed (33 + 6 + 1 + 11 + 4 + 14 + 26 + 10 + 5 + 7 + 33 + 4), among them `tests/edit.rs` (4) and `tests/rodirs.rs` (7); 200-kill step: `fs.edit total: 1600 runs, 1600 killed, 0 violations`; `4800 runs, 4799 killed, 0 invariant violations, 0 duplicated effects, 3616/3616`, recovery p50 20.5 ms, p99 72.8 ms; external `1600 runs, 0 invariant violations, 0 duplicated effects, 942/942`.
+
+**Concepts to learn.** None new.
+
+---
+
 ## Still open
 
 | Question | Notes |

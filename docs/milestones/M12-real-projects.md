@@ -5,7 +5,7 @@
 | Weeks in the plan | v1.0 (D-114); no week plan |
 | Started / finished | 2026-11-16 / in progress |
 | Commits | `ad2b302` … (tag `m12` only after a green CI run, D-113) |
-| Status | Built on `nix` (B5, B4, B6); waiting for a green CI run on `fhs` before the tag |
+| Status | Built on `nix` (B5, B4, B6). On `fhs`: B5 and B4 verified (D-125); B6 waits for a CI run, and the tag with it |
 
 Write this document for a reader who is new to Rust and Linux internals. Plain words first, the real term next to it. Fill it in while working.
 
@@ -17,12 +17,12 @@ Three gaps the trials on real projects found (D-114). **B5:** an edit tool, so a
 
 | Requirement | Met? | Evidence (command and result) |
 |---|---|---|
-| B5: an edit changes exactly the named text and nothing else | On `nix` yes; `fhs` not yet verified | `tests/edit.rs`: `an_edit_changes_one_place_and_nothing_else`, `an_edit_keeps_the_files_mode_and_works_on_text_that_is_not_ascii` |
+| B5: an edit changes exactly the named text and nothing else | Yes, both presets (`fhs`: CI run 43894443267, D-125) | `tests/edit.rs`: `an_edit_changes_one_place_and_nothing_else`, `an_edit_keeps_the_files_mode_and_works_on_text_that_is_not_ascii` |
 | B5: an edit that fits no place, or more than one, changes nothing and says why | On `nix` yes | `an_edit_that_does_not_fit_one_place_changes_nothing_and_says_why`; unit tests `edit_tests` in `src/tools/fs.rs` |
 | B5: policy and confinement as for `fs.write`, plus read access | On `nix` yes | `an_edit_needs_write_and_read_access_and_stays_in_the_workspace` (fails with the read check removed) |
-| B5: a kill at any crash point leaves the edit not done or wholly done, and a resumed run applies it once | On `nix` yes | `an_edit_is_recovered_like_a_write`: 8 points × 50 kills by hand, 400 runs, 0 violations; reports 22 violations when recovery is deliberately broken |
+| B5: a kill at any crash point leaves the edit not done or wholly done, and a resumed run applies it once | Yes, both presets | `an_edit_is_recovered_like_a_write`: 8 points × 50 kills by hand on `nix`, 400 runs, 0 violations; 8 × 200 in CI on `fhs`, 1,600 runs, 0 violations (run 43894443267); reports 22 violations when recovery is deliberately broken |
 | B5: a small model can use it | Yes, one run | Qwen3-VL-4B, ticket INV-102: 7 calls, 36 s, solved; three failures before (`docs/results/real-repo-trial-nix.md`) |
-| B4: commands can use the folder and cannot change it; the original repository is untouched | On `nix` yes; `fhs` not yet verified | `tests/rodirs.rs`: `commands_use_the_folder_and_cannot_change_it` (ten kinds of change refused; fails without the read-only flag) |
+| B4: commands can use the folder and cannot change it; the original repository is untouched | Yes, both presets (CI run 43894443267, D-125) | `tests/rodirs.rs`: `commands_use_the_folder_and_cannot_change_it` (ten kinds of change refused; fails without the read-only flag) |
 | B4: it is never copied: not in the workspace on the host, not in a checkpoint, not in the patch, not touched by `apply` | On `nix` yes | the same test |
 | B4: the file tools read it and can never write it or leave it | On `nix` yes | `the_file_tools_read_it_from_the_repository_and_never_write_it` |
 | B4: a denied path inside, a missing folder or a symlink stops the run before it starts | On `nix` yes | `a_denied_file_in_the_folder_stops_the_run_before_it_starts`, `a_folder_that_is_missing_or_a_symlink_is_refused` |
