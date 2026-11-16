@@ -24,6 +24,7 @@ Before the first item, CI on `main` was red: the TOCTOU race test's own check th
 | A1: real test commands still work | On `nix` yes | Experiment `m11-seccomp`; `agentos run` with the second trial's Rust and npm policies gives the trial's results; `make test` 133 passed |
 | A2: a command cannot take the workspace past `limits.workspace_mb` and leave it there | On `nix` yes; `fhs` not yet verified | `tests/hardening.rs`: `a_command_that_fills_the_workspace_is_stopped_and_undone`, `one_file_cannot_grow_past_the_limit`, `fs_write_past_the_limit_writes_nothing`, `a_repository_larger_than_the_limit_is_refused_at_the_start`; all four fail with the limit switched off by hand. It is a measured limit, not a hard cap (D-117) |
 | A3: no checkpoint holds a scratch path; the workspace keeps them | On `nix` yes; `fhs` not yet verified | `a_cache_is_scratch_and_an_example_env_file_is_not_a_secret` (fails with the change switched off); unit test in `src/checkpoint.rs`; the Rust trial session: 86 MB before, 21 MB after |
+| The five recovery invariants still hold with the new code on the killed paths | On `nix` yes | `make eval-recovery`: 4,800 runs, 0 violations, 0 duplicated effects, recovery p50 20.3 ms, p99 61.1 ms; external cells 1,600 runs, 0 violations (`docs/results/recovery-200-nix-m11.md`) |
 | Both presets pass | `nix` yes; `fhs` yes for the TOCTOU fix and A1 (CI run 43844369387 on `caeb948`); A2 and A3 not yet verified | needs a push of `1600435` or later and a CI run |
 
 ## 3. What you need to know first
