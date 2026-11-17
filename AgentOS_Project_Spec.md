@@ -1071,6 +1071,11 @@ Uncommitted. Some are research projects on their own.
 - **Kubernetes operator** for running AgentOS workers (only if Phase 5 happens).
 - **Signed execution records:** attestations that a patch was produced under a given policy.
 - **Multi-model comparison harness** built on comparative replay.
+- **v2 sketch: scheduling, after the `v1.0` tag (2026-11-17, D-131).** Phase 5 of this spec (central scheduler, queueing, priorities, fair share) is cut from v1 and v1.0. Today each `agentos run` is its own process; several can run at once, but nothing coordinates them. If it is ever built, in three steps that each stand alone:
+  1. **`agentos queue`:** run N tasks with at most K at a time, the queue kept in a file that survives `kill -9` (no daemon; the same intent-before-effect rule as the event log).
+  2. **Fair share:** cgroup CPU and memory weights for each execution out of one shared budget.
+  3. **Pause and resume** with the cgroup freezer, which brings back the `PAUSED` state dropped from v1.
+  A daemon, an API, remote workers and multi-agent coordination stay in Phase 5, not in this sketch.
 - **Taken into v1.0 (2026-11-16, D-114)**, so no longer parked: seccomp, a disk limit, scratch folders out of checkpoints, a read-only folder in the workspace (`node_modules`), binary files and file modes through the file tools, and the edit tool below (as `fs.edit`).
 - **From the six-ticket trial with Claude through a relay (2026-11-17, `docs/results/relay-model-trial-nix.md`), parked:** a stop rule that knows which tests the task is about (or a baseline of what failed before the run); a denial that lists the allowed commands; a search tool or an allowed `grep`; a way for the agent to delete a file; clearer `fs.write` wording for a new file; no dropped-lines warning for a file the agent wrote itself.
 - **From the hosted-model trial (2026-11-16, `docs/results/hosted-model-trial-nix.md`), parked:** shortening a conversation that has grown past what the model's server accepts; ending a run at once on `413 Request too large` instead of telling the model three times; pacing requests to a known tokens-per-minute limit.

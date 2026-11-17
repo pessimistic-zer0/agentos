@@ -3243,34 +3243,28 @@ The kernel line settles an open point: the Ubuntu runners run kernel 7.0, not Ub
 
 ---
 
-### D-131 — CI run 44093789877 on `5e17acb` is green; `m13` is tagged there
+### D-131 — Scheduling is parked as a v2 sketch, not added to v1.0
 - **Date:** 2026-11-17
-- **Status:** Taken
-- **Area:** process
+- **Status:** Discarded for v1.0; parked (spec §22)
+- **Area:** scope
 - **ADR:** none
 
-**In plain words.** Prince pushed `5e17acb`, the commit that finished M13. CI ran its four jobs on it and all four passed. M13 changed no code, so this run proves only that nothing broke between M12 and M13; it is still the rule (D-113) that a milestone is tagged on a commit CI has passed. `m13` is tagged on `5e17acb`. Prince also pushed the tags `m11` and `m12`; each push started its own CI run on the tagged commit (the run for `m12`, 44094504445, finished green).
+**In plain words.** Prince asked whether scheduling (running many agents with a queue, priorities and a fair share of the machine), which the first idea for the project included, should be added now. It is not added: it needs a long-running service and changes the architecture, and v1.0 waits only on a name. It is written down as a three-step v2 sketch so the idea is not lost.
 
-**The problem.** D-113: tag only after the CI run on that commit is green.
+**The problem.** Prince: "have we used things like scheduling … it was stripped down when narrowing the scope, so then should we consider adding it?" The original spec has it as Phase 5 (§9.14); the v1 design cut it ("single-agent recovery must work first"); D-114 lists multi-agent and a daemon as not in v1.0.
 
 **Options looked at.**
 | Option | Result | Why |
 |---|---|---|
-| Tag `m13` on `5e17acb`, the commit CI ran | Taken | The M13 document and result are in it; same practice as D-121 and D-129 |
-| Tag on the later commit that records this run | Discarded | That commit has not been through CI; it changes only documents |
+| Add a scheduler to v1.0 | Discarded | A real scheduler needs a daemon that owns job state, and with it an async runtime, an API and new recovery problems (the scheduler crashing with jobs in flight). Weeks of work, and v1.0 waits only on the name |
+| Park it as a v2 sketch in three steps (`agentos queue` with a crash-safe file queue; cgroup weights for fair share; pause via the cgroup freezer) | Taken | Each step stands alone and fits the current design without a daemon; Prince chose to park it as v2 |
+| Drop the idea entirely | Discarded | Prince wants it on record |
 
-**What this means for the code.** None. Local tag `m13`.
+**What this means for the code.** None. One entry in the spec's parking lot (§22).
 
-**Evidence.** `gh run view 44093789877`: completed, success, head `5e17acb`; jobs `fhs`, `fhs-apparmor`, `release`, `debian` all success.
-- `fhs`: `system: Ubuntu 24.04.5 LTS`, `kernel: 7.0.0-1017-azure`. 167 tests passed (same counts per suite as D-129). 200-kill step: `fs.edit total: 1600 runs, 1600 killed, 0 violations`; `total: 4800 runs, 4800 killed, 0 invariant violations, 0 duplicated effects, 3711/3711 cut-off calls classified correctly`, recover p50 32.2 ms, p99 342.3 ms; external `1600 runs, 0 invariant violations, 0 duplicated effects, 927/927`.
-- `release`: `agentos-0.1.0-x86_64-linux.tar.gz (3.5M)`; `check: the packed program ran the demo task from the archive; the patch holds the fix`.
-- `debian`: `Debian GNU/Linux 12 (bookworm), kernel 6.1.0-54-cloud-amd64`; `passed 167 failed 0`.
+**Evidence.** none; reasoning only. Read: spec §9.14, §14 Phase 5 and §22; v1 design "cut list" and "v1.0 scope"; D-114. Already true today: several `agentos run` at once work side by side (D-049's evidence: the full suite passed five runs in a row with 25 runtimes starting concurrently in one scope).
 
-The recovery times are higher than in D-129 (p99 342 ms against 70 ms) on a runner with a different kernel build (`-azure` against `-aws`). Shared CI machines vary; these times are not the project's numbers (D-127), and the suite's pass condition is the invariants, which held.
-
-A first attempt to watch the run (`gh run watch`) ended with `error connecting to api.github.com`; that was the network on the development machine, not the run.
-
-**Concepts to learn.** None new.
+**Concepts to learn.** Daemon; admission control; fair-share scheduling with cgroup `cpu.weight`; the cgroup freezer (`cgroup.freeze`).
 
 ---
 
