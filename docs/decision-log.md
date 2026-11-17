@@ -3243,6 +3243,37 @@ The kernel line settles an open point: the Ubuntu runners run kernel 7.0, not Ub
 
 ---
 
+### D-131 — CI run 44093789877 on `5e17acb` is green; `m13` is tagged there
+- **Date:** 2026-11-17
+- **Status:** Taken
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** Prince pushed `5e17acb`, the commit that finished M13. CI ran its four jobs on it and all four passed. M13 changed no code, so this run proves only that nothing broke between M12 and M13; it is still the rule (D-113) that a milestone is tagged on a commit CI has passed. `m13` is tagged on `5e17acb`. Prince also pushed the tags `m11` and `m12`; each push started its own CI run on the tagged commit (the run for `m12`, 44094504445, finished green).
+
+**The problem.** D-113: tag only after the CI run on that commit is green.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Tag `m13` on `5e17acb`, the commit CI ran | Taken | The M13 document and result are in it; same practice as D-121 and D-129 |
+| Tag on the later commit that records this run | Discarded | That commit has not been through CI; it changes only documents |
+
+**What this means for the code.** None. Local tag `m13`.
+
+**Evidence.** `gh run view 44093789877`: completed, success, head `5e17acb`; jobs `fhs`, `fhs-apparmor`, `release`, `debian` all success.
+- `fhs`: `system: Ubuntu 24.04.5 LTS`, `kernel: 7.0.0-1017-azure`. 167 tests passed (same counts per suite as D-129). 200-kill step: `fs.edit total: 1600 runs, 1600 killed, 0 violations`; `total: 4800 runs, 4800 killed, 0 invariant violations, 0 duplicated effects, 3711/3711 cut-off calls classified correctly`, recover p50 32.2 ms, p99 342.3 ms; external `1600 runs, 0 invariant violations, 0 duplicated effects, 927/927`.
+- `release`: `agentos-0.1.0-x86_64-linux.tar.gz (3.5M)`; `check: the packed program ran the demo task from the archive; the patch holds the fix`.
+- `debian`: `Debian GNU/Linux 12 (bookworm), kernel 6.1.0-54-cloud-amd64`; `passed 167 failed 0`.
+
+The recovery times are higher than in D-129 (p99 342 ms against 70 ms) on a runner with a different kernel build (`-azure` against `-aws`). Shared CI machines vary; these times are not the project's numbers (D-127), and the suite's pass condition is the invariants, which held.
+
+A first attempt to watch the run (`gh run watch`) ended with `error connecting to api.github.com`; that was the network on the development machine, not the run.
+
+**Concepts to learn.** None new.
+
+---
+
 ## Still open
 
 | Question | Notes |

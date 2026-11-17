@@ -5,7 +5,7 @@
 | Weeks in the plan | v1.0 (D-114); no week plan |
 | Started / finished | 2026-11-16 / 2026-11-17 |
 | Commits | `52d27e3` … (this commit) |
-| Status | Done, with Claude through a relay as the model (D-130), not a hosted API. The Groq attempt stopped after one ticket |
+| Status | Done, with Claude through a relay as the model (D-130), not a hosted API. The Groq attempt stopped after one ticket. CI run 44093789877 on `5e17acb` green, tag `m13` there (D-131) |
 
 Write this document for a reader who is new to Rust and Linux internals. Plain words first, the real term next to it. Fill it in while working.
 
