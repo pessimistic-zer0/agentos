@@ -1072,6 +1072,7 @@ Uncommitted. Some are research projects on their own.
 - **Signed execution records:** attestations that a patch was produced under a given policy.
 - **Multi-model comparison harness** built on comparative replay.
 - **Taken into v1.0 (2026-11-16, D-114)**, so no longer parked: seccomp, a disk limit, scratch folders out of checkpoints, a read-only folder in the workspace (`node_modules`), binary files and file modes through the file tools, and the edit tool below (as `fs.edit`).
+- **From the six-ticket trial with Claude through a relay (2026-11-17, `docs/results/relay-model-trial-nix.md`), parked:** a stop rule that knows which tests the task is about (or a baseline of what failed before the run); a denial that lists the allowed commands; a search tool or an allowed `grep`; a way for the agent to delete a file; clearer `fs.write` wording for a new file; no dropped-lines warning for a file the agent wrote itself.
 - **From the hosted-model trial (2026-11-16, `docs/results/hosted-model-trial-nix.md`), parked:** shortening a conversation that has grown past what the model's server accepts; ending a run at once on `413 Request too large` instead of telling the model three times; pacing requests to a known tokens-per-minute limit.
 - **Built 2026-11-16 (D-120)** as `fs.edit`; still parked from it: replacing every occurrence at once (`replace_all`).
 - **A patch/edit tool** (`fs.patch`: replace a range or apply a diff) so small models do not have to resend whole files. Came up in v1 M4 (D-060); not in v1 because the tool list is fixed at four.

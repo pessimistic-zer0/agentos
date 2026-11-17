@@ -5,7 +5,7 @@
 | Weeks in the plan | v1.0 (D-114); no week plan |
 | Started / finished | 2026-11-16 / in progress |
 | Commits | `3036816` … |
-| Status | In progress. Done and verified in CI: the compatibility promise, the CHANGELOG, the release archive, benchmarks on Ubuntu, install instructions, Debian 12. Open: the name (Prince), M13 (blocked on an API key), then version 1.0.0 and the tag |
+| Status | In progress. Done and verified in CI: the compatibility promise, the CHANGELOG, the release archive, benchmarks on Ubuntu, install instructions, Debian 12. Open: the name (Prince), then version 1.0.0 and the tag |
 
 Write this document for a reader who is new to Rust and Linux internals. Plain words first, the real term next to it. Fill it in while working.
 

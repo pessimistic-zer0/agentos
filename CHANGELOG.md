@@ -4,7 +4,7 @@ What changed for someone who uses AgentOS, newest first. The reasons are in `doc
 
 ## Unreleased (will be 1.0.0)
 
-Not released yet. Open before the release: the project name (D-023), the trial with a hosted model (M13, blocked on an API key), and a CI run on Ubuntu for the newest changes.
+Not released yet. Open before the release: the project name (D-023).
 
 ### Added
 

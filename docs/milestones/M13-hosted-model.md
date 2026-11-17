@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Weeks in the plan | v1.0 (D-114); no week plan |
-| Started / finished | 2026-11-16 / not finished |
-| Commits | `52d27e3` … |
-| Status | **Blocked**: the API key's tier allows 8,000 tokens per minute, which is also the largest single request; the six-ticket run cannot be made with it. One ticket was run |
+| Started / finished | 2026-11-16 / 2026-11-17 |
+| Commits | `52d27e3` … (this commit) |
+| Status | Done, with Claude through a relay as the model (D-130), not a hosted API. The Groq attempt stopped after one ticket |
 
 Write this document for a reader who is new to Rust and Linux internals. Plain words first, the real term next to it. Fill it in while working.
 
@@ -17,11 +17,12 @@ Everything real so far was done by a script, by a 4-billion-parameter local mode
 
 | Requirement | Met? | Evidence (command and result) |
 |---|---|---|
-| One run of a capable hosted model through each of the six tickets, each result checked on a fresh clone against the solution notes | **No.** One of six | `docs/results/hosted-model-trial-nix.md`: INV-101 solved (one-line fix, 2 failed / 76 passed on a clone, as the notes say); the other five not started |
-| A credential given by Prince for this project, used and stored nowhere (D-058) | Yes | The key was passed in the environment; `grep` for it in the execution folder finds nothing |
-| What the trial finds in the runtime is fixed or parked | Yes, so far | D-124 (wait as long as the server asks), with tests; two observations parked |
+| One run of a capable model through each of the six tickets, each result checked on a fresh clone against the solution notes | Yes, with a capable model through a relay; not a hosted API (D-130) | `docs/results/relay-model-trial-nix.md`: six of six solved, each checked against `SOLUTIONS.md` (reference numbers, ground-truth file, fixture bytes) |
+| (first attempt) the same with Groq's `qwen3.8-27b` | One of six, then blocked by the key's limit | `docs/results/hosted-model-trial-nix.md` |
+| A credential given by Prince for this project, used and stored nowhere (D-058) | Yes | The Groq key was passed in the environment; `grep` for it in the execution folder finds nothing. The relay needs none |
+| What the trial finds in the runtime is fixed or parked | Yes | D-124 (wait as long as the server asks), with tests; the relay trial's friction parked in the spec §22 |
 
-**Why it is not met.** The key's tier limits a minute to 8,000 tokens (measured from the response headers). Each request carries the whole conversation, so a conversation over 8,000 tokens cannot be sent at all: the server answers `413 Request too large`. The first ticket's run reached that at call 10. This needs a key with a higher limit, which only Prince can provide. The milestone stays open; no result is filled in for the five tickets that were not run.
+**About the change of model.** The Groq key's tier limits a minute to 8,000 tokens, and each request carries the whole conversation, so no conversation over 8,000 tokens can be sent; the first ticket hit that at call 10. Prince asked to use Claude Code instead. The relay keeps AgentOS's side exactly as with a hosted API; what changes is who answers, and the record says so (D-130).
 
 ## 3. What you need to know first
 
@@ -57,6 +58,8 @@ Everything real so far was done by a script, by a 4-billion-parameter local mode
 
 ## 8. Problems hit
 
+4. **Claude's usage limit cut the relay trial off twice.** The first time before any answer (five runs with 0 calls, set aside and restarted). The second time in the middle of four tickets: agentos waited ten minutes for each answer, ended the runs as `interrupted`, and `agentos run --resume` continued all four hours later with the conversation rebuilt from the log.
+
 1. **Stopped after three calls by a 429.** The runtime's pauses added up to 8.5 s; the server wanted up to a minute. Fixed (D-124); the run was resumed from the log.
 2. **Stopped at call 10 by a 413.** The conversation outgrew the key's per-minute cap. Not fixable in the runtime without a new mechanism (shortening a conversation), which is outside the v1.0 scope and parked. This is what blocks the milestone.
 3. **The first version of the new test would have passed with the old code.** It checked only the total time. The mock now refuses any request that comes back sooner than it asked, and the test requires exactly one refusal.
@@ -72,9 +75,16 @@ agentos run --repo <project> --policy <policy> --agent llm --task "$(cat task.tx
 
 ## 10. What this milestone does not do
 
-- It has not run five of the six tickets. No claim is made about them.
-- One run of one model is a record, not a measurement.
+- No hosted API ran the six tickets; the model that did is from the same family as the code's author.
+- One run per ticket is a record, not a measurement. No timing is claimed: a relay sits in every turn.
 
 ## 11. Check your understanding
 
-(Filled in when the milestone is finished.)
+1. Why did a model with a 131,072-token context fail on a key limited to 8,000 tokens per minute?
+2. What does `Retry-After` tell a client, and what did agentos do with it before D-124?
+3. What does the relay change about the trial, and what does it leave exactly as with a hosted API?
+4. Why is a model from the same family as the code's author weaker evidence than an independent one?
+5. Four runs were interrupted when the model stopped answering. What did agentos record, and how did `run --resume` continue?
+6. Why did four of six agents have a final answer refused, and what did they do about it?
+7. Why does allowing `pytest` allow whatever Python the agent writes into a test file?
+8. How was each ticket checked, and why on a fresh clone and not in the workspace?

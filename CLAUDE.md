@@ -168,11 +168,10 @@ M12 (tag `m12` locally, on `f38fff9`; `docs/milestones/M12-real-projects.md`), 2
 
 M14 (`docs/milestones/M14-release.md`), in progress: the compatibility promise with tests against frozen v0.1 files (D-126), `CHANGELOG.md`, the release archive and install instructions (D-127), Debian 12 in a virtual machine (D-128), a busy model server given the wait it asks for (D-124). All verified by CI run 43903121563 on `f38fff9` (D-129): four jobs green, `fhs` (167 tests, `make demo`, the 200-kill run), `fhs-apparmor`, `release` (archive built and run from; benchmarks, kept in `docs/results/bench-fhs/` as a record), `debian` (167 tests on Debian 12, kernel 6.1). The Ubuntu runners' kernel is 7.0. Open in M14: the name, then version 1.0.0 and the tag `v1.0`.
 
-M13 (`docs/milestones/M13-hosted-model.md`) is **blocked** after one of six tickets: the Groq key's tier allows 8,000 tokens per minute, which is also the largest request, and the conversations need more (`docs/results/hosted-model-trial-nix.md`). INV-101 was solved and checked. The five other tickets were not run.
+M13 (`docs/milestones/M13-hosted-model.md`), 2026-11-17: the six inventory tickets with Claude as the model, through a relay that looks like a model server and is answered by a fresh subagent per ticket (D-130; Prince's choice after the Groq key's limit stopped the hosted run after one ticket). Six of six solved, each checked on a clone against the solution notes (`docs/results/relay-model-trial-nix.md`). The friction it found (the stop rule in a project with other failing tests, denials that do not say what is allowed) is parked in the spec §22. No code change, so nothing to verify on `fhs`.
 
 Open, and only Prince can close them:
 
-- A key for M13 with a much higher tokens-per-minute limit (a higher Groq tier, or another OpenAI-compatible provider).
 - Decide the project name (D-023, D-068), before the `v1.0` tag (D-114). The license is settled: dual MIT OR Apache-2.0 (D-069).
 
 Update this section when any of these changes.

@@ -3216,11 +3216,38 @@ The kernel line settles an open point: the Ubuntu runners run kernel 7.0, not Ub
 
 ---
 
+### D-130 — M13 is done with Claude as the model, through a relay, instead of a hosted API
+- **Date:** 2026-11-17
+- **Status:** Taken (changes how item C7 of D-114 is met)
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** The trial with a capable model was blocked: the Groq key could not carry a whole conversation. Prince asked whether Claude Code could be used instead. It can, as the model: a small local program (the relay) looks to AgentOS like a model server; each request it receives is answered by a Claude Code subagent that sees only what AgentOS sends. AgentOS runs exactly as it would with a hosted model. All six tickets were run that way and all six were solved.
+
+**The problem.** M13 was blocked on a key only Prince could provide (D-124's trial record). Prince: "instead of a new api with higher limits can you just use claude code?"
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| A relay that turns each model request into a file, answered by a fresh subagent per ticket | Taken | The real agent loop, policy, sandbox, log and recovery are used unchanged; the model is capable; no new credential |
+| Call the API with Claude Code's own login from AgentOS | Discarded | That credential was not given for this project (D-058), and it belongs to Claude Code, not to other programs |
+| Have Claude act as the agent directly, calling `agentos` with scripts | Discarded | That bypasses the LLM agent loop (conversation, tool schemas, the stop rule, resume), which is half of what the trial is for |
+| Wait for a better key | Discarded | Prince chose the relay |
+| One subagent for all six tickets | Discarded | Each would learn the project from the earlier ones; one per ticket, started cold |
+
+**What this means for the code.** None. The relay is outside the repository (`~/Temp/AgentOS_temp/run4/`). The record says plainly what this evidence is and is not: not a hosted API, not an independent model (the same family built AgentOS), not a timing.
+
+**Evidence.** `docs/results/relay-model-trial-nix.md`. Six runs, all `COMPLETED`; each result applied to a fresh clone and checked against `SOLUTIONS.md`: INV-101 2 failed / 76 passed; INV-102 1 / 77 and `WEB-104240 (EUR)`; INV-103 alert counts and first rows equal the notes' reference numbers; INV-104 tax 40.77 / 183.75 / 278.08 as in the notes; INV-105 0 skipped and all 2,613 rows equal to `movements_truth.json`; INV-106 version 2 fixture, same timestamp and items, reorder points 500/15/40/25, executable script, same SHA-256 on two runs. No line removed from an existing test in any result. Four runs were interrupted by Claude's usage limit and resumed with `agentos run --resume`. A first attempt of five tickets was cut off by the same limit before any answer; those five runs (0 calls each) are kept in `run4/cut-off-attempt-1/` and not counted.
+
+**Concepts to learn.** What a test double for a model is (the relay is one with a real model behind it); why the same model family as the author weakens the evidence; independent replication.
+
+---
+
 ## Still open
 
 | Question | Notes |
 |---|---|
-| A key for the hosted-model trial (M13) with more than 8,000 tokens per minute | Only Prince can provide it. See `docs/milestones/M13-hosted-model.md` |
+| ~~A key for the hosted-model trial (M13)~~ | Not needed: Claude through a relay, at Prince's request (D-130) |
 | Project name | See D-023. Still open at v0.1 (D-068). Must be settled before the `v1.0` tag (D-114) |
 | ~~License~~ | Answered by D-069: dual MIT OR Apache-2.0 |
 | ~~Public repo from day one, or after v0.1?~~ | Answered by events: Prince pushed `main` to GitHub on 2026-11-12, after v0.1 was tagged locally |
@@ -3303,6 +3330,7 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-16 | The Debian result and the CHANGELOG, as committed in `fa0e572`, gave the Ubuntu CI runner's kernel as 6.8. Nothing had recorded it (the threat model says so); the number was Ubuntu 24.04's release kernel, assumed. Removed in the next commit; the CI job `fhs` now prints the system, kernel and security modules | A number that "everyone knows" is still a number without a source. If a fact is wanted in a document, first make something print it |
 | 2026-11-16 | Commit `2afc950` has a CI workflow file that is not valid YAML: a step name with `: ` in it, unquoted. The check was in the same command line as the commit, joined so that the commit ran whatever the check said. Fixed in the next commit, before any push | The third time today a commit was made before its check was read (`048e7e5`, `ef7b5d0`). A check that cannot stop the commit is not a check: validate in one step, commit in the next |
 | 2026-11-16 | The first CI run that printed its kernel showed 7.0 (`7.0.0-1014-aws`, `7.0.0-1017-azure`) on the Ubuntu 24.04 runners. Earlier the same day a document had said 6.8, from the distribution's release notes, and was corrected for having no source | The assumed number was not only unsourced, it was wrong. Hosted CI images carry their provider's kernel |
+| 2026-11-17 | Six of six tickets solved by Claude through the relay, each checked on a clone against the solution notes. The six subagents, working independently, reported the same two problems: the stop rule refuses to finish in a project whose suite has other tickets' failures (four of six had a final answer refused and narrowed the test command to get past it), and a denial does not say what is allowed | With a capable model the runtime held; the friction moved to what the agent is told. Several independent reports of the same thing are a stronger signal than one |
 
 ---
 
