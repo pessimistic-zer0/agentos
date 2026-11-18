@@ -3268,30 +3268,36 @@ The kernel line settles an open point: the Ubuntu runners run kernel 7.0, not Ub
 
 ---
 
-### D-132 — CI run 44093789877 is green on `5e17acb`; `m13` is tagged
-- **Date:** 2026-11-18
+### D-132 — CI run 44093789877 on `5e17acb` is green; `m13` is tagged there (this record, restored)
+- **Date:** 2026-11-17 (restored 2026-11-18)
 - **Status:** Taken
 - **Area:** process
 - **ADR:** none
 
-**In plain words.** Prince pushed `main` up to `5e17acb` (the end of M13) and the tags `m11` and `m12`. CI ran its four jobs on `5e17acb` and all four passed. M13 changed no code, so this run only confirms nothing broke; by the rule of D-113 the tag `m13` goes on that commit now.
+**About the number.** This record was first written as D-131 in commit `f9fb2d6`. The next commit, `c13f224`, replaced that text by mistake with the scheduling entry, which kept the number D-131. The text below is the original, restored from `f9fb2d6`, under a new number. Commit messages up to `f9fb2d6` that say "D-131" for this run mean this entry.
+
+**In plain words.** Prince pushed `5e17acb`, the commit that finished M13. CI ran its four jobs on it and all four passed. M13 changed no code, so this run proves only that nothing broke between M12 and M13; it is still the rule (D-113) that a milestone is tagged on a commit CI has passed. `m13` is tagged on `5e17acb`, after the run. Prince also pushed the tags `m11` and `m12`; each push started its own CI run on the tagged commit (44094503192 and 44094504445, both green).
 
 **The problem.** D-113: tag only after the CI run on that commit is green.
 
 **Options looked at.**
 | Option | Result | Why |
 |---|---|---|
-| Tag `m13` on `5e17acb` | Taken | The milestone's last commit, and the one CI ran on |
-| Tag it on the later commit `c13f224` (D-131) | Discarded | That commit only parks an idea; it is not part of M13 and CI has not run on it |
+| Tag `m13` on `5e17acb`, the commit CI ran | Taken | The M13 document and result are in it; same practice as D-121 and D-129 |
+| Tag on a later commit that records this run | Discarded | That commit has not been through CI; it changes only documents |
 
-**What this means for the code.** None. Local tag `m13`; Prince pushes it.
+**What this means for the code.** None. Local tag `m13`.
 
-**Correction (same day).** When this entry was committed, `git tag m13` failed: `m13` already existed on `5e17acb`, created at 17:12 on 2026-11-17 with the M13 commit, before CI had run. That broke D-113's order. The run turned out green, so the tag points at the right, verified commit and is kept as it is; the slip is recorded in Findings.
+**Evidence.** `gh run view 44093789877`: completed, success, head `5e17acb`; jobs `fhs`, `fhs-apparmor`, `release`, `debian` all success.
+- `fhs`: `system: Ubuntu 24.04.5 LTS`, `kernel: 7.0.0-1017-azure`. 167 tests passed (same counts per suite as D-129). 200-kill step: `fs.edit total: 1600 runs, 1600 killed, 0 violations`; `total: 4800 runs, 4800 killed, 0 invariant violations, 0 duplicated effects, 3711/3711 cut-off calls classified correctly`, recover p50 32.2 ms, p99 342.3 ms; external `1600 runs, 0 invariant violations, 0 duplicated effects, 927/927`.
+- `release`: `agentos-0.1.0-x86_64-linux.tar.gz (3.5M)`; `check: the packed program ran the demo task from the archive; the patch holds the fix`.
+- `debian`: `Debian GNU/Linux 12 (bookworm), kernel 6.1.0-54-cloud-amd64`; `passed 167 failed 0`.
 
-**Evidence.** `gh run view 44093789877`: conclusion `success`, head `5e17acb`; jobs `fhs`, `fhs-apparmor`, `release`, `debian` all `success` (34 min). Pushing the tags also ran CI on `fc31fbb` (`m11`, run 44094503192) and `f38fff9` (`m12`, run 44094504445); both green again. A first watch of the run stopped on "error connecting to api.github.com", a network error on this machine, not a CI result.
+The recovery times are higher than in D-129 (p99 342 ms against 70 ms) on a runner with a different kernel build (`-azure` against `-aws`). Shared CI machines vary; these times are not the project's numbers (D-127), and the suite's pass condition is the invariants, which held.
 
-**Concepts to learn.** Lightweight vs annotated git tags; why a tag should point at a verified commit.
+A first attempt to watch the run (`gh run watch`) ended with `error connecting to api.github.com`; that was the network on the development machine, not the run.
 
+**Concepts to learn.** A lightweight git tag has no date of its own: `git for-each-ref --format=%(creatordate)` shows the commit's date, not when the tag was made. The reflog shows when commits were made, not tags.
 ---
 
 ## Still open
@@ -3382,7 +3388,7 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-16 | Commit `2afc950` has a CI workflow file that is not valid YAML: a step name with `: ` in it, unquoted. The check was in the same command line as the commit, joined so that the commit ran whatever the check said. Fixed in the next commit, before any push | The third time today a commit was made before its check was read (`048e7e5`, `ef7b5d0`). A check that cannot stop the commit is not a check: validate in one step, commit in the next |
 | 2026-11-16 | The first CI run that printed its kernel showed 7.0 (`7.0.0-1014-aws`, `7.0.0-1017-azure`) on the Ubuntu 24.04 runners. Earlier the same day a document had said 6.8, from the distribution's release notes, and was corrected for having no source | The assumed number was not only unsourced, it was wrong. Hosted CI images carry their provider's kernel |
 | 2026-11-17 | Six of six tickets solved by Claude through the relay, each checked on a clone against the solution notes. The six subagents, working independently, reported the same two problems: the stop rule refuses to finish in a project whose suite has other tickets' failures (four of six had a final answer refused and narrowed the test command to get past it), and a denial does not say what is allowed | With a capable model the runtime held; the friction moved to what the agent is told. Several independent reports of the same thing are a stronger signal than one |
-| 2026-11-18 | Tag `m13` was found already set on `5e17acb` when CI turned green; it had been created with the commit, before the run (D-132) | Check `git tag --points-at` before writing that a tag is new; the rule of D-113 holds only if tagging waits for the run |
+| 2026-11-18 | Recording the CI run a second time showed that the scheduling commit (`c13f224`) had overwritten the first record of it (D-131 in `f9fb2d6`); how the entry got lost in that edit is not known. A "correction" written in the same hour then claimed `m13` was tagged before CI, read from the date of a lightweight tag, which is the commit's date. Both are undone in D-132 | Read `git log` and the file from disk before adding an entry; check `git diff --stat` for removed lines before committing a log change; a lightweight tag carries no time of its own |
 
 ---
 
