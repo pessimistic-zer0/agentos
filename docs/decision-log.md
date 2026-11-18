@@ -3286,6 +3286,8 @@ The kernel line settles an open point: the Ubuntu runners run kernel 7.0, not Ub
 
 **What this means for the code.** None. Local tag `m13`; Prince pushes it.
 
+**Correction (same day).** When this entry was committed, `git tag m13` failed: `m13` already existed on `5e17acb`, created at 17:12 on 2026-11-17 with the M13 commit, before CI had run. That broke D-113's order. The run turned out green, so the tag points at the right, verified commit and is kept as it is; the slip is recorded in Findings.
+
 **Evidence.** `gh run view 44093789877`: conclusion `success`, head `5e17acb`; jobs `fhs`, `fhs-apparmor`, `release`, `debian` all `success` (34 min). Pushing the tags also ran CI on `fc31fbb` (`m11`, run 44094503192) and `f38fff9` (`m12`, run 44094504445); both green again. A first watch of the run stopped on "error connecting to api.github.com", a network error on this machine, not a CI result.
 
 **Concepts to learn.** Lightweight vs annotated git tags; why a tag should point at a verified commit.
@@ -3380,6 +3382,7 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-16 | Commit `2afc950` has a CI workflow file that is not valid YAML: a step name with `: ` in it, unquoted. The check was in the same command line as the commit, joined so that the commit ran whatever the check said. Fixed in the next commit, before any push | The third time today a commit was made before its check was read (`048e7e5`, `ef7b5d0`). A check that cannot stop the commit is not a check: validate in one step, commit in the next |
 | 2026-11-16 | The first CI run that printed its kernel showed 7.0 (`7.0.0-1014-aws`, `7.0.0-1017-azure`) on the Ubuntu 24.04 runners. Earlier the same day a document had said 6.8, from the distribution's release notes, and was corrected for having no source | The assumed number was not only unsourced, it was wrong. Hosted CI images carry their provider's kernel |
 | 2026-11-17 | Six of six tickets solved by Claude through the relay, each checked on a clone against the solution notes. The six subagents, working independently, reported the same two problems: the stop rule refuses to finish in a project whose suite has other tickets' failures (four of six had a final answer refused and narrowed the test command to get past it), and a denial does not say what is allowed | With a capable model the runtime held; the friction moved to what the agent is told. Several independent reports of the same thing are a stronger signal than one |
+| 2026-11-18 | Tag `m13` was found already set on `5e17acb` when CI turned green; it had been created with the commit, before the run (D-132) | Check `git tag --points-at` before writing that a tag is new; the rule of D-113 holds only if tagging waits for the run |
 
 ---
 
