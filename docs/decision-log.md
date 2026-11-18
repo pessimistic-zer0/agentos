@@ -3268,6 +3268,30 @@ The kernel line settles an open point: the Ubuntu runners run kernel 7.0, not Ub
 
 ---
 
+### D-132 — CI run 44093789877 is green on `5e17acb`; `m13` is tagged
+- **Date:** 2026-11-18
+- **Status:** Taken
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** Prince pushed `main` up to `5e17acb` (the end of M13) and the tags `m11` and `m12`. CI ran its four jobs on `5e17acb` and all four passed. M13 changed no code, so this run only confirms nothing broke; by the rule of D-113 the tag `m13` goes on that commit now.
+
+**The problem.** D-113: tag only after the CI run on that commit is green.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Tag `m13` on `5e17acb` | Taken | The milestone's last commit, and the one CI ran on |
+| Tag it on the later commit `c13f224` (D-131) | Discarded | That commit only parks an idea; it is not part of M13 and CI has not run on it |
+
+**What this means for the code.** None. Local tag `m13`; Prince pushes it.
+
+**Evidence.** `gh run view 44093789877`: conclusion `success`, head `5e17acb`; jobs `fhs`, `fhs-apparmor`, `release`, `debian` all `success` (34 min). Pushing the tags also ran CI on `fc31fbb` (`m11`, run 44094503192) and `f38fff9` (`m12`, run 44094504445); both green again. A first watch of the run stopped on "error connecting to api.github.com", a network error on this machine, not a CI result.
+
+**Concepts to learn.** Lightweight vs annotated git tags; why a tag should point at a verified commit.
+
+---
+
 ## Still open
 
 | Question | Notes |
