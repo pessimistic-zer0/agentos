@@ -4,7 +4,7 @@ What changed for someone who uses Norn, newest first. The reasons are in `docs/d
 
 ## 1.0.0 (2026-11-25)
 
-The version number is set; the tag `v1.0` follows once CI has passed on this commit (D-113, D-135).
+Tag `v1.0`, on the commit that CI run 45489487156 passed on Ubuntu 24.04, Ubuntu with AppArmor's restriction on, and Debian 12 (D-136).
 
 ### Renamed
 

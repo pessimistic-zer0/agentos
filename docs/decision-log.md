@@ -3378,6 +3378,33 @@ A first attempt to watch the run (`gh run watch`) ended with `error connecting t
 
 **Concepts to learn.** Semantic versioning: 1.0.0 is the first version that makes a compatibility promise (here `docs/compatibility.md`).
 
+### D-136 — CI run 45489487156 on `d83aba5` is green; `v1.0` is tagged there; M14 is done
+- **Date:** 2026-11-25
+- **Status:** Taken
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** Prince renamed the GitHub repository to `pessimistic-zer0/norn` and pushed the rename (D-133, D-134) and the version 1.0.0 (D-135). CI ran its four jobs on the pushed commit, `d83aba5`, and all four passed. So the rename and the version are verified on `fhs`, and by D-113 the release tag can go on that commit. `v1.0` is tagged on `d83aba5`. M14, and with it the v1.0 scope of D-114, is done.
+
+**The problem.** D-113: tag only after the CI run on that commit is green.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Tag `v1.0` on `d83aba5`, the commit CI ran | Taken | Same practice as D-121, D-129, D-132 |
+| Tag the later commit that records this run | Discarded | That commit changes only documents and has not been through CI |
+
+**What this means for the code.** None. Local tag `v1.0`; the local folder is still called `agentos`, which nothing depends on.
+
+**Evidence.** `gh run view 45489487156`: conclusion success, head `d83aba5d104c1aa0aa1527fa18718db5b34d0ca3`; jobs `fhs`, `fhs-apparmor`, `release`, `debian` all success. From the log:
+- `fhs`: `system: Ubuntu 24.04.5 LTS`, `kernel: 7.0.0-1017-azure`. The step "Tests" 168 passed (sum of its `test result` lines). 200-kill step: `fs.edit total: 1600 runs, 1600 killed, 0 violations`; `total: 4800 runs, 4800 killed, 0 invariant violations, 0 duplicated effects, 3769/3769 cut-off calls classified correctly; norn recover wall time p50 22.6 ms, p99 66.0 ms`; `external total: 1600 runs, 0 invariant violations, 0 duplicated effects, 927/927 cut-off calls classified correctly`. The demo step's `1 failed, 3 passed` is the demo repository's test before the fix, as the demo intends.
+- `release`: `norn-1.0.0-x86_64-linux.tar.gz (3.5M)`; `norn 1.0.0`; `check: the packed program ran the demo task from the archive; the patch holds the fix`.
+- `debian`: `Debian GNU/Linux 12 (bookworm), kernel 6.1.0-56-cloud-amd64`; `passed 168 failed 0`.
+
+A first attempt to wait for the run found nothing: `gh run list --commit` was given the short hash `d83aba5`, which it does not match. The run was found by `gh run list` instead.
+
+**Concepts to learn.** None new.
+
 ---
 
 ## Still open
@@ -3470,6 +3497,7 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-17 | Six of six tickets solved by Claude through the relay, each checked on a clone against the solution notes. The six subagents, working independently, reported the same two problems: the stop rule refuses to finish in a project whose suite has other tickets' failures (four of six had a final answer refused and narrowed the test command to get past it), and a denial does not say what is allowed | With a capable model the runtime held; the friction moved to what the agent is told. Several independent reports of the same thing are a stronger signal than one |
 | 2026-11-18 | Recording the CI run a second time showed that the scheduling commit (`c13f224`) had overwritten the first record of it (D-131 in `f9fb2d6`); how the entry got lost in that edit is not known. A "correction" written in the same hour then claimed `m13` was tagged before CI, read from the date of a lightweight tag, which is the commit's date. Both are undone in D-132 | Read `git log` and the file from disk before adding an entry; check `git diff --stat` for removed lines before committing a log change; a lightweight tag carries no time of its own |
 | 2026-11-25 | The first test run after the mechanical rename (every `agentos` to `norn`, with the key's text protected in `src/` and two documents) failed three tests in `tests/external.rs`: the rename had also changed the expected keys in the tests, and the code still sent `agentos-…` | The tests that pin the exact idempotency key did their job: a renamed key would have resent old uncertain calls as new orders. A search-and-replace across a code base needs a list of the strings that are formats, not words, and must reach the tests too |
+| 2026-11-25 | `gh run list --commit d83aba5` returned no run although the run existed: the filter wants the full commit hash | A wait loop that finds nothing should say why, not only time out; give tools the full hash (`git rev-parse`) |
 
 ---
 
