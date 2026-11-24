@@ -3355,6 +3355,29 @@ A first attempt to watch the run (`gh run watch`) ended with `error connecting t
 
 **Concepts to learn.** Fallback (a second place to look when the first is empty); why a value that is sent to another system is part of the format, not a name.
 
+### D-135 — The version becomes 1.0.0, in its own commit; the tag `v1.0` waits for CI
+- **Date:** 2026-11-25
+- **Status:** Taken
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** With the name settled (D-133), the only things left in M14 were the version number and the tag. The version in `Cargo.toml` is now 1.0.0, and the CHANGELOG's "Unreleased" section is now "1.0.0". The tag `v1.0` is not made yet: since D-113 a tag goes only on a commit that CI has passed, and CI runs only after Prince pushes.
+
+**The problem.** M14 put the version last. The rename changed 66 files and has not been through CI either, so the question was whether to wait for a CI run on the rename before setting the version.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Set 1.0.0 now, in a commit of its own after the rename; one CI run covers both | Taken | The version changes one line of code; the commit that CI passes is then the commit that gets the tag |
+| Wait for a CI run on the rename first | Discarded | A second push and run for a one-line change; the tag would still need a run on the version commit |
+| Tag `v1.0` now | Discarded | D-113 |
+
+**What this means for the code.** `Cargo.toml` `version = "1.0.0"`; the release archive is called `norn-1.0.0-<machine>-linux.tar.gz`.
+
+**Evidence.** After the change, on `nix`: `make test` 168 passed, 0 failed; `packaging/release.sh --check` packed `norn-1.0.0-x86_64-linux.tar.gz (3.7M)`, the unpacked program printed `norn 1.0.0` and "ran the demo task from the archive". Not yet run on `fhs`.
+
+**Concepts to learn.** Semantic versioning: 1.0.0 is the first version that makes a compatibility promise (here `docs/compatibility.md`).
+
 ---
 
 ## Still open

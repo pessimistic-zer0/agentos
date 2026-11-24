@@ -5,7 +5,7 @@
 | Weeks in the plan | v1.0 (D-114); no week plan |
 | Started / finished | 2026-11-16 / in progress |
 | Commits | `3036816` … |
-| Status | In progress. Done and verified in CI: the compatibility promise, the CHANGELOG, the release archive, benchmarks on Ubuntu, install instructions, Debian 12. The name: norn (D-133, D-134), not yet through CI. Open: version 1.0.0 and the tag |
+| Status | In progress. Done and verified in CI: the compatibility promise, the CHANGELOG, the release archive, benchmarks on Ubuntu, install instructions, Debian 12. The name: norn (D-133, D-134) and version 1.0.0 (D-135), not yet through CI. Open: a green CI run on that commit, then the tag |
 
 Write this document for a reader who is new to Rust and Linux internals. Plain words first, the real term next to it. Fill it in while working.
 
@@ -22,7 +22,7 @@ Turn the code of M11 and M12 into something that can be called 1.0: say what sta
 | D9: a release build in CI | Yes (CI run 43903121563, job `release`, D-129) | `packaging/release.sh --check` on `nix`: packs a 3.7 MB archive and runs the demo task from it; CI job `release` (D-127) |
 | D9: benchmarks run on Ubuntu | Yes, as a record (`docs/results/bench-fhs/`, D-129) | the same job runs `make bench` and uploads `docs/results/bench-fhs` |
 | D9: install instructions | Yes | README, "Installing it" |
-| D9: Cargo version 1.0.0 | Not started (last step) | |
+| D9: Cargo version 1.0.0 | Yes, on `nix` (D-135); on `fhs` not yet verified | `Cargo.toml` `version = "1.0.0"`; `norn --version` prints `norn 1.0.0` |
 | D11: one more distribution in CI, or a written reason why not | Yes: Debian 12 in CI (run 43903121563, job `debian`, 167 passed, D-129) | `ci/debian-vm.sh`: Debian 12, kernel 6.1, in a VM on the development machine: `make test` 167 passed (`docs/results/debian-12.md`); CI job `debian` (D-128) |
 | D8: the project name | Yes: norn, Prince's choice (D-133); on `fhs` not yet verified | Renamed in code, scripts, CI and current documents (D-134). `make test` 168 passed on `nix`; `make demo` and `packaging/release.sh --check` pass |
 | Tag `v1.0` after a green CI run on that commit | Not yet | |
@@ -61,6 +61,7 @@ Turn the code of M11 and M12 into something that can be called 1.0: say what sta
 
 | Entry | Decision | Discarded alternatives |
 |---|---|---|
+| D-135 | Version 1.0.0 set in its own commit, right after the rename; the tag waits for CI | Tagging before CI; waiting for CI on the rename before setting the version |
 | D-134 | The rename keeps the `ext.call` key `agentos-…`, reads `AGENTOS_` settings as a fallback, and leaves history and frozen fixtures as written | Renaming the key; new setting names only; looking in the old state folder too |
 | D-133 | The name norn | enma, possum, sanzu, skuld, veles, keeping AgentOS |
 | D-128 | Debian 12 in a VM, by a script shared by the development machine and CI | A container; root in a privileged container; Fedora too |
