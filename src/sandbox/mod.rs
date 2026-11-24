@@ -75,8 +75,8 @@ pub fn disk_usage(dir: &Path) -> u64 {
 
 /// Run one command in a fresh sandbox inside `cg` and wait for it.
 ///
-/// `helper` is the agentos binary itself (it is started again as
-/// `agentos __sandbox-init`). The second value says whether the runtime
+/// `helper` is the norn binary itself (it is started again as
+/// `norn __sandbox-init`). The second value says whether the runtime
 /// stopped the command (timeout or disk limit).
 pub fn run(
     helper: &Path,
@@ -193,10 +193,10 @@ pub fn run(
     }
     let mut stderr_text = err;
     if oom {
-        stderr_text.push_str("\n[agentos] the command hit limits.memory_mb and was killed by the OOM killer\n");
+        stderr_text.push_str("\n[norn] the command hit limits.memory_mb and was killed by the OOM killer\n");
     }
     if pids_hit {
-        stderr_text.push_str("\n[agentos] the command hit limits.pids; some fork() calls failed\n");
+        stderr_text.push_str("\n[norn] the command hit limits.pids; some fork() calls failed\n");
     }
     let out = ExecOutput {
         exit_code,
@@ -217,7 +217,7 @@ pub fn run(
 /// Whether a user namespace can really be used is found out by trying, in
 /// a forked child (`ns::probe_in_child`). Reading the kernel's switches is
 /// not enough: on Ubuntu the switch `apparmor_restrict_unprivileged_userns`
-/// can be on and agentos still be allowed, through its AppArmor profile
+/// can be on and norn still be allowed, through its AppArmor profile
 /// (D-093). `helper` is only the program named in the `Command` that does
 /// the fork; it is never started.
 pub fn check_host(helper: &Path) -> Vec<String> {
@@ -251,10 +251,10 @@ pub fn check_host(helper: &Path) -> Vec<String> {
         if read("/proc/sys/kernel/apparmor_restrict_unprivileged_userns").as_deref() == Some("1") {
             msg.push_str(
                 "\n    This system (Ubuntu 23.10 or newer) only allows them for programs with an AppArmor profile. \
-                 Install the one that comes with agentos; it allows them for agentos alone:\n      \
-                 sudo install -m 644 packaging/apparmor/agentos /etc/apparmor.d/agentos\n      \
-                 sudo apparmor_parser -r /etc/apparmor.d/agentos\n    \
-                 (The profile names /usr/local/bin/agentos; change that line if the program is somewhere else.)\n    \
+                 Install the one that comes with norn; it allows them for norn alone:\n      \
+                 sudo install -m 644 packaging/apparmor/norn /etc/apparmor.d/norn\n      \
+                 sudo apparmor_parser -r /etc/apparmor.d/norn\n    \
+                 (The profile names /usr/local/bin/norn; change that line if the program is somewhere else.)\n    \
                  Or, for every program on the machine: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0",
             );
         } else if read("/proc/sys/user/max_user_namespaces").as_deref() == Some("0") {

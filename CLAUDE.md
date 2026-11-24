@@ -1,4 +1,4 @@
-# AgentOS
+# Norn
 
 A Rust runtime that runs a coding agent's tool calls inside a rootless Linux sandbox and survives `kill -9` without losing track of what happened. It is a learning and resume project, not a product.
 
@@ -67,8 +67,8 @@ At the end of each milestone, write `docs/milestones/M<n>-<name>.md` from `docs/
 | `M5-benchmarks.md` | 10 | Benchmarks, full security suite |
 | `M6-release.md` | 11–12 | README, threat model, recovery semantics, v0.1 |
 | `M7-bonus-external-tool.md` | after v0.1 | Bonus: `ext.call`, the fake service, its reconciliation rule and fault cells |
-| `M10-apply.md` | after M9 | `agentos apply`: the result copied into the repository by a command the user runs (D-108) |
-| `M9-conveniences.md` | after M8 | `agentos rm` and `check`, self-start in a scope, a message when stopped, `fs.read` with a line range, policy lists `skip`, `scratch`, `deny_except`, a note for an inactive virtualenv, `stopped` when the model gives up |
+| `M10-apply.md` | after M9 | `norn apply`: the result copied into the repository by a command the user runs (D-108) |
+| `M9-conveniences.md` | after M8 | `norn rm` and `check`, self-start in a scope, a message when stopped, `fs.read` with a line range, policy lists `skip`, `scratch`, `deny_except`, a note for an inactive virtualenv, `stopped` when the model gives up |
 | `M11-hardening.md` | v1.0 | seccomp, measured disk limit, scratch out of checkpoints (D-114) |
 | `M12-real-projects.md` | v1.0 | `fs.edit`, read-only folder in the workspace, binary files and modes |
 | `M13-hosted-model.md` | v1.0 | A capable hosted model through the six inventory tickets |
@@ -86,7 +86,7 @@ At the end of each milestone, write `docs/milestones/M<n>-<name>.md` from `docs/
 7. Paths are confined by the kernel (`openat2`, mount namespace, Landlock), never by string checks.
 8. Commands are argv arrays run with `execve`. Never build a shell string.
 9. The event log and checkpoints are never visible inside the sandbox.
-10. A run never modifies the original repo. Its output is a patch. Only `agentos apply`, a separate command the user runs afterwards, writes into a repository, and only if it is unchanged since the copy (D-108).
+10. A run never modifies the original repo. Its output is a patch. Only `norn apply`, a separate command the user runs afterwards, writes into a repository, and only if it is unchanged since the copy (D-108).
 
 ## Portability
 
@@ -113,12 +113,12 @@ At the end of each milestone, write `docs/milestones/M<n>-<name>.md` from `docs/
 
 Run everything inside the dev shell (`flake.nix`): `nix develop -c <command>`, or `nix develop` once for an interactive shell.
 
-- Since M9, `agentos run` and `agentos check` move themselves into a delegated scope (D-105); the `systemd-run` prefix in the commands below is still correct and still what `make` and CI use. `AGENTOS_IN_SCOPE=1` switches the self-start off.
-- Before a first run on a repo: `agentos check --policy <file> --repo <folder>`. After a run: read `result.patch`, then `agentos apply <id>` (`--dry-run` first; `--to <folder>` for another copy). Tests: `tests/apply.rs`. Clean up: `agentos rm <id>`, `--older-than <days>`, `--all`, `--dry-run`.
-- Build and test: `nix develop -c make test` (= `systemd-run --user --scope -p Delegate=yes cargo test`: unit tests, `tests/vertical_slice.rs`, `tests/security/`, and `tests/recovery/` with 3 kills per cell). Without the delegated cgroup the sandbox tests fail at startup with a message saying so. `AGENTOS_TEST_PRESET=fhs` switches the policy preset.
+- Since M9, `norn run` and `norn check` move themselves into a delegated scope (D-105); the `systemd-run` prefix in the commands below is still correct and still what `make` and CI use. `NORN_IN_SCOPE=1` switches the self-start off.
+- Before a first run on a repo: `norn check --policy <file> --repo <folder>`. After a run: read `result.patch`, then `norn apply <id>` (`--dry-run` first; `--to <folder>` for another copy). Tests: `tests/apply.rs`. Clean up: `norn rm <id>`, `--older-than <days>`, `--all`, `--dry-run`.
+- Build and test: `nix develop -c make test` (= `systemd-run --user --scope -p Delegate=yes cargo test`: unit tests, `tests/vertical_slice.rs`, `tests/security/`, and `tests/recovery/` with 3 kills per cell). Without the delegated cgroup the sandbox tests fail at startup with a message saying so. `NORN_TEST_PRESET=fhs` switches the policy preset.
 - Fault-injection suite at full size: `nix develop -c make eval-recovery` (200 kills per cell, about 8 minutes; `RUNS=20` for a quick look). Results of record go in `docs/results/`.
-- Crash by hand: `AGENTOS_CRASH_AT=P4 AGENTOS_CRASH_CALL=6 agentos run ...`, then `agentos recover <id>` and `agentos run --resume <id>` (see `src/faults.rs`).
-- LLM agent: start any OpenAI-compatible server (for llama.cpp: `llama-server -m <model>.gguf --jinja --port 8080`), set `AGENTOS_LLM_BASE_URL` / `AGENTOS_LLM_MODEL` (and `AGENTOS_LLM_API_KEY` for a hosted API), then `agentos run --agent llm --task "..." --repo ... --policy ...`. `tests/llm_agent.rs` uses a mock endpoint and needs no model. Never use a credential found in the environment that Prince did not give for this project (D-058).
+- Crash by hand: `NORN_CRASH_AT=P4 NORN_CRASH_CALL=6 norn run ...`, then `norn recover <id>` and `norn run --resume <id>` (see `src/faults.rs`).
+- LLM agent: start any OpenAI-compatible server (for llama.cpp: `llama-server -m <model>.gguf --jinja --port 8080`), set `NORN_LLM_BASE_URL` / `NORN_LLM_MODEL` (and `NORN_LLM_API_KEY` for a hosted API), then `norn run --agent llm --task "..." --repo ... --policy ...`. `tests/llm_agent.rs` uses a mock endpoint and needs no model. Never use a credential found in the environment that Prince did not give for this project (D-058).
 - The three suites of the v1 design: `nix develop -c make eval` (= `eval-recovery`, `eval-security`, `bench`). Benchmarks alone: `make bench`; raw data and `summary.md` land in `docs/results/bench-<preset>/`. No number goes into a document unless it is in `docs/results/`.
 - Security suite only: `make eval-security` (32 adversarial cases plus the benign suite).
 - Lint: `nix develop -c cargo clippy --all-targets`.
@@ -134,7 +134,7 @@ Run everything inside the dev shell (`flake.nix`): `nix develop -c <command>`, o
 - The disk limit `limits.workspace_mb` (D-117): the last four tests of `tests/hardening.rs`.
 - Hostile leftovers and folder-making writes: `tests/hardening.rs` (part of `make test`; alone: `systemd-run --user --scope -p Delegate=yes cargo test --test hardening`).
 - Packages from outside the repo (a mounted virtualenv, `[sandbox.env]`): `tests/deps.rs`. First messages, the patch's notes, the startup probe: `tests/hardening.rs`.
-- Ubuntu without the system-wide sysctl: `packaging/apparmor/agentos` (install steps in its header and in the README); CI job `fhs-apparmor`.
+- Ubuntu without the system-wide sysctl: `packaging/apparmor/norn` (install steps in its header and in the README); CI job `fhs-apparmor`.
 - Bugs the suites find in the runtime get a note in `docs/bugs.md`.
 - CI: `gh run list --limit 5`, `gh run view <id> --log-failed`, `gh run download <id> -n recovery-report-fhs`.
 
@@ -149,16 +149,16 @@ The bonus (M7, tag `m7` locally) is built on top of v0.1: the tool `ext.call`, t
 M8 (tag `m8` locally; `docs/milestones/M8-first-user.md`) is the work after the bonus, asked for by Prince on 2026-11-13 and 2026-11-14:
 
 - Bugs found by using the program by hand, all fixed: B-009 to B-013 (`docs/bugs.md`). `fs.write` makes missing folders (D-084).
-- What a first user needs (D-088): clearer first messages and an early check for the LLM server (D-089); a patch that lists what it cannot carry (D-090, D-095); packages from outside the repo (D-091, D-092; `tests/deps.rs`); an AppArmor profile and a startup probe that tries (D-093, D-096; `packaging/apparmor/agentos`).
-- First trial on a project that is not the demo: `docs/results/real-repo-trial-nix.md` (the test project is in `~/Temp/AgentOS_temp/`, outside this repository). Ideas it raised are parked in the spec, §22.
+- What a first user needs (D-088): clearer first messages and an early check for the LLM server (D-089); a patch that lists what it cannot carry (D-090, D-095); packages from outside the repo (D-091, D-092; `tests/deps.rs`); an AppArmor profile and a startup probe that tries (D-093, D-096; `packaging/apparmor/norn`).
+- First trial on a project that is not the demo: `docs/results/real-repo-trial-nix.md` (the test project is in `~/Temp/Norn_temp/`, outside this repository). Ideas it raised are parked in the spec, §22.
 - On `nix`: `make test` 105 passed; 200-kill run 4,800 + 1,600 runs with 0 violations (`docs/results/recovery-200-nix-m8.md`); benchmarks re-run (`docs/results/bench-nix-m8/`).
-- On `fhs`: CI run 43612319559 on `69cdbf0` (D-097), both jobs green: `fhs` (105 tests, `make demo`, the 200-kill run) and `fhs-apparmor` (restriction on; refuses without the profile; runs with the profile installed at `/usr/local/bin/agentos` as the README says, and four suites). Earlier M8 runs: 43573592353 (D-087), 43590153676 (D-094). Not run on Ubuntu: benchmarks.
+- On `fhs`: CI run 43612319559 on `69cdbf0` (D-097), both jobs green: `fhs` (105 tests, `make demo`, the 200-kill run) and `fhs-apparmor` (restriction on; refuses without the profile; runs with the profile installed at `/usr/local/bin/norn` as the README says, and four suites). Earlier M8 runs: 43573592353 (D-087), 43590153676 (D-094). Not run on Ubuntu: benchmarks.
 
-M9 (tag `m9` locally; `docs/milestones/M9-conveniences.md`), 2026-11-15: ten of the parked ideas (D-098 to D-107). On `nix`: `make test` 118 passed; the real-project session repeated (`docs/results/real-repo-trial-nix.md`, second part); 200-kill run in `docs/results/recovery-200-nix-m9.md`. Verified on `fhs` together with M10 (D-110). Held at the time: `agentos apply` (built next, M10) and binary file tools. The model-server error met in the re-trial is handled since D-111.
+M9 (tag `m9` locally; `docs/milestones/M9-conveniences.md`), 2026-11-15: ten of the parked ideas (D-098 to D-107). On `nix`: `make test` 118 passed; the real-project session repeated (`docs/results/real-repo-trial-nix.md`, second part); 200-kill run in `docs/results/recovery-200-nix-m9.md`. Verified on `fhs` together with M10 (D-110). Held at the time: `norn apply` (built next, M10) and binary file tools. The model-server error met in the re-trial is handled since D-111.
 
-`agentos apply` (M10, tag `m10` locally; `docs/milestones/M10-apply.md`; D-108), 2026-11-15: copies a finished execution's result into the repository, including what a patch cannot carry; refuses if the repository changed since the copy. `tests/apply.rs` (6 tests). On `nix`: `make test` 125 passed. On `fhs`: CI run 43691133260 on `d98eab1` (D-110), both jobs green: 125 tests, `make demo`, the 200-kill run, and the AppArmor job. The run before it (43690755406) failed on a false note that only Ubuntu could show (B-014, D-109). Still parked: binary files and file modes through the file tools.
+`norn apply` (M10, tag `m10` locally; `docs/milestones/M10-apply.md`; D-108), 2026-11-15: copies a finished execution's result into the repository, including what a patch cannot carry; refuses if the repository changed since the copy. `tests/apply.rs` (6 tests). On `nix`: `make test` 125 passed. On `fhs`: CI run 43691133260 on `d98eab1` (D-110), both jobs green: 125 tests, `make demo`, the 200-kill run, and the AppArmor job. The run before it (43690755406) failed on a false note that only Ubuntu could show (B-014, D-109). Still parked: binary files and file modes through the file tools.
 
-After M10, 2026-11-15, no new tag yet: the model server's answers are sorted into wait, error and tell-the-model (D-111; verified on `fhs` by CI run 43733350171 on `2a6a3d1`, D-113), and helper programs for commands (`exec.helpers`, D-112), found in a trial on a Node and a Rust project (`docs/results/second-stack-trial-nix.md`; the two projects are in `~/Temp/AgentOS_temp/`). On `nix`: `make test` 130 passed. D-112 is verified on `fhs` by CI run 43844369387 (D-119). `main`, and the tags up to `m10`, are on GitHub, pushed by Prince.
+After M10, 2026-11-15, no new tag yet: the model server's answers are sorted into wait, error and tell-the-model (D-111; verified on `fhs` by CI run 43733350171 on `2a6a3d1`, D-113), and helper programs for commands (`exec.helpers`, D-112), found in a trial on a Node and a Rust project (`docs/results/second-stack-trial-nix.md`; the two projects are in `~/Temp/Norn_temp/`). On `nix`: `make test` 130 passed. D-112 is verified on `fhs` by CI run 43844369387 (D-119). `main`, and the tags up to `m10`, are on GitHub, pushed by Prince.
 
 v1.0 is in progress (D-114), milestones M11 to M14.
 
@@ -166,12 +166,12 @@ M11 (tag `m11` locally, on `fc31fbb`; `docs/milestones/M11-hardening.md`), 2026-
 
 M12 (tag `m12` locally, on `f38fff9`; `docs/milestones/M12-real-projects.md`), 2026-11-16: `fs.edit` (D-120), a read-only repository folder inside the workspace (`filesystem.ro_dirs`, D-122), binary files and the executable bit through the file tools (D-123). With `fs.edit` the local 4B model solved the two-module ticket it had failed three times (`docs/results/real-repo-trial-nix.md`, last part). Verified on `fhs` by CI runs 43894443267 (D-125) and 43903121563 (D-129).
 
-M14 (`docs/milestones/M14-release.md`), in progress: the compatibility promise with tests against frozen v0.1 files (D-126), `CHANGELOG.md`, the release archive and install instructions (D-127), Debian 12 in a virtual machine (D-128), a busy model server given the wait it asks for (D-124). All verified by CI run 43903121563 on `f38fff9` (D-129): four jobs green, `fhs` (167 tests, `make demo`, the 200-kill run), `fhs-apparmor`, `release` (archive built and run from; benchmarks, kept in `docs/results/bench-fhs/` as a record), `debian` (167 tests on Debian 12, kernel 6.1). The Ubuntu runners' kernel is 7.0. Open in M14: the name, then version 1.0.0 and the tag `v1.0`.
+M14 (`docs/milestones/M14-release.md`), in progress: the compatibility promise with tests against frozen v0.1 files (D-126), `CHANGELOG.md`, the release archive and install instructions (D-127), Debian 12 in a virtual machine (D-128), a busy model server given the wait it asks for (D-124). All verified by CI run 43903121563 on `f38fff9` (D-129): four jobs green, `fhs` (167 tests, `make demo`, the 200-kill run), `fhs-apparmor`, `release` (archive built and run from; benchmarks, kept in `docs/results/bench-fhs/` as a record), `debian` (167 tests on Debian 12, kernel 6.1). The Ubuntu runners' kernel is 7.0. The name is **norn** (D-133, 2026-11-25; the rename, and what keeps the old name on purpose, such as the `ext.call` idempotency key and the `AGENTOS_` settings as a fallback: D-134). On `nix`: `make test` 168 passed. Not yet verified on `fhs`. Open in M14: version 1.0.0 and the tag `v1.0`, after a green CI run.
 
 M13 (tag `m13` locally, on `5e17acb`; `docs/milestones/M13-hosted-model.md`), 2026-11-17: the six inventory tickets with Claude as the model, through a relay that looks like a model server and is answered by a fresh subagent per ticket (D-130; Prince's choice after the Groq key's limit stopped the hosted run after one ticket). Six of six solved, each checked on a clone against the solution notes (`docs/results/relay-model-trial-nix.md`). The friction it found (the stop rule in a project with other failing tests, denials that do not say what is allowed) is parked in the spec §22. No code change; CI run 44093789877 on `5e17acb` is green on all four jobs (D-132). Scheduling is parked as a v2 sketch (D-131).
 
 Open, and only Prince can close them:
 
-- Decide the project name (D-023, D-068), before the `v1.0` tag (D-114). The license is settled: dual MIT OR Apache-2.0 (D-069).
+- Push, so that CI can run on the renamed code; then `v1.0` can be tagged (D-113). Renaming the GitHub repository and the local folder to `norn` is his to do (D-134).
 
 Update this section when any of these changes.

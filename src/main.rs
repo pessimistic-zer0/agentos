@@ -1,20 +1,20 @@
-//! The `agentos` command line.
+//! The `norn` command line.
 
 use std::path::PathBuf;
 
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 
-use agentos::agent::llm::{LlmAgent, LlmConfig};
-use agentos::agent::scripted::{Script, ScriptedAgent};
-use agentos::runtime::{self, RunOptions};
-use agentos::trace;
-use agentos::workspace::{self, ExecDir};
+use norn::agent::llm::{LlmAgent, LlmConfig};
+use norn::agent::scripted::{Script, ScriptedAgent};
+use norn::runtime::{self, RunOptions};
+use norn::trace;
+use norn::workspace::{self, ExecDir};
 
 #[derive(Parser)]
-#[command(name = "agentos", version, about = "Run a coding agent's tool calls under a policy, with a durable event log")]
+#[command(name = "norn", version, about = "Run a coding agent's tool calls under a policy, with a durable event log")]
 struct Cli {
-    /// Where executions are stored [default: $AGENTOS_STATE_DIR, else ~/.local/share/agentos]
+    /// Where executions are stored [default: $NORN_STATE_DIR, else ~/.local/share/norn]
     #[arg(long, global = true)]
     state_dir: Option<PathBuf>,
     #[command(subcommand)]
@@ -39,7 +39,7 @@ enum Cmd {
         #[arg(long)]
         script: Option<PathBuf>,
         /// For --agent llm: the task, in words. The endpoint comes from
-        /// AGENTOS_LLM_BASE_URL, AGENTOS_LLM_MODEL and AGENTOS_LLM_API_KEY
+        /// NORN_LLM_BASE_URL, NORN_LLM_MODEL and NORN_LLM_API_KEY
         #[arg(long)]
         task: Option<String>,
         /// Continue this interrupted execution: recover it, then go on
@@ -119,14 +119,14 @@ fn main() -> Result<()> {
     // so it never shows up in --help.
     let args: Vec<String> = std::env::args().collect();
     if args.len() == 3 && args[1] == "__sandbox-init" {
-        agentos::sandbox::ns::helper_main(&args[2]);
+        norn::sandbox::ns::helper_main(&args[2]);
     }
     let cli = Cli::parse();
     if matches!(cli.cmd, Cmd::Run { .. } | Cmd::Check { .. }) {
         enter_delegated_scope();
     }
     if matches!(cli.cmd, Cmd::Run { .. } | Cmd::Recover { .. }) {
-        agentos::interrupt::install();
+        norn::interrupt::install();
     }
     // Made absolute once, here: later steps run helper programs (`diff`,
     // `cp`) from other folders, where a relative path means something else
@@ -182,7 +182,7 @@ fn main() -> Result<()> {
         Cmd::Check { policy, repo } => {
             let problems = runtime::check(policy.as_deref(), repo.as_deref());
             if problems > 0 {
-                bail!("{problems} problem(s) found; `agentos run` would not start");
+                bail!("{problems} problem(s) found; `norn run` would not start");
             }
         }
         Cmd::Rm { ids, older_than, all, force, dry_run } => {
@@ -203,9 +203,9 @@ fn main() -> Result<()> {
                 let result = runtime::remove_execution(&state_dir, id, force, dry_run)?;
                 match result {
                     runtime::Removal::Removed => println!("{verb} {id}"),
-                    runtime::Removal::InUse => println!("kept {id}: an agentos process is working on it"),
+                    runtime::Removal::InUse => println!("kept {id}: an norn process is working on it"),
                     runtime::Removal::Unfinished => println!(
-                        "kept {id}: it never finished and can still be resumed (`agentos run --resume {id}`); --force deletes it anyway"
+                        "kept {id}: it never finished and can still be resumed (`norn run --resume {id}`); --force deletes it anyway"
                     ),
                     runtime::Removal::NotFound => println!("no execution {id} in {}", state_dir.display()),
                 }
@@ -237,7 +237,7 @@ fn main() -> Result<()> {
                 for id in ids {
                     let dir = ExecDir::new(&state_dir, &id);
                     let events = trace::load(&dir)?;
-                    let calls = agentos::log::calls(&events).map(|c| c.len()).unwrap_or(0);
+                    let calls = norn::log::calls(&events).map(|c| c.len()).unwrap_or(0);
                     println!("{id}  {:<12} {calls} calls", trace::execution_state(&dir, &events));
                 }
             }
@@ -266,18 +266,18 @@ fn main() -> Result<()> {
 }
 
 /// The sandbox needs a cgroup that systemd has handed over to this user
-/// (D-013). If agentos was started without one, start it again inside one:
-/// `systemd-run --user --scope -p Delegate=yes agentos …`, which is what the
+/// (D-013). If norn was started without one, start it again inside one:
+/// `systemd-run --user --scope -p Delegate=yes norn …`, which is what the
 /// user was told to type before (D-105).
 ///
 /// `systemd-run --scope` does not stay around as a parent: it turns into
 /// the command it was given, so signals, exit codes and `kill -9` reach the
-/// same process as before. `AGENTOS_IN_SCOPE` marks the second start, so
+/// same process as before. `NORN_IN_SCOPE` marks the second start, so
 /// this cannot loop; setting it by hand switches the whole thing off.
 fn enter_delegated_scope() {
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
-    if std::env::var_os("AGENTOS_IN_SCOPE").is_some() || agentos::sandbox::cgroup::CgroupRoot::init().is_ok() {
+    if norn::env_var("IN_SCOPE").is_some() || norn::sandbox::cgroup::CgroupRoot::init().is_ok() {
         return;
     }
     let scope = ["--user", "--scope", "-q", "-p", "Delegate=yes", "--"];
@@ -291,16 +291,16 @@ fn enter_delegated_scope() {
     let Ok(me) = std::env::current_exe() else { return };
     // A name of our own for the scope. Left to itself, systemd-run names it
     // after the process id, and this process keeps its id across `exec`:
-    // if agentos was itself started by `systemd-run --scope`, the default
+    // if norn was itself started by `systemd-run --scope`, the default
     // name is already taken by the scope it is in.
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
-    let unit = format!("--unit=agentos-{}-{nanos}", std::process::id());
+    let unit = format!("--unit=norn-{}-{nanos}", std::process::id());
     // `exec` only returns if it failed; then the normal path goes on.
     let _ = Command::new("systemd-run")
         .arg(unit)
         .args(scope)
         .arg(me)
         .args(std::env::args_os().skip(1))
-        .env("AGENTOS_IN_SCOPE", "1")
+        .env("NORN_IN_SCOPE", "1")
         .exec();
 }

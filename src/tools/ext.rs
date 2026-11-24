@@ -32,6 +32,10 @@ pub enum Answer {
 /// sends it again cannot disagree about it. Execution ids are unique per
 /// state folder and call ids are never reused inside an execution, so one
 /// key means one intended effect (D-077).
+///
+/// The prefix stays `agentos-` after the rename to norn (D-134): an
+/// execution left uncertain by an older version is reconciled by sending its
+/// call again, and a different key would make the service apply it twice.
 pub fn idempotency_key(execution_id: &str, call_id: u64) -> String {
     format!("agentos-{execution_id}-c{call_id}")
 }

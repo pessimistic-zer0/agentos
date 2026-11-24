@@ -98,7 +98,7 @@ pub enum EventBody {
     RecoveryCompleted { reconciled: u64, duration_ms: u64 },
     #[serde(rename = "execution.finished")]
     ExecutionFinished { status: String, summary: String, patch: Option<String> },
-    /// `agentos apply` copied the result into a repository (D-108). Written
+    /// `norn apply` copied the result into a repository (D-108). Written
     /// after `execution.finished`; an execution may have several.
     #[serde(rename = "result.applied")]
     ResultApplied { target: String, changes: Vec<String> },
@@ -382,7 +382,7 @@ mod tests {
     use super::*;
 
     fn tmp(name: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("agentos-log-test-{}-{name}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("norn-log-test-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d.join("log.db")

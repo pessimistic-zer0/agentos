@@ -86,7 +86,7 @@ mod tests {
 
     #[test]
     fn escapes_are_refused_by_the_kernel() {
-        let base = std::env::temp_dir().join(format!("agentos-beneath-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("norn-beneath-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let ws = base.join("ws");
         std::fs::create_dir_all(ws.join("src")).unwrap();

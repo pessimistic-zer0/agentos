@@ -1,4 +1,4 @@
-//! `agentos trace` and `agentos status`: read an execution's event log and
+//! `norn trace` and `norn status`: read an execution's event log and
 //! print it for people (or as JSON lines for scripts).
 
 use std::fmt::Write as _;
@@ -19,7 +19,7 @@ pub fn execution_state(dir: &ExecDir, events: &[Event]) -> String {
     if is_locked(dir) {
         "running".into()
     } else {
-        "interrupted (run `agentos recover`)".into()
+        "interrupted (run `norn recover`)".into()
     }
 }
 

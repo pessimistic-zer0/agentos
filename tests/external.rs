@@ -3,14 +3,14 @@
 //!
 //! Part 1 (here, no sandbox needed): the fake service keeps its promise, and
 //! the client in `src/tools/ext.rs` reads each kind of answer correctly.
-//! Part 2 (further down): `ext.call` through the real `agentos` binary.
+//! Part 2 (further down): `ext.call` through the real `norn` binary.
 //! The kill and timeout matrix is in `tests/recovery/main.rs`.
 
 mod common;
 
 use std::time::{Duration, Instant};
 
-use agentos::tools::ext::{self, Answer};
+use norn::tools::ext::{self, Answer};
 use common::fake_service::{FakeService, Fault};
 
 const TIMEOUT: Duration = Duration::from_millis(300);
@@ -132,7 +132,7 @@ fn long_answers_are_cut_at_the_limit() {
 
 // ---------------------------------------------------------------------------
 // Part 2: `ext.call` through the real binary. Needs a delegated cgroup, like
-// every test that starts `agentos run`.
+// every test that starts `norn run`.
 // ---------------------------------------------------------------------------
 
 use std::os::unix::process::ExitStatusExt;
@@ -245,7 +245,7 @@ fn allowed_call_is_logged_keyed_and_applied_once() {
     // Ground truth at the service: exactly the two orders, under the keys of calls 1 and 4.
     let applied: Vec<(String, String)> = svc.applied().into_iter().map(|a| (a.key, a.payload)).collect();
     assert_eq!(applied, vec![(key, "order-1".to_string()), (format!("agentos-{id}-c4"), "order-2".to_string())]);
-    assert!(t.agentos(&["trace", &id]).contains("ext.call ledger (7 bytes)"));
+    assert!(t.norn(&["trace", &id]).contains("ext.call ledger (7 bytes)"));
 }
 
 #[test]
@@ -276,11 +276,11 @@ fn an_outage_leaves_the_call_uncertain_until_recovery_gets_an_answer() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("is UNCERTAIN: no answer after 3 request(s)"), "{err}");
     let id = only_execution(&t);
-    assert!(t.agentos(&["status", &id]).contains("interrupted"));
+    assert!(t.norn(&["status", &id]).contains("interrupted"));
     let events = t.events(&id);
     assert_eq!(of_type(&events, "tool.intent").len(), 1);
     assert!(of_type(&events, "tool.completed").is_empty() && of_type(&events, "tool.failed").is_empty(), "neither would be true");
-    assert!(t.agentos(&["trace", &id]).contains("UNCERTAIN"));
+    assert!(t.norn(&["trace", &id]).contains("UNCERTAIN"));
 
     // The service is still down: recovery must not guess, and resume must not go on.
     for cmd in [["recover", "--quiet", id.as_str()].as_slice(), ["run", "--quiet", "--resume", id.as_str()].as_slice()] {
@@ -297,13 +297,13 @@ fn an_outage_leaves_the_call_uncertain_until_recovery_gets_an_answer() {
     assert_eq!(svc.faults_left(), 0);
 
     // The service is back.
-    let text = t.agentos(&["recover", &id]);
+    let text = t.norn(&["recover", &id]);
     assert!(text.contains("#1   ext.call APPLIED"), "{text}");
     let events = t.events(&id);
     let verdict = of_type(&events, "tool.reconciled")[0];
     assert_eq!(verdict["applied"], true);
     assert!(verdict["reason"].as_str().unwrap().contains("\"replayed\":true"), "the first request had been applied: {}", verdict["reason"]);
-    t.agentos(&["run", "--quiet", "--resume", &id]);
+    t.norn(&["run", "--quiet", "--resume", &id]);
     let events = t.events(&id);
     assert!(of_type(&events, "execution.finished").iter().any(|e| e["status"] == "completed"));
     let applied: Vec<String> = svc.applied().into_iter().map(|a| a.payload).collect();
@@ -318,13 +318,13 @@ fn killed_after_the_intent_recovery_sends_the_request() {
     let s = t.write_script("s.toml", &script(&[ext_step("ledger", "order-1")]));
     let out = t
         .cmd(&["run", "--quiet", "--repo", "examples/demo-repo", "--policy", t.policy.to_str().unwrap(), "--script", s.to_str().unwrap()])
-        .env("AGENTOS_CRASH_AT", "P2")
+        .env("NORN_CRASH_AT", "P2")
         .output()
         .unwrap();
     assert_eq!(out.status.signal(), Some(9));
     assert!(svc.seen().is_empty(), "killed before the request was sent");
     let id = only_execution(&t);
-    t.agentos(&["run", "--quiet", "--resume", &id]);
+    t.norn(&["run", "--quiet", "--resume", &id]);
     let events = t.events(&id);
     assert_eq!(of_type(&events, "tool.reconciled")[0]["applied"], true);
     assert_eq!(of_type(&events, "tool.requested").len(), 1, "an applied call is not asked for again");

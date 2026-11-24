@@ -103,7 +103,7 @@ fn run_llm(t: &TestEnv, url: &str, extra_env: &[(&str, &str)]) -> std::process::
         "run", "--quiet", "--repo", "examples/demo-repo", "--policy", t.policy.to_str().unwrap(),
         "--agent", "llm", "--task", "Make the failing test in tests/test_stats.py pass",
     ]);
-    c.env("AGENTOS_LLM_BASE_URL", url).env("AGENTOS_LLM_MODEL", "mock").env("AGENTOS_LLM_API_KEY", "KEY-CANARY-123");
+    c.env("NORN_LLM_BASE_URL", url).env("NORN_LLM_MODEL", "mock").env("NORN_LLM_API_KEY", "KEY-CANARY-123");
     for (k, v) in extra_env {
         c.env(k, v);
     }
@@ -146,13 +146,13 @@ fn llm_run_resumes_after_a_crash_with_the_conversation_from_the_log() {
     let t = TestEnv::new("llm-resume");
     let (url, seen) = start_mock();
     // Kill the runtime after the write (call 4) took effect, before its checkpoint.
-    let out = run_llm(&t, &url, &[("AGENTOS_CRASH_AT", "P4"), ("AGENTOS_CRASH_CALL", "4")]);
+    let out = run_llm(&t, &url, &[("NORN_CRASH_AT", "P4"), ("NORN_CRASH_CALL", "4")]);
     use std::os::unix::process::ExitStatusExt;
     assert_eq!(out.status.signal(), Some(9));
     let id = std::fs::read_dir(t.state.join("executions")).unwrap().next().unwrap().unwrap().file_name().to_string_lossy().into_owned();
     let before = seen.lock().unwrap().len();
 
-    let out = t.cmd(&["run", "--quiet", "--resume", &id]).env("AGENTOS_LLM_API_KEY", "KEY-CANARY-123").output().unwrap();
+    let out = t.cmd(&["run", "--quiet", "--resume", &id]).env("NORN_LLM_API_KEY", "KEY-CANARY-123").output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let events = t.events(&id);
     assert!(events.iter().any(|e| e["type"] == "tool.reconciled" && e["call_id"] == 4 && e["applied"] == true));
@@ -180,7 +180,7 @@ fn no_server_is_reported_before_anything_is_started() {
     let out = run_llm(&t, &format!("http://127.0.0.1:{port}/v1"), &[]);
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr);
-    for needle in ["no LLM server answers", "AGENTOS_LLM_BASE_URL", "AGENTOS_LLM_MODEL", "AGENTOS_LLM_API_KEY", "llama-server", "Nothing was started"] {
+    for needle in ["no LLM server answers", "NORN_LLM_BASE_URL", "NORN_LLM_MODEL", "NORN_LLM_API_KEY", "llama-server", "Nothing was started"] {
         assert!(err.contains(needle), "`{needle}` is missing from:\n{err}");
     }
     assert!(!err.contains("KEY-CANARY-123"), "the API key was printed");
@@ -188,7 +188,7 @@ fn no_server_is_reported_before_anything_is_started() {
 
     let bad = run_llm(&t, "not a url", &[]);
     let err = String::from_utf8_lossy(&bad.stderr);
-    assert!(!bad.status.success() && err.contains("AGENTOS_LLM_BASE_URL"), "{err}");
+    assert!(!bad.status.success() && err.contains("NORN_LLM_BASE_URL"), "{err}");
 }
 
 // ---------------------------------------------------------------------------
@@ -196,7 +196,7 @@ fn no_server_is_reported_before_anything_is_started() {
 // ---------------------------------------------------------------------------
 
 fn was_told_to_go_on(messages: &[Value]) -> bool {
-    messages.iter().any(|m| m["role"] == "user" && m["content"].as_str().is_some_and(|c| c.starts_with("[agentos] You answered without a tool call")))
+    messages.iter().any(|m| m["role"] == "user" && m["content"].as_str().is_some_and(|c| c.starts_with("[norn] You answered without a tool call")))
 }
 
 fn tool_call(n: usize, name: &str, args: Value) -> Value {
@@ -240,7 +240,7 @@ fn a_model_that_stops_while_the_tests_fail_is_told_once_then_recorded_as_stopped
     assert_eq!(seen.lock().unwrap().len(), 3, "one call, one early stop, one answer to the reminder");
     let roles: Vec<&str> = events.iter().filter(|e| e["type"] == "agent.message").map(|e| e["message"]["role"].as_str().unwrap()).collect();
     assert_eq!(roles, ["system", "user", "assistant", "tool", "assistant", "user", "assistant"], "the reminder is in the log");
-    assert!(t.agentos(&["status", &id]).contains("stopped"));
+    assert!(t.norn(&["status", &id]).contains("stopped"));
 }
 
 #[test]
@@ -263,7 +263,7 @@ fn a_model_that_goes_on_when_told_finishes_as_completed() {
 const CUT_OFF: &str = r#"{"error":{"code":500,"message":"Failed to parse tool call arguments as JSON: missing closing quote"}}"#;
 
 fn was_told_reply_unusable(messages: &[Value]) -> usize {
-    messages.iter().filter(|m| m["role"] == "user" && m["content"].as_str().is_some_and(|c| c.starts_with("[agentos] Your last reply could not be used"))).count()
+    messages.iter().filter(|m| m["role"] == "user" && m["content"].as_str().is_some_and(|c| c.starts_with("[norn] Your last reply could not be used"))).count()
 }
 
 /// The first answer after reading the file is "cut off" (HTTP 500); told
@@ -333,7 +333,7 @@ fn replies_that_stay_unusable_end_the_run_as_stopped_with_its_patch() {
     // The work done before is in the patch.
     let patch = std::fs::read_to_string(t.exec_dir(&id).join("result.patch")).unwrap();
     assert!(patch.contains("b/src/extra.py"), "{patch}");
-    assert!(t.agentos(&["status", &id]).contains("stopped"));
+    assert!(t.norn(&["status", &id]).contains("stopped"));
 }
 
 #[test]
@@ -357,7 +357,7 @@ fn a_wrong_key_is_an_error_that_names_the_settings() {
     let out = run_llm(&t, &url, &[]);
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success());
-    for needle in ["HTTP 401", "AGENTOS_LLM_API_KEY", "AGENTOS_LLM_MODEL", "AGENTOS_LLM_BASE_URL"] {
+    for needle in ["HTTP 401", "NORN_LLM_API_KEY", "NORN_LLM_MODEL", "NORN_LLM_BASE_URL"] {
         assert!(err.contains(needle), "`{needle}` is missing from:\n{err}");
     }
     assert!(!err.contains("KEY-CANARY-123"), "the key was printed");
@@ -457,7 +457,7 @@ fn a_rate_limited_server_is_given_the_time_it_asks_for() {
 }
 
 #[test]
-fn a_wait_longer_than_agentos_waits_ends_the_run_at_once_and_resumably() {
+fn a_wait_longer_than_norn_waits_ends_the_run_at_once_and_resumably() {
     let t = TestEnv::new("llm-day");
     let (url, seen) = start_mock_with(limit_for_a_day);
     let started = std::time::Instant::now();

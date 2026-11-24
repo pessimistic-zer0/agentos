@@ -1,26 +1,26 @@
 #!/bin/sh
-# The AgentOS demo: fix a failing test in a sandbox, then survive a kill -9.
+# The Norn demo: fix a failing test in a sandbox, then survive a kill -9.
 # Usage: ./demo.sh          (or: make demo)
 # Needs: cargo, pytest on PATH, systemd user session. See README.md.
 set -eu
 cd "$(dirname "$0")"
-if [ -z "${AGENTOS_IN_SCOPE:-}" ]; then
+if [ -z "${NORN_IN_SCOPE:-}" ]; then
   # The sandbox needs a cgroup that systemd delegated to this user.
-  exec env AGENTOS_IN_SCOPE=1 systemd-run --user --scope -p Delegate=yes -q "$0" "$@"
+  exec env NORN_IN_SCOPE=1 systemd-run --user --scope -p Delegate=yes -q "$0" "$@"
 fi
 # Which policy preset fits this system: NixOS keeps programs in /nix/store.
-if [ -n "${AGENTOS_TEST_PRESET:-}" ]; then preset=$AGENTOS_TEST_PRESET
+if [ -n "${NORN_TEST_PRESET:-}" ]; then preset=$NORN_TEST_PRESET
 elif [ -d /nix/store ] && [ ! -e /usr/bin/python3 ]; then preset=nix
 else preset=fhs; fi
 policy=policies/$preset.toml
-state=${AGENTOS_DEMO_STATE:-$(mktemp -d)}
+state=${NORN_DEMO_STATE:-$(mktemp -d)}
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 
-say "Building agentos"
+say "Building norn"
 cargo build --quiet
-A="target/debug/agentos --state-dir $state"
+A="target/debug/norn --state-dir $state"
 
-say "1. The demo repo has a failing test (run directly, outside AgentOS, on a copy)"
+say "1. The demo repo has a failing test (run directly, outside Norn, on a copy)"
 tmp=$(mktemp -d); cp -a examples/demo-repo "$tmp/repo"
 (cd "$tmp/repo" && pytest -q 2>&1 | tail -3) || true
 rm -rf "$tmp"
@@ -35,7 +35,7 @@ git status --short examples/demo-repo 2>/dev/null | sed 's/^/   (git status) /' 
 echo "   .env in the workspace? $( [ -e "$state/executions/$id1/work/.env" ] && echo yes || echo 'no: denied files are never copied in' )"
 
 say "4. Same task again, but the runtime is killed (SIGKILL) right after the file write, before its checkpoint"
-AGENTOS_CRASH_AT=P4 AGENTOS_CRASH_CALL=6 $A run --repo examples/demo-repo --policy "$policy" --script examples/scripts/fix-demo.toml || echo "   -> exit code $? (137 = killed by signal 9)"
+NORN_CRASH_AT=P4 NORN_CRASH_CALL=6 $A run --repo examples/demo-repo --policy "$policy" --script examples/scripts/fix-demo.toml || echo "   -> exit code $? (137 = killed by signal 9)"
 id2=$(ls "$state/executions" | grep -v "^$id1\$")   # the execution that is not the first one
 $A status "$id2"
 

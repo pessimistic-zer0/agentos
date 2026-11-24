@@ -92,7 +92,7 @@ fn assert_work_equals_last_checkpoint(t: &TestEnv, id: &str) {
 fn command_fails_and_run_continues(name: &str, code: &str) {
     let t = TestEnv::new(name).with_policy_text(&policy_with_python());
     let script = t.write_script("s.toml", &format!("task = \"hostile leftovers\"\n{}[[step]]\ntool = \"fs.list\"\npath = \"src\"\n", exec_step(code)));
-    let id = t.run_script(script.to_str().unwrap()); // panics if agentos exits with an error
+    let id = t.run_script(script.to_str().unwrap()); // panics if norn exits with an error
     let events = t.events(&id);
     let failed = event(&events, "tool.failed", 1).unwrap_or_else(|| panic!("call 1 did not fail: {events:#?}"));
     let error = failed["error"].as_str().unwrap();
@@ -158,12 +158,12 @@ time.sleep(30)"#;
     assert!(ready, "the command never got as far as locking its folder");
     let id = only_execution(&t);
 
-    let out = t.agentos(&["recover", &id]);
+    let out = t.norn(&["recover", &id]);
     assert!(out.contains("NOT APPLIED"), "{out}");
     assert_work_equals_last_checkpoint(&t, &id);
     assert!(!t.exec_dir(&id).join("work/src/d").exists());
     // A second recovery finds nothing to do.
-    let again = t.agentos(&["recover", &id]);
+    let again = t.norn(&["recover", &id]);
     assert!(again.contains("nothing to recover"), "{again}");
 }
 
@@ -178,12 +178,12 @@ fn recovery_works_when_a_checkpoint_holds_a_read_only_folder() {
     let make = r#"os.mkdir("/work/src/ro"); open("/work/src/ro/f.py", "w").write("x = 1\n"); os.chmod("/work/src/ro", 0o555)"#;
     let script = t.write_script("s.toml", &format!("task = \"read-only\"\n{}{}", exec_step(make), exec_step("print(1)")));
     let args = run_args(&t, &script, &demo_repo());
-    let st = t.cmd(&args.iter().map(String::as_str).collect::<Vec<_>>()).env("AGENTOS_CRASH_AT", "P6").env("AGENTOS_CRASH_CALL", "2").output().unwrap();
+    let st = t.cmd(&args.iter().map(String::as_str).collect::<Vec<_>>()).env("NORN_CRASH_AT", "P6").env("NORN_CRASH_CALL", "2").output().unwrap();
     assert!(!st.status.success(), "the runtime was meant to be killed at P6");
     let id = only_execution(&t);
     assert!(t.exec_dir(&id).join("checkpoints/cp-0002").exists(), "the orphan checkpoint this test is about");
 
-    let out = t.agentos(&["recover", &id]);
+    let out = t.norn(&["recover", &id]);
     assert!(out.contains("removed checkpoint cp-0002"), "{out}");
     assert_work_equals_last_checkpoint(&t, &id);
     assert_eq!(last_checkpoint(&t, &id).file_name().unwrap(), "cp-0001");
@@ -285,13 +285,13 @@ fn a_folder_making_write_is_recovered_at_every_crash_point() {
         let script = t.write_script("s.toml", &format!("task = \"crash\"\n{}", write_step("src/a/b/c/mod.py")));
         let args = run_args(&t, &script, &demo_repo());
         let mut cmd = t.cmd(&args.iter().map(String::as_str).collect::<Vec<_>>());
-        cmd.env("AGENTOS_CRASH_AT", point).env("AGENTOS_CRASH_CALL", "1").env("AGENTOS_CRASH_DELAY_US", delay_us.max(&1).to_string());
+        cmd.env("NORN_CRASH_AT", point).env("NORN_CRASH_CALL", "1").env("NORN_CRASH_DELAY_US", delay_us.max(&1).to_string());
         let st = cmd.output().unwrap();
         let id = only_execution(&t);
         if st.status.success() {
             continue; // P3's timer lost the race: the run finished first
         }
-        t.agentos(&["recover", &id]);
+        t.norn(&["recover", &id]);
         let events = t.events(&id);
         let verdict = events.iter().find(|e| e["type"] == "tool.reconciled").unwrap_or_else(|| panic!("{point}: no verdict: {events:#?}"));
         let file = t.exec_dir(&id).join("work/src/a/b/c/mod.py");
@@ -309,7 +309,7 @@ fn a_folder_making_write_is_recovered_at_every_crash_point() {
         }
         assert_work_equals_last_checkpoint(&t, &id);
         // The run can be finished from here.
-        t.agentos(&["run", "--quiet", "--resume", &id]);
+        t.norn(&["run", "--quiet", "--resume", &id]);
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "x = 1\n", "{point}: after resume");
         assert_work_equals_last_checkpoint(&t, &id);
     }
@@ -350,11 +350,11 @@ fn without_a_delegated_cgroup_the_message_starts_with_what_to_do() {
     // A plain scope (no Delegate=yes) is what a newcomer's terminal is.
     let t = TestEnv::new("hard-not-delegated");
     let script = repo_root().join("examples/scripts/fix-demo.toml");
-    let mut args = vec!["--user".to_string(), "--scope".into(), "-q".into(), agentos_bin().display().to_string(), "--state-dir".into(), t.state.display().to_string()];
+    let mut args = vec!["--user".to_string(), "--scope".into(), "-q".into(), norn_bin().display().to_string(), "--state-dir".into(), t.state.display().to_string()];
     args.extend(run_args(&t, &script, &demo_repo()));
-    // AGENTOS_IN_SCOPE switches off the self-start of D-105, which would
-    // otherwise move agentos into a delegated scope and hide the message.
-    let out = std::process::Command::new("systemd-run").args(&args).env("AGENTOS_IN_SCOPE", "1").current_dir(repo_root()).output().expect("systemd-run");
+    // NORN_IN_SCOPE switches off the self-start of D-105, which would
+    // otherwise move norn into a delegated scope and hide the message.
+    let out = std::process::Command::new("systemd-run").args(&args).env("NORN_IN_SCOPE", "1").current_dir(repo_root()).output().expect("systemd-run");
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "it ran in a scope that was not delegated:\n{err}");
     let fix = err.find("systemd-run --user --scope -p Delegate=yes").unwrap_or_else(|| panic!("the command to use is missing:\n{err}"));
@@ -379,23 +379,23 @@ open("/work/src/plain.py", "w").write("y = 2\n")"##;
     let script = t.write_script("s.toml", &format!("task = \"left out\"\n{}", exec_step(code)));
     let args = run_args(&t, &script, &demo_repo());
     let args: Vec<&str> = args.iter().map(String::as_str).filter(|a| *a != "--quiet").collect();
-    let shown = t.agentos(&args);
+    let shown = t.norn(&args);
     assert!(shown.contains("NOT in the patch: 1 binary file, 2 file modes, 1 empty file, 1 empty folder."), "{shown}");
     let id = only_execution(&t);
     let patch_path = t.exec_dir(&id).join("result.patch");
     let patch = std::fs::read_to_string(&patch_path).unwrap();
     let work = t.exec_dir(&id).join("work");
     for line in [
-        "# agentos: this patch leaves out 5 thing(s)".to_string(),
-        "# agentos: empty new file not in this patch: src/pkg_init.py (create it: touch src/pkg_init.py)".to_string(),
-        format!("# agentos: binary file not in this patch: src/blob.bin (copy it from {})", work.join("src/blob.bin").display()),
-        "# agentos: new file is executable, but a patch creates plain files: src/run.sh (chmod 755)".to_string(),
-        "# agentos: empty folder not in this patch: src/empty".to_string(),
+        "# norn: this patch leaves out 5 thing(s)".to_string(),
+        "# norn: empty new file not in this patch: src/pkg_init.py (create it: touch src/pkg_init.py)".to_string(),
+        format!("# norn: binary file not in this patch: src/blob.bin (copy it from {})", work.join("src/blob.bin").display()),
+        "# norn: new file is executable, but a patch creates plain files: src/run.sh (chmod 755)".to_string(),
+        "# norn: empty folder not in this patch: src/empty".to_string(),
     ] {
         assert!(patch.contains(&line), "missing `{line}` in:\n{patch}");
     }
-    assert!(patch.lines().any(|l| l.starts_with("# agentos: mode changed") && l.contains("src/stats.py") && l.ends_with("-> 600)")), "{patch}");
-    assert!(!patch.lines().any(|l| l.starts_with("# agentos:") && l.contains("plain.py")), "an ordinary new file needs no note");
+    assert!(patch.lines().any(|l| l.starts_with("# norn: mode changed") && l.contains("src/stats.py") && l.ends_with("-> 600)")), "{patch}");
+    assert!(!patch.lines().any(|l| l.starts_with("# norn:") && l.contains("plain.py")), "an ordinary new file needs no note");
     // The comment lines do not get in the way: the text part still applies.
     let target = t.root.join("apply");
     assert!(std::process::Command::new("cp").arg("-a").arg(demo_repo()).arg(&target).status().unwrap().success());
@@ -412,10 +412,10 @@ fn a_run_that_changes_only_text_gets_no_note() {
     let script = t.write_script("s.toml", &format!("task = \"text only\"\n{}", write_step("src/newpkg/mod.py")));
     let args = run_args(&t, &script, &demo_repo());
     let args: Vec<&str> = args.iter().map(String::as_str).filter(|a| *a != "--quiet").collect();
-    let shown = t.agentos(&args);
+    let shown = t.norn(&args);
     assert!(!shown.contains("NOT in the patch"), "{shown}");
     let patch = std::fs::read_to_string(t.exec_dir(&only_execution(&t)).join("result.patch")).unwrap();
-    assert!(!patch.contains("# agentos:"), "{patch}");
+    assert!(!patch.contains("# norn:"), "{patch}");
 }
 
 #[test]
@@ -425,10 +425,10 @@ fn a_relative_state_dir_works() {
     let script = t.write_script("s.toml", &format!("task = \"relative\"\n{}[[step]]\ntool = \"exec\"\nargv = [\"pytest\", \"-q\"]\n", write_step("src/extra.py")));
     let repo = demo_repo();
     let run = |args: &[&str], env: Option<&str>| {
-        let mut c = std::process::Command::new(agentos_bin());
+        let mut c = std::process::Command::new(norn_bin());
         c.current_dir(&t.root).args(args);
         if let Some(dir) = env {
-            c.env("AGENTOS_STATE_DIR", dir);
+            c.env("NORN_STATE_DIR", dir);
         }
         let out = c.output().unwrap();
         assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
@@ -452,7 +452,7 @@ fn a_machine_without_user_namespaces_is_told_so_by_trying_not_by_guessing() {
     let args = run_args(&t, &script, &demo_repo());
     let inner = format!(
         "echo 0 > /proc/sys/user/max_user_namespaces && exec {} --state-dir {} {}",
-        agentos_bin().display(),
+        norn_bin().display(),
         t.state.display(),
         args.iter().map(|a| format!("'{a}'")).collect::<Vec<_>>().join(" ")
     );
@@ -465,14 +465,14 @@ fn a_machine_without_user_namespaces_is_told_so_by_trying_not_by_guessing() {
 }
 
 #[test]
-fn the_startup_check_works_from_a_program_that_is_not_agentos() {
+fn the_startup_check_works_from_a_program_that_is_not_norn() {
     // B-013: the first version of the check started "itself" with a hidden
-    // argument, which only the agentos binary understands. A benchmark or a
+    // argument, which only the norn binary understands. A benchmark or a
     // test that uses the library got "user namespaces cannot be used".
     // This test binary is such a program.
     let me = std::env::current_exe().unwrap();
-    assert_ne!(me, agentos_bin());
-    let problems = agentos::sandbox::check_host(&me);
+    assert_ne!(me, norn_bin());
+    let problems = norn::sandbox::check_host(&me);
     assert!(!problems.iter().any(|p| p.contains("user namespaces")), "{problems:#?}");
 }
 
@@ -525,7 +525,7 @@ fn part_of_a_large_file_can_be_read() {
     assert_eq!(out(6)["lines"], serde_json::json!({"first": 1, "last": 2, "total": 19}), "a small file works the same way");
     assert!(event(&events, "tool.denied", 7).is_some(), "a range does not get around a deny rule");
     assert!(failed(8).is_some_and(|e| e.contains("count from 1")), "{:?}", failed(8));
-    let trace = t.agentos(&["trace", &id]);
+    let trace = t.norn(&["trace", &id]);
     assert!(trace.contains("tests/big.csv (lines 1-50)") && trace.contains("lines 1-50 of 3000"), "{trace}");
     // The intent records what was asked for.
     assert_eq!(event(&events, "tool.intent", 2).unwrap()["plan"]["max_lines"], 50);
@@ -535,15 +535,15 @@ fn part_of_a_large_file_can_be_read() {
 // M9 commands: starting itself in a delegated scope, check, rm, stopping.
 // ---------------------------------------------------------------------------
 
-/// `agentos …` started from a plain scope, as from a newcomer's terminal.
+/// `norn …` started from a plain scope, as from a newcomer's terminal.
 fn from_a_plain_scope(t: &TestEnv, args: &[String]) -> std::process::Output {
-    let mut all = vec!["--user".to_string(), "--scope".into(), "-q".into(), agentos_bin().display().to_string(), "--state-dir".into(), t.state.display().to_string()];
+    let mut all = vec!["--user".to_string(), "--scope".into(), "-q".into(), norn_bin().display().to_string(), "--state-dir".into(), t.state.display().to_string()];
     all.extend(args.iter().cloned());
-    std::process::Command::new("systemd-run").args(&all).env_remove("AGENTOS_IN_SCOPE").current_dir(repo_root()).output().expect("systemd-run")
+    std::process::Command::new("systemd-run").args(&all).env_remove("NORN_IN_SCOPE").current_dir(repo_root()).output().expect("systemd-run")
 }
 
 #[test]
-fn agentos_moves_itself_into_a_delegated_scope() {
+fn norn_moves_itself_into_a_delegated_scope() {
     // D-105: no `systemd-run … -p Delegate=yes` prefix needed any more.
     let t = TestEnv::new("hard-self-scope");
     let script = repo_root().join("examples/scripts/fix-demo.toml");
@@ -561,7 +561,7 @@ fn check_reports_everything_without_starting_anything() {
     let t = TestEnv::new("hard-check");
     let policy = t.policy.display().to_string();
     let repo = demo_repo().display().to_string();
-    let good = t.agentos(&["check", "--policy", &policy, "--repo", &repo]);
+    let good = t.norn(&["check", "--policy", &policy, "--repo", &repo]);
     for needle in ["host: ok", "policy: ok", "programs: ok", "pytest -> ", "repo: ok (4 files", "left out by deny rules: .env"] {
         assert!(good.contains(needle), "`{needle}` is missing from:\n{good}");
     }
@@ -589,7 +589,7 @@ fn rm_deletes_what_is_safe_to_delete_and_says_why_not_otherwise() {
     let done2 = t.run_script(demo.to_str().unwrap());
     // One that was cut off (killed after call 6's effect) and can be resumed.
     let args = run_args(&t, &demo, &demo_repo());
-    let st = t.cmd(&args.iter().map(String::as_str).collect::<Vec<_>>()).env("AGENTOS_CRASH_AT", "P4").env("AGENTOS_CRASH_CALL", "6").output().unwrap();
+    let st = t.cmd(&args.iter().map(String::as_str).collect::<Vec<_>>()).env("NORN_CRASH_AT", "P4").env("NORN_CRASH_CALL", "6").output().unwrap();
     assert!(!st.status.success());
     let dir = |id: &str| t.exec_dir(id);
     let mut ids: Vec<String> = std::fs::read_dir(t.state.join("executions")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
@@ -602,10 +602,10 @@ fn rm_deletes_what_is_safe_to_delete_and_says_why_not_otherwise() {
     // Nothing named: refuse, delete nothing.
     assert!(!t.output(&["rm"]).status.success());
     // A dry run deletes nothing.
-    let shown = t.agentos(&["rm", "--dry-run", &done1]);
+    let shown = t.norn(&["rm", "--dry-run", &done1]);
     assert!(shown.contains(&format!("would remove {done1}")) && dir(&done1).exists());
     // A finished execution goes.
-    let shown = t.agentos(&["rm", &done1]);
+    let shown = t.norn(&["rm", &done1]);
     assert!(shown.contains(&format!("removed {done1}")) && !dir(&done1).exists(), "{shown}");
     // An unknown id, a path, an unfinished execution: kept, with the reason, and an error.
     for (id, why) in [("nope", "no execution"), ("../executions", "no execution"), (cut.as_str(), "can still be resumed")] {
@@ -615,21 +615,21 @@ fn rm_deletes_what_is_safe_to_delete_and_says_why_not_otherwise() {
     }
     assert!(dir(&cut).exists() && t.state.join("executions").exists());
     // By age: only the one from 2020.
-    let shown = t.agentos(&["rm", "--older-than", "30"]);
+    let shown = t.norn(&["rm", "--older-than", "30"]);
     assert!(shown.contains(&format!("removed {old}")) && shown.contains("1 removed"), "{shown}");
     assert!(dir(&done2).exists() && dir(&cut).exists());
     // --all without --force keeps the unfinished one and is not an error.
-    let shown = t.agentos(&["rm", "--all"]);
+    let shown = t.norn(&["rm", "--all"]);
     assert!(shown.contains(&format!("removed {done2}")) && shown.contains(&format!("kept {cut}")), "{shown}");
     // It is still resumable, as promised.
-    t.agentos(&["run", "--quiet", "--resume", &cut]);
+    t.norn(&["run", "--quiet", "--resume", &cut]);
     // A locked folder inside an execution does not stop the delete (B-010's lesson).
     use std::os::unix::fs::PermissionsExt;
     let locked = dir(&cut).join("work/src/locked");
     std::fs::create_dir(&locked).unwrap();
     std::fs::write(locked.join("f"), "x").unwrap();
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
-    t.agentos(&["rm", &cut]);
+    t.norn(&["rm", &cut]);
     assert_eq!(std::fs::read_dir(t.state.join("executions")).unwrap().count(), 0);
 }
 
@@ -663,10 +663,10 @@ fn stopping_a_run_says_how_to_go_on_and_the_run_can_go_on() {
         let out = child.wait_with_output().unwrap();
         let err = String::from_utf8_lossy(&out.stderr);
         assert_eq!(out.status.code(), Some(code), "{signal}: {err}");
-        assert!(err.contains(&format!("agentos run --resume {id}")) && err.contains("nothing is lost"), "{signal}:\n{err}");
-        assert!(t.agentos(&["status", &id]).contains("interrupted"), "{signal}");
+        assert!(err.contains(&format!("norn run --resume {id}")) && err.contains("nothing is lost"), "{signal}:\n{err}");
+        assert!(t.norn(&["status", &id]).contains("interrupted"), "{signal}");
         // Recovery treats it like any cut-off command: rolled back, then done again.
-        let shown = t.agentos(&["recover", &id]);
+        let shown = t.norn(&["recover", &id]);
         assert!(shown.contains("NOT APPLIED"), "{signal}: {shown}");
         assert_work_equals_last_checkpoint(&t, &id);
         assert!(!t.exec_dir(&id).join("work/src/ready").exists(), "{signal}: the stopped command's file was rolled back");

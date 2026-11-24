@@ -342,7 +342,7 @@ pub fn edited(content: &str, old_str: &str, new_str: &str, rel: &str) -> Result<
 
 /// Temporary file name used while writing `call_id`'s new content.
 pub fn temp_name(call_id: u64) -> String {
-    format!(".agentos-tmp-{call_id}")
+    format!(".norn-tmp-{call_id}")
 }
 
 /// Atomic replace, entirely through the parent folder's handle: create a

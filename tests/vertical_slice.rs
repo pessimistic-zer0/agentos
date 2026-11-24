@@ -1,7 +1,7 @@
 //! M1 exit criterion: the scripted agent fixes the demo repo's failing test,
-//! and `agentos trace` prints every call.
+//! and `norn trace` prints every call.
 //!
-//! These tests run the real `agentos` binary, the way a user would. They need
+//! These tests run the real `norn` binary, the way a user would. They need
 //! `pytest` on PATH (run them inside `nix develop`).
 
 mod common;
@@ -46,7 +46,7 @@ fn scripted_agent_fixes_the_demo_repo() {
 fn trace_prints_every_call() {
     let t = TestEnv::new("slice-trace");
     let id = t.run_script("examples/scripts/fix-demo.toml");
-    let out = t.agentos(&["trace", &id]);
+    let out = t.norn(&["trace", &id]);
     for n in 1..=7 {
         assert!(out.contains(&format!("#{n:<3} ")), "trace is missing call #{n}:\n{out}");
     }
@@ -54,7 +54,7 @@ fn trace_prints_every_call() {
     assert!(out.contains("finished: completed"));
     // --events prints one line per event; --json one object per line.
     let n_events = t.events(&id).len();
-    assert_eq!(t.agentos(&["trace", &id, "--events"]).lines().count(), n_events);
+    assert_eq!(t.norn(&["trace", &id, "--events"]).lines().count(), n_events);
 }
 
 #[test]

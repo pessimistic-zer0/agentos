@@ -174,7 +174,7 @@ impl LoggedCall {
         }
     }
 
-    /// Short human description of the arguments, for `agentos trace`.
+    /// Short human description of the arguments, for `norn trace`.
     pub fn describe(&self) -> String {
         match self {
             LoggedCall::FsRead { path, start_line: None, max_lines: None, encoding: None } | LoggedCall::FsList { path } => path.clone(),

@@ -1,4 +1,4 @@
-//! `agentos apply` (D-108): copy the result of a finished execution into a
+//! `norn apply` (D-108): copy the result of a finished execution into a
 //! repository, including what a patch cannot carry.
 //!
 //! This is the only command that writes outside the state folder, so the
@@ -83,7 +83,7 @@ fn apply_copies_everything_the_run_changed_and_nothing_else() {
 
     // A dry run lists the changes and makes none.
     let before = tree_digest(&s.repo);
-    let shown = s.t.agentos(&["apply", &s.id, "--dry-run"]);
+    let shown = s.t.norn(&["apply", &s.id, "--dry-run"]);
     for line in [
         "M src/stats.py",
         "A src/newpkg/",
@@ -102,7 +102,7 @@ fn apply_copies_everything_the_run_changed_and_nothing_else() {
     assert_eq!(tree_digest(&s.repo), before, "a dry run changed the repository");
 
     // The real thing.
-    let shown = s.t.agentos(&["apply", &s.id]);
+    let shown = s.t.norn(&["apply", &s.id]);
     assert!(shown.contains("11 change(s) made"), "{shown}");
     assert_eq!(digest_without(&s.repo, &[".env"]), tree_digest(&work), "the repository does not equal the run's result");
     assert_eq!(std::fs::read(s.repo.join("src/blob.bin")).unwrap(), (0..=255u8).collect::<Vec<_>>().repeat(4));
@@ -112,17 +112,17 @@ fn apply_copies_everything_the_run_changed_and_nothing_else() {
     // The denied file was never in the workspace, so apply left it alone.
     assert_eq!(std::fs::read(s.repo.join(".env")).unwrap(), env_before);
     // No temp files left behind.
-    assert!(!tree_digest(&s.repo).iter().any(|l| l.contains("agentos-apply")));
+    assert!(!tree_digest(&s.repo).iter().any(|l| l.contains("norn-apply")));
 
     // The log knows, and so does the trace.
     let events = s.t.events(&s.id);
     let applied = events.iter().find(|e| e["type"] == "result.applied").expect("a result.applied event");
     assert_eq!(applied["target"], s.repo.canonicalize().unwrap().display().to_string());
     assert_eq!(applied["changes"].as_array().unwrap().len(), 11);
-    assert!(s.t.agentos(&["trace", &s.id]).contains("applied: 11 change(s) to"));
+    assert!(s.t.norn(&["trace", &s.id]).contains("applied: 11 change(s) to"));
 
     // A second apply finds the work done and is not an error.
-    let again = s.t.agentos(&["apply", &s.id]);
+    let again = s.t.norn(&["apply", &s.id]);
     assert!(again.contains("already holds the result"), "{again}");
     assert_eq!(digest_without(&s.repo, &[".env"]), tree_digest(&work));
     assert_eq!(s.t.events(&s.id).iter().filter(|e| e["type"] == "result.applied").count(), 1, "nothing was applied the second time");
@@ -151,7 +151,7 @@ fn apply_refuses_a_repository_that_changed_since_the_copy() {
     // With the two files put back, it goes through, and the unrelated edit stays.
     std::fs::copy(repo_root().join("examples/demo-repo/src/stats.py"), s.repo.join("src/stats.py")).unwrap();
     std::fs::write(s.repo.join("src/old.py"), "old = True\n").unwrap();
-    s.t.agentos(&["apply", &s.id]);
+    s.t.norn(&["apply", &s.id]);
     assert_eq!(std::fs::read_to_string(s.repo.join("README.md")).unwrap(), "my notes\n");
     assert!(std::fs::read_to_string(s.repo.join("src/stats.py")).unwrap().ends_with("# a changed text file\n"));
 }
@@ -162,7 +162,7 @@ fn apply_can_target_another_copy_and_leaves_the_original_alone() {
     let other = s.t.root.join("other");
     assert!(std::process::Command::new("cp").arg("-a").arg(&s.repo).arg(&other).status().unwrap().success());
     let original = tree_digest(&s.repo);
-    s.t.agentos(&["apply", &s.id, "--to", other.to_str().unwrap()]);
+    s.t.norn(&["apply", &s.id, "--to", other.to_str().unwrap()]);
     assert_eq!(tree_digest(&s.repo), original, "the original repository was touched");
     assert_eq!(digest_without(&other, &[".env"]), tree_digest(&s.t.exec_dir(&s.id).join("work")));
     // Not a folder, not there: refused with the path.
@@ -197,7 +197,7 @@ fn apply_needs_a_finished_execution() {
     let script = repo_root().join("examples/scripts/fix-demo.toml");
     let args = ["run", "--quiet", "--repo", repo.to_str().unwrap(), "--policy", t.policy.to_str().unwrap(), "--script", script.to_str().unwrap()];
     // Killed after the write of call 6, before its checkpoint.
-    let st = t.cmd(&args).env("AGENTOS_CRASH_AT", "P4").env("AGENTOS_CRASH_CALL", "6").output().unwrap();
+    let st = t.cmd(&args).env("NORN_CRASH_AT", "P4").env("NORN_CRASH_CALL", "6").output().unwrap();
     assert!(!st.status.success());
     let id = std::fs::read_dir(t.state.join("executions")).unwrap().next().unwrap().unwrap().file_name().to_string_lossy().into_owned();
     let before = tree_digest(&repo);
@@ -209,8 +209,8 @@ fn apply_needs_a_finished_execution() {
     assert!(!t.output(&["apply", "no-such-id"]).status.success());
 
     // Resumed to the end, it applies, and the repository's tests pass.
-    t.agentos(&["run", "--quiet", "--resume", &id]);
-    let shown = t.agentos(&["apply", &id]);
+    t.norn(&["run", "--quiet", "--resume", &id]);
+    let shown = t.norn(&["apply", &id]);
     assert!(shown.contains("M src/stats.py") && shown.contains("1 change(s) made"), "{shown}");
     let pytest = std::process::Command::new("pytest").args(["-q", "-p", "no:cacheprovider"]).current_dir(&repo).env("PYTHONDONTWRITEBYTECODE", "1").output().unwrap();
     assert!(pytest.status.success(), "{}", String::from_utf8_lossy(&pytest.stdout));
@@ -227,7 +227,7 @@ fn a_run_that_changed_nothing_has_nothing_to_apply_and_caches_are_not_applied() 
     let id = t.run_script_on(script.to_str().unwrap(), &repo);
     assert!(t.exec_dir(&id).join("work/.pytest_cache").is_dir());
     let before = tree_digest(&repo);
-    let shown = t.agentos(&["apply", &id]);
+    let shown = t.norn(&["apply", &id]);
     assert!(shown.contains("nothing to apply"), "{shown}");
     assert_eq!(tree_digest(&repo), before);
     assert!(!repo.join(".pytest_cache").exists(), "a cache was applied");

@@ -4,7 +4,7 @@
 //! The sandbox shows a command only the copy of the repo and the read-only
 //! folders the policy names, so such packages have to be named there:
 //!
-//! - a virtualenv: add its folder to `sandbox.ro_mounts` and start agentos
+//! - a virtualenv: add its folder to `sandbox.ro_mounts` and start norn
 //!   with it activated (its `bin` first on `PATH`);
 //! - any other folder of packages: add it to `sandbox.ro_mounts` and point
 //!   at it with a variable in `[sandbox.env]`.
@@ -173,7 +173,7 @@ fn the_shipped_policies_leave_no_compiled_python_files_behind() {
     let t = TestEnv::new("deps-no-pyc");
     let id = t.run_script(repo_root().join("examples/scripts/fix-demo.toml").to_str().unwrap());
     let patch = std::fs::read_to_string(t.exec_dir(&id).join("result.patch")).unwrap();
-    assert!(!patch.contains("Binary files") && !patch.contains("# agentos:"), "{patch}");
+    assert!(!patch.contains("Binary files") && !patch.contains("# norn:"), "{patch}");
     assert!(patch.contains("b/src/stats.py"));
     let digest = tree_digest(&t.exec_dir(&id).join("work")).join("\n");
     assert!(!digest.contains("__pycache__"), "{digest}");
@@ -274,7 +274,7 @@ fn a_virtualenv_inside_the_repo_is_skipped_in_the_copy_and_still_used() {
         assert_eq!(exit, Some(0), "call {call}:\n{text}");
         assert!(text.contains(&format!("FAKEDEP {}", venv.display())), "call {call}:\n{text}");
     }
-    assert!(t.agentos(&["trace", &id]).contains("left out by skip rules: .venv"));
+    assert!(t.norn(&["trace", &id]).contains("left out by skip rules: .venv"));
 }
 
 /// The demo repo with pytest's cache switched back on.
@@ -308,7 +308,7 @@ fn a_cache_is_scratch_and_an_example_env_file_is_not_a_secret() {
     assert!(!events.iter().any(|e| e["type"] == "policy.violation"), "a cache is not a violation: {events:#?}");
     let patch = std::fs::read_to_string(t.exec_dir(&id).join("result.patch")).unwrap();
     assert!(patch.contains("b/src/extra.py"));
-    assert!(!patch.contains("pytest_cache") && !patch.contains("# agentos:"), "the cache leaked into the patch:\n{patch}");
+    assert!(!patch.contains("pytest_cache") && !patch.contains("# norn:"), "the cache leaked into the patch:\n{patch}");
     // The template is readable; the real file is still denied and absent.
     let read = t.output_of(&id, &events, 4).expect(".env.example can be read");
     assert_eq!(read["content"], "TOKEN=put-yours-here\n");

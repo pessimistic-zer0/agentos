@@ -1,7 +1,7 @@
 {
-  # Development shell for AgentOS. Optional convenience: everything here can
+  # Development shell for Norn. Optional convenience: everything here can
   # also be installed with a normal package manager (see the README).
-  description = "AgentOS development shell (Rust, Python, pytest, hyperfine)";
+  description = "Norn development shell (Rust, Python, pytest, hyperfine)";
 
   # Pinned to one nixpkgs commit (the one the development machine runs), so the
   # tools are the same every time and most of them are already on disk.

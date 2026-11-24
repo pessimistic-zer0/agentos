@@ -1,4 +1,4 @@
-# Default AgentOS policy for NixOS (preset `nix`).
+# Default Norn policy for NixOS (preset `nix`).
 # The only difference from fhs.toml is [sandbox].ro_mounts.
 #
 # For your own project, copy this file and change:

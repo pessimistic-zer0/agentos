@@ -6,16 +6,16 @@
 //! runs the sandbox startup checks).
 //!
 //! Besides criterion's own report, the raw time of every sample is written to
-//! `$AGENTOS_BENCH_OUT/fs_write-*.txt` (one number per line, in microseconds)
+//! `$NORN_BENCH_OUT/fs_write-*.txt` (one number per line, in microseconds)
 //! so percentiles can be computed from the raw data.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use agentos::agent::scripted::{Script, ScriptedAgent};
-use agentos::runtime::{self, RunOptions};
-use agentos::tools::{ToolCall, ToolOutcome};
+use norn::agent::scripted::{Script, ScriptedAgent};
+use norn::runtime::{self, RunOptions};
+use norn::tools::{ToolCall, ToolOutcome};
 use criterion::{criterion_group, criterion_main, Criterion};
 
 fn root() -> PathBuf {
@@ -43,7 +43,7 @@ fn direct_durable(path: &Path, text: &str) {
 }
 
 fn dump(name: &str, samples: &[f64]) {
-    if let Ok(dir) = std::env::var("AGENTOS_BENCH_OUT") {
+    if let Ok(dir) = std::env::var("NORN_BENCH_OUT") {
         let text: String = samples.iter().map(|s| format!("{s:.1}\n")).collect();
         std::fs::write(Path::new(&dir).join(format!("fs_write-{name}.txt")), text).unwrap();
     }
@@ -53,7 +53,7 @@ fn bench(c: &mut Criterion) {
     let scratch = root().join("target/bench-fs-write").join(std::process::id().to_string());
     let _ = std::fs::remove_dir_all(&scratch);
     std::fs::create_dir_all(&scratch).unwrap();
-    let preset = std::env::var("AGENTOS_TEST_PRESET").unwrap_or_else(|_| "nix".into());
+    let preset = std::env::var("NORN_TEST_PRESET").unwrap_or_else(|_| "nix".into());
     let opts = RunOptions {
         state_dir: scratch.join("state"),
         repo: root().join("examples/demo-repo"),
@@ -67,13 +67,13 @@ fn bench(c: &mut Criterion) {
     let direct_file = direct_dir.join("bench.py");
 
     let mut i = 0u64;
-    let mut agentos_samples = Vec::new();
-    c.bench_function("fs.write 4 KB through AgentOS (intent fsync + checkpoint)", |b| {
+    let mut norn_samples = Vec::new();
+    c.bench_function("fs.write 4 KB through Norn (intent fsync + checkpoint)", |b| {
         b.iter(|| {
             i += 1;
             let t = Instant::now();
             let r = gw.handle(ToolCall::FsWrite { path: "src/bench.py".into(), content: content(i), encoding: None, executable: None }).unwrap();
-            agentos_samples.push(t.elapsed().as_secs_f64() * 1e6);
+            norn_samples.push(t.elapsed().as_secs_f64() * 1e6);
             assert_eq!(r.outcome, ToolOutcome::Ok);
         })
     });
@@ -95,7 +95,7 @@ fn bench(c: &mut Criterion) {
             plain_samples.push(t.elapsed().as_secs_f64() * 1e6);
         })
     });
-    dump("agentos", &agentos_samples);
+    dump("norn", &norn_samples);
     dump("direct-durable", &durable_samples);
     dump("direct-plain", &plain_samples);
     drop(gw);
@@ -104,7 +104,7 @@ fn bench(c: &mut Criterion) {
 
 criterion_group! {
     name = benches;
-    // Each AgentOS sample makes a checkpoint folder; keep the count modest.
+    // Each Norn sample makes a checkpoint folder; keep the count modest.
     config = Criterion::default().sample_size(50).measurement_time(std::time::Duration::from_secs(20)).warm_up_time(std::time::Duration::from_secs(2));
     targets = bench
 }

@@ -78,8 +78,8 @@ fn an_edit_changes_one_place_and_nothing_else() {
     let patch = std::fs::read_to_string(t.exec_dir(&id).join("result.patch")).unwrap();
     assert!(patch.contains("-    return sum(values) / (len(values) - 1)") && patch.contains("+    return sum(values) / len(values)"), "{patch}");
     assert_eq!(patch.lines().filter(|l| l.starts_with('-') && !l.starts_with("---")).count(), 1, "{patch}");
-    // `agentos trace` shows it.
-    let trace = t.agentos(&["trace", &id]);
+    // `norn trace` shows it.
+    let trace = t.norn(&["trace", &id]);
     assert!(trace.contains("fs.edit") && trace.contains("replaced at line 8"), "{trace}");
 }
 
@@ -110,7 +110,7 @@ fn an_edit_that_does_not_fit_one_place_changes_nothing_and_says_why() {
     assert_eq!(std::fs::read_to_string(dir.join("work/src/stats.py")).unwrap(), ORIGINAL);
     assert_eq!(std::fs::read_dir(dir.join("checkpoints")).unwrap().count(), 1, "only cp-0000");
     assert_eq!(std::fs::read_to_string(dir.join("result.patch")).unwrap().trim(), "");
-    assert!(std::fs::read_dir(dir.join("work/src")).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().starts_with(".agentos-tmp")));
+    assert!(std::fs::read_dir(dir.join("work/src")).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().starts_with(".norn-tmp")));
 }
 
 #[test]

@@ -1,5 +1,5 @@
 #!/bin/sh
-# The demo task done directly, without AgentOS: the same steps as
+# The demo task done directly, without Norn: the same steps as
 # examples/scripts/fix-demo.toml (look, run tests, read, fix, run tests), on
 # a fresh copy of the repo. Baseline for the end-to-end benchmark.
 # Usage: direct-demo.sh <repo> <scratch-dir>

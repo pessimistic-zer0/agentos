@@ -5,7 +5,7 @@
 | Weeks in the plan | v1.0 (D-114); no week plan |
 | Started / finished | 2026-11-16 / in progress |
 | Commits | `3036816` … |
-| Status | In progress. Done and verified in CI: the compatibility promise, the CHANGELOG, the release archive, benchmarks on Ubuntu, install instructions, Debian 12. Open: the name (Prince), then version 1.0.0 and the tag |
+| Status | In progress. Done and verified in CI: the compatibility promise, the CHANGELOG, the release archive, benchmarks on Ubuntu, install instructions, Debian 12. The name: norn (D-133, D-134), not yet through CI. Open: version 1.0.0 and the tag |
 
 Write this document for a reader who is new to Rust and Linux internals. Plain words first, the real term next to it. Fill it in while working.
 
@@ -24,7 +24,7 @@ Turn the code of M11 and M12 into something that can be called 1.0: say what sta
 | D9: install instructions | Yes | README, "Installing it" |
 | D9: Cargo version 1.0.0 | Not started (last step) | |
 | D11: one more distribution in CI, or a written reason why not | Yes: Debian 12 in CI (run 43903121563, job `debian`, 167 passed, D-129) | `ci/debian-vm.sh`: Debian 12, kernel 6.1, in a VM on the development machine: `make test` 167 passed (`docs/results/debian-12.md`); CI job `debian` (D-128) |
-| D8: the project name | Open; only Prince decides | |
+| D8: the project name | Yes: norn, Prince's choice (D-133); on `fhs` not yet verified | Renamed in code, scripts, CI and current documents (D-134). `make test` 168 passed on `nix`; `make demo` and `packaging/release.sh --check` pass |
 | Tag `v1.0` after a green CI run on that commit | Not yet | |
 
 ## 3. What you need to know first
@@ -61,6 +61,8 @@ Turn the code of M11 and M12 into something that can be called 1.0: say what sta
 
 | Entry | Decision | Discarded alternatives |
 |---|---|---|
+| D-134 | The rename keeps the `ext.call` key `agentos-…`, reads `AGENTOS_` settings as a fallback, and leaves history and frozen fixtures as written | Renaming the key; new setting names only; looking in the old state folder too |
+| D-133 | The name norn | enma, possum, sanzu, skuld, veles, keeping AgentOS |
 | D-128 | Debian 12 in a VM, by a script shared by the development machine and CI | A container; root in a privileged container; Fedora too |
 | D-127 | One archive made by a script, checked by running from it, in its own CI job; CI benchmarks are a record only | Publishing from CI; a static build; distribution packages |
 | D-126 | Backward compatibility for format version 1 of policy files and execution folders, tested against frozen v0.1 files | Promising the other direction; promising screen output or the library |
@@ -68,6 +70,7 @@ Turn the code of M11 and M12 into something that can be called 1.0: say what sta
 ## 8. Problems hit
 
 1. A compat test failed although the product was right: a shared test helper finds an execution's folder by the id in its log, and the fixture's folders have fixed names. The test reads the output by folder name.
+2. The mechanical rename also renamed the idempotency key the tests expect; three tests in `tests/external.rs` failed until the tests were set back to `agentos-…`. The key is a format, not a word (D-134).
 
 ## 9. How to run it
 

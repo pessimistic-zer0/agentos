@@ -6,7 +6,7 @@
 //! repository is never modified (design rule 10); no checkpoint holds it; a
 //! denied file in it stops the run before it starts (design rule 6); the
 //! agent's file tools cannot write it or leave it; it is still there after
-//! a kill and a resume; `agentos apply` leaves it alone.
+//! a kill and a resume; `norn apply` leaves it alone.
 //!
 //! Needs a delegated cgroup: systemd-run --user --scope -p Delegate=yes cargo test --test rodirs
 
@@ -139,8 +139,8 @@ print("size seen", os.path.getsize("vendor/big.bin"))
     // The patch holds the agent's own change and nothing about the folder.
     let patch = std::fs::read_to_string(dir.join("result.patch")).unwrap();
     assert!(patch.contains("src/new.py") && !patch.contains("vendor"), "{patch}");
-    // `agentos apply` copies that change back and leaves the folder alone.
-    let shown = t.agentos(&["apply", &id]);
+    // `norn apply` copies that change back and leaves the folder alone.
+    let shown = t.norn(&["apply", &id]);
     assert!(shown.contains("A src/new.py") && !shown.contains("vendor"), "{shown}");
     assert!(repo.join("src/new.py").exists());
     assert_eq!(std::fs::read_to_string(repo.join("vendor/lib/__init__.py")).unwrap(), "ANSWER = 42\n");
@@ -252,9 +252,9 @@ fn the_sandbox_refuses_a_mount_point_that_is_a_symlink() {
     // from being reached: the sandbox itself checks every folder on the way
     // to a mount point. Driven through the library, with a workspace that
     // has a symlink where the mount point should be.
-    use agentos::policy::Policy;
-    use agentos::sandbox::{self, cgroup::CgroupRoot, DiskLimit, SandboxSpec};
-    use agentos::tools::exec::Programs;
+    use norn::policy::Policy;
+    use norn::sandbox::{self, cgroup::CgroupRoot, DiskLimit, SandboxSpec};
+    use norn::tools::exec::Programs;
     let t = TestEnv::new("ro-ns");
     let policy = Policy::parse(&policy("")).unwrap();
     let programs = Programs::resolve(&policy, &std::env::var("PATH").unwrap_or_default()).unwrap();
@@ -282,7 +282,7 @@ fn the_sandbox_refuses_a_mount_point_that_is_a_symlink() {
         };
         let cg = cgroups.create(&format!("ro-ns-{}-{name}", std::process::id()), &policy.limits).unwrap();
         let disk = DiskLimit { dir: work, max_bytes: policy.limits.workspace_bytes() };
-        sandbox::run(&agentos_bin(), &spec, &cg, std::time::Duration::from_secs(20), 4096, &disk)
+        sandbox::run(&norn_bin(), &spec, &cg, std::time::Duration::from_secs(20), 4096, &disk)
     };
     // The control: a plain folder as the mount point works.
     let (out, _) = attempt("good", &|w| std::fs::create_dir(w.join("vendor")).unwrap()).unwrap();
@@ -304,8 +304,8 @@ fn the_folder_is_still_there_after_a_kill_and_a_resume() {
     let script = t.write_script("s.toml", &format!("task = \"resume\"\n{steps}"));
     let killed = t
         .cmd(&["run", "--quiet", "--repo", repo.to_str().unwrap(), "--policy", t.policy.to_str().unwrap(), "--agent", "scripted", "--script", script.to_str().unwrap()])
-        .env("AGENTOS_CRASH_AT", "P2")
-        .env("AGENTOS_CRASH_CALL", "2")
+        .env("NORN_CRASH_AT", "P2")
+        .env("NORN_CRASH_CALL", "2")
         .output()
         .unwrap();
     assert_eq!(killed.status.signal(), Some(9), "{}", String::from_utf8_lossy(&killed.stderr));

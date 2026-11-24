@@ -14,7 +14,7 @@ jobs:
   fhs:
     runs-on: ubuntu-24.04
     env:
-      AGENTOS_TEST_PRESET: fhs
+      NORN_TEST_PRESET: fhs
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -52,14 +52,14 @@ jobs:
             target/recovery-ext-report.json
 
   # The same sandbox, but with Ubuntu's restriction on user namespaces left
-  # ON and agentos allowed through its own AppArmor profile
-  # (packaging/apparmor/agentos, D-093). The job above switches the
+  # ON and norn allowed through its own AppArmor profile
+  # (packaging/apparmor/norn, D-093). The job above switches the
   # restriction off for the whole machine instead. This job is separate so
   # that a problem with the profile cannot hide the result of the job above.
   fhs-apparmor:
     runs-on: ubuntu-24.04
     env:
-      AGENTOS_TEST_PRESET: fhs
+      NORN_TEST_PRESET: fhs
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -77,30 +77,30 @@ jobs:
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=1
           sudo aa-status | head -n 3
-      - name: Without the profile agentos must refuse to start, and name the profile
+      - name: Without the profile norn must refuse to start, and name the profile
         run: |
-          if systemd-run --user --scope -q -p Delegate=yes target/debug/agentos --state-dir "$RUNNER_TEMP/state" run \
+          if systemd-run --user --scope -q -p Delegate=yes target/debug/norn --state-dir "$RUNNER_TEMP/state" run \
                --repo examples/demo-repo --policy policies/fhs.toml --script examples/scripts/fix-demo.toml 2> err.txt; then
-            echo "agentos started although user namespaces are restricted and no profile is loaded"; exit 1
+            echo "norn started although user namespaces are restricted and no profile is loaded"; exit 1
           fi
           cat err.txt
           grep -q "user namespaces cannot be used" err.txt
-          grep -q "packaging/apparmor/agentos" err.txt
+          grep -q "packaging/apparmor/norn" err.txt
       - name: Install the program and the profile exactly as the README says, and run the demo task
         run: |
-          sudo install -m 755 target/debug/agentos /usr/local/bin/agentos
-          sudo install -m 644 packaging/apparmor/agentos /etc/apparmor.d/agentos
-          sudo apparmor_parser -r /etc/apparmor.d/agentos
-          systemd-run --user --scope -q -p Delegate=yes /usr/local/bin/agentos --state-dir "$RUNNER_TEMP/state-installed" run \
+          sudo install -m 755 target/debug/norn /usr/local/bin/norn
+          sudo install -m 644 packaging/apparmor/norn /etc/apparmor.d/norn
+          sudo apparmor_parser -r /etc/apparmor.d/norn
+          systemd-run --user --scope -q -p Delegate=yes /usr/local/bin/norn --state-dir "$RUNNER_TEMP/state-installed" run \
             --repo examples/demo-repo --policy policies/fhs.toml --script examples/scripts/fix-demo.toml
       - name: Install the profile for the binary under test
         run: |
-          sed "s|/usr/local/bin/agentos|$PWD/target/debug/agentos|" packaging/apparmor/agentos | sudo tee /etc/apparmor.d/agentos > /dev/null
-          sudo apparmor_parser -r /etc/apparmor.d/agentos
-          sudo aa-status | grep agentos
+          sed "s|/usr/local/bin/norn|$PWD/target/debug/norn|" packaging/apparmor/norn | sudo tee /etc/apparmor.d/norn > /dev/null
+          sudo apparmor_parser -r /etc/apparmor.d/norn
+          sudo aa-status | grep norn
       - name: The demo task, with the profile
         run: |
-          systemd-run --user --scope -q -p Delegate=yes target/debug/agentos --state-dir "$RUNNER_TEMP/state" run \
+          systemd-run --user --scope -q -p Delegate=yes target/debug/norn --state-dir "$RUNNER_TEMP/state" run \
             --repo examples/demo-repo --policy policies/fhs.toml --script examples/scripts/fix-demo.toml
       - name: Security, benign, vertical-slice and dependency suites, with the profile
         run: systemd-run --user --scope -q -p Delegate=yes cargo test --test vertical_slice --test security --test benign --test deps
@@ -113,7 +113,7 @@ jobs:
   release:
     runs-on: ubuntu-24.04
     env:
-      AGENTOS_TEST_PRESET: fhs
+      NORN_TEST_PRESET: fhs
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -131,7 +131,7 @@ jobs:
         run: packaging/release.sh --check
       - uses: actions/upload-artifact@v4
         with:
-          name: agentos-release-x86_64-linux
+          name: norn-release-x86_64-linux
           path: |
             target/dist/*.tar.gz
             target/dist/*.sha256

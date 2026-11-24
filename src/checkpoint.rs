@@ -500,7 +500,7 @@ pub fn write_patch(base: &Path, work: &Path, out: &Path, scratch: impl Fn(&str) 
             continue;
         }
         if let (Kind::Symlink(target), None) = (&e.kind, a.get(rel)) {
-            notes.push(format!("# agentos: symlink added: {rel} -> {}\n", target.display()));
+            notes.push(format!("# norn: symlink added: {rel} -> {}\n", target.display()));
         }
     }
     for (rel, e) in &a {
@@ -508,7 +508,7 @@ pub fn write_patch(base: &Path, work: &Path, out: &Path, scratch: impl Fn(&str) 
             continue;
         }
         if let (Kind::Symlink(target), None) = (&e.kind, b.get(rel)) {
-            notes.push(format!("# agentos: symlink removed: {rel} (was -> {})\n", target.display()));
+            notes.push(format!("# norn: symlink removed: {rel} (was -> {})\n", target.display()));
         }
     }
     // diff exits 0 when the trees are the same, 1 when they differ, 2 on error.
@@ -526,7 +526,7 @@ pub fn write_patch(base: &Path, work: &Path, out: &Path, scratch: impl Fn(&str) 
     // Rewrite the header paths to the usual a/ and b/ prefixes.
     let mut patched = String::with_capacity(text.len());
     if !notes.is_empty() {
-        patched.push_str("# agentos: a unified diff cannot carry symlinks; apply these by hand:\n");
+        patched.push_str("# norn: a unified diff cannot carry symlinks; apply these by hand:\n");
         for n in &notes {
             patched.push_str(n);
         }
@@ -572,8 +572,8 @@ pub fn write_patch(base: &Path, work: &Path, out: &Path, scratch: impl Fn(&str) 
         let rel = &both[..both.len().saturating_sub(" and b/".len()) / 2];
         left_out.binary += 1;
         extra.push(match b.get(rel) {
-            Some(_) => format!("# agentos: binary file not in this patch: {rel} (copy it from {})\n", work.join(rel).display()),
-            None => format!("# agentos: binary file was deleted, which this patch cannot do: {rel}\n"),
+            Some(_) => format!("# norn: binary file not in this patch: {rel} (copy it from {})\n", work.join(rel).display()),
+            None => format!("# norn: binary file was deleted, which this patch cannot do: {rel}\n"),
         });
     }
     for (rel, e) in &b {
@@ -583,22 +583,22 @@ pub fn write_patch(base: &Path, work: &Path, out: &Path, scratch: impl Fn(&str) 
         match (&e.kind, a.get(rel)) {
             (Kind::File, Some(old)) if old.kind == Kind::File && old.mode != e.mode => {
                 left_out.modes += 1;
-                extra.push(format!("# agentos: mode changed, which this patch cannot do: {rel} ({:o} -> {:o})\n", old.mode, e.mode));
+                extra.push(format!("# norn: mode changed, which this patch cannot do: {rel} ({:o} -> {:o})\n", old.mode, e.mode));
             }
             // `diff` prints a header and no lines for a new file with nothing
             // in it, and `patch` and `git apply` then create nothing. The
             // usual victim is a Python package's empty `__init__.py` (B-012).
             (Kind::File, None) if e.size == 0 => {
                 left_out.empty_files += 1;
-                extra.push(format!("# agentos: empty new file not in this patch: {rel} (create it: touch {rel})\n"));
+                extra.push(format!("# norn: empty new file not in this patch: {rel} (create it: touch {rel})\n"));
             }
             (Kind::File, None) if e.mode & 0o111 != 0 => {
                 left_out.modes += 1;
-                extra.push(format!("# agentos: new file is executable, but a patch creates plain files: {rel} (chmod {:o})\n", e.mode));
+                extra.push(format!("# norn: new file is executable, but a patch creates plain files: {rel} (chmod {:o})\n", e.mode));
             }
             (Kind::Dir, None) if !b.keys().any(|k| k.strip_prefix(rel.as_str()).is_some_and(|rest| rest.starts_with('/'))) => {
                 left_out.empty_dirs += 1;
-                extra.push(format!("# agentos: empty folder not in this patch: {rel}\n"));
+                extra.push(format!("# norn: empty folder not in this patch: {rel}\n"));
             }
             _ => {}
         }
@@ -606,12 +606,12 @@ pub fn write_patch(base: &Path, work: &Path, out: &Path, scratch: impl Fn(&str) 
     for (rel, e) in &a {
         if e.kind == Kind::File && e.size == 0 && !b.contains_key(rel) && !scratch(rel) {
             left_out.empty_files += 1;
-            extra.push(format!("# agentos: empty file was deleted, which this patch cannot do: {rel}\n"));
+            extra.push(format!("# norn: empty file was deleted, which this patch cannot do: {rel}\n"));
         }
     }
     left_out.symlinks = notes.len();
     if !extra.is_empty() {
-        let head = format!("# agentos: this patch leaves out {} thing(s) a unified diff cannot carry; apply them by hand:\n{}", extra.len(), extra.concat());
+        let head = format!("# norn: this patch leaves out {} thing(s) a unified diff cannot carry; apply them by hand:\n{}", extra.len(), extra.concat());
         patched.insert_str(0, &head);
     }
     let changed = kept_any || !left_out.is_empty();
@@ -655,9 +655,9 @@ impl LeftOut {
 }
 
 // ---------------------------------------------------------------------------
-// `agentos apply`: copying the result into a repository (D-108).
+// `norn apply`: copying the result into a repository (D-108).
 //
-// This is the one place where AgentOS writes outside its own state folder,
+// This is the one place where Norn writes outside its own state folder,
 // and only when the user runs the command. It works from the same two
 // trees as the patch (the base checkpoint and the final workspace) but
 // copies files instead of describing lines, so binary files, empty files,
@@ -806,7 +806,7 @@ pub fn apply_changes(base: &Path, work: &Path, target: &Path, scratch: impl Fn(&
                 let (parent, name) = parent_of(&root, rel)?;
                 // Written under another name and renamed into place, so the
                 // repository never holds half a file.
-                let tmp = format!(".agentos-apply-{}.tmp", std::process::id());
+                let tmp = format!(".norn-apply-{}.tmp", std::process::id());
                 let _ = nix::unistd::unlinkat(&parent, tmp.as_str(), nix::unistd::UnlinkatFlags::NoRemoveDir);
                 let fd = nix::fcntl::openat(
                     &parent,
@@ -866,7 +866,7 @@ mod tests {
 
     #[test]
     fn scratch_paths_are_left_out_of_a_checkpoint_and_stay_in_the_workspace() {
-        let root = std::env::temp_dir().join(format!("agentos-cp-scratch-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("norn-cp-scratch-{}", std::process::id()));
         let _ = remove_tree(&root);
         let (work, outside) = (root.join("work"), root.join("outside"));
         std::fs::create_dir_all(work.join("target/debug/deps")).unwrap();

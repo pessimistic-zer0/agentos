@@ -55,7 +55,7 @@ pub fn lock_execution(dir: &ExecDir) -> Result<File> {
             Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
-            Err(std::fs::TryLockError::WouldBlock) => bail!("execution {} is in use by another agentos process", dir.id),
+            Err(std::fs::TryLockError::WouldBlock) => bail!("execution {} is in use by another norn process", dir.id),
             Err(std::fs::TryLockError::Error(e)) => return Err(e.into()),
         }
     }
@@ -72,10 +72,10 @@ pub fn is_locked(dir: &ExecDir) -> bool {
 /// Check the machine can run the sandbox, and set up the cgroup subtree.
 /// Stops with one message listing everything that is missing.
 pub fn prepare_sandbox() -> Result<SandboxCtx> {
-    let helper = std::env::current_exe().context("finding the agentos binary")?;
+    let helper = std::env::current_exe().context("finding the norn binary")?;
     let problems = crate::sandbox::check_host(&helper);
     if !problems.is_empty() {
-        bail!("the AgentOS sandbox cannot start:\n  - {}", problems.join("\n  - "));
+        bail!("the Norn sandbox cannot start:\n  - {}", problems.join("\n  - "));
     }
     let cgroups = crate::sandbox::cgroup::CgroupRoot::init()?;
     Ok(SandboxCtx { cgroups, helper })
@@ -131,7 +131,7 @@ pub fn create(opts: &RunOptions, agent: &dyn Agent) -> Result<(Gateway, File)> {
         anyhow::bail!(
             "the copy of the repository takes {} MiB, more than limits.workspace_mb ({} MiB). \
              Raise limits.workspace_mb in the policy, or leave large folders out of the copy with filesystem.skip \
-             (they can still be mounted read-only with sandbox.ro_mounts). `agentos rm {id}` removes this execution.",
+             (they can still be mounted read-only with sandbox.ro_mounts). `norn rm {id}` removes this execution.",
             used / (1024 * 1024),
             policy.limits.workspace_mb
         );
@@ -319,20 +319,20 @@ pub fn truncate(s: &str, n: usize) -> String {
     }
 }
 
-/// Default state folder: `$AGENTOS_STATE_DIR`, else `$XDG_DATA_HOME/agentos`,
-/// else `~/.local/share/agentos`.
+/// Default state folder: `$NORN_STATE_DIR`, else `$XDG_DATA_HOME/norn`,
+/// else `~/.local/share/norn`.
 pub fn default_state_dir() -> PathBuf {
-    if let Some(d) = std::env::var_os("AGENTOS_STATE_DIR") {
+    if let Some(d) = crate::env_var("STATE_DIR") {
         return PathBuf::from(d);
     }
     if let Some(d) = std::env::var_os("XDG_DATA_HOME") {
-        return Path::new(&d).join("agentos");
+        return Path::new(&d).join("norn");
     }
     let home = std::env::var_os("HOME").unwrap_or_else(|| ".".into());
-    Path::new(&home).join(".local/share/agentos")
+    Path::new(&home).join(".local/share/norn")
 }
 
-/// What `agentos rm` did with one execution.
+/// What `norn rm` did with one execution.
 #[derive(Debug, PartialEq)]
 pub enum Removal {
     Removed,
@@ -379,7 +379,7 @@ pub fn remove_execution(state_dir: &Path, id: &str, force: bool, dry_run: bool) 
     Ok(Removal::Removed)
 }
 
-/// `agentos check`: everything `run` would check before it starts, and what
+/// `norn check`: everything `run` would check before it starts, and what
 /// the copy of `repo` would look like, without creating an execution.
 /// Prints one block per topic; returns how many problems it found.
 pub fn check(policy_path: Option<&Path>, repo: Option<&Path>) -> usize {
@@ -478,7 +478,7 @@ pub fn check(policy_path: Option<&Path>, repo: Option<&Path>) -> usize {
     problems
 }
 
-/// `agentos apply`: copy the result of a finished execution into a
+/// `norn apply`: copy the result of a finished execution into a
 /// repository (by default the one it was copied from). Returns the number
 /// of changes made. See `checkpoint::apply_changes` for the two safety
 /// rules; this function decides *whether* and *where* (D-108).
@@ -488,7 +488,7 @@ pub fn apply(state_dir: &Path, id: &str, to: Option<&Path>, dry_run: bool) -> Re
     let _lock = lock_execution(&dir)?;
     let events = log.events()?;
     if !events.iter().any(|e| matches!(e.body, EventBody::ExecutionFinished { .. })) {
-        bail!("execution {id} has not finished, so its result is not final. Finish it first (`agentos run --resume {id}`)");
+        bail!("execution {id} has not finished, so its result is not final. Finish it first (`norn run --resume {id}`)");
     }
     let origin = events
         .iter()

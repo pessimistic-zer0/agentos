@@ -12,7 +12,7 @@
 
 mod common;
 
-use agentos::policy::Policy;
+use norn::policy::Policy;
 use common::*;
 
 fn fixture(name: &str) -> std::path::PathBuf {
@@ -32,9 +32,9 @@ fn a_policy_file_from_v0_1_is_still_valid_and_means_the_same() {
         let text = std::fs::read_to_string(fixture(name)).unwrap();
         let p = Policy::parse(&text).unwrap_or_else(|e| panic!("{name}: {e}"));
         // What it said then, it says now.
-        assert!(p.check_path(agentos::policy::Access::Write, "src/a.py").allowed);
-        assert!(!p.check_path(agentos::policy::Access::Write, "README.md").allowed);
-        assert!(!p.check_path(agentos::policy::Access::Read, ".env").allowed);
+        assert!(p.check_path(norn::policy::Access::Write, "src/a.py").allowed);
+        assert!(!p.check_path(norn::policy::Access::Write, "README.md").allowed);
+        assert!(!p.check_path(norn::policy::Access::Read, ".env").allowed);
         assert!(p.check_exec(&["pytest".to_string(), "-q".to_string()]).allowed);
         assert!(!p.check_exec(&["sh".to_string()]).allowed);
         // Everything added since has a default that changes nothing for it.
@@ -48,21 +48,21 @@ fn a_policy_file_from_v0_1_is_still_valid_and_means_the_same() {
 fn a_finished_execution_from_v0_1_can_be_listed_traced_and_applied() {
     let t = TestEnv::new("compat-finished");
     unpack(&t);
-    let status = t.agentos(&["status"]);
+    let status = t.norn(&["status"]);
     assert!(status.lines().any(|l| l.starts_with("finished") && l.contains("completed") && l.contains("7 calls")), "{status}");
     assert!(status.lines().any(|l| l.starts_with("killed-p4") && l.contains("interrupted")), "{status}");
-    let trace = t.agentos(&["trace", "finished"]);
+    let trace = t.norn(&["trace", "finished"]);
     for line in ["fs.write src/stats.py (548 bytes)", "exit 0", "DENY", "finished: completed"] {
         assert!(trace.contains(line), "`{line}` is missing from:\n{trace}");
     }
     // Apply it to a copy of what the run started from (its first checkpoint).
     let target = t.root.join("target-repo");
     assert!(std::process::Command::new("cp").arg("-a").arg(t.exec_dir("finished").join("checkpoints/cp-0000")).arg(&target).status().unwrap().success());
-    let shown = t.agentos(&["apply", "finished", "--to", target.to_str().unwrap()]);
+    let shown = t.norn(&["apply", "finished", "--to", target.to_str().unwrap()]);
     assert!(shown.contains("M src/stats.py"), "{shown}");
     assert_eq!(std::fs::read(target.join("src/stats.py")).unwrap(), std::fs::read(t.exec_dir("finished").join("work/src/stats.py")).unwrap());
     // And it can be deleted.
-    t.agentos(&["rm", "finished"]);
+    t.norn(&["rm", "finished"]);
     assert!(!t.exec_dir("finished").exists() && t.exec_dir("killed-p4").exists());
 }
 
@@ -70,7 +70,7 @@ fn a_finished_execution_from_v0_1_can_be_listed_traced_and_applied() {
 fn an_execution_that_v0_1_left_interrupted_is_recovered_and_resumed() {
     let t = TestEnv::new("compat-killed");
     unpack(&t);
-    let out = t.agentos(&["recover", "killed-p4"]);
+    let out = t.norn(&["recover", "killed-p4"]);
     assert!(out.contains("#6") && out.contains("fs.write APPLIED"), "{out}");
     let events = t.events("killed-p4");
     let rec = events.iter().find(|e| e["type"] == "tool.reconciled" && e["call_id"] == 6).expect("call 6 reconciled");
@@ -78,13 +78,13 @@ fn an_execution_that_v0_1_left_interrupted_is_recovered_and_resumed() {
     let cp = t.exec_dir("killed-p4").join("checkpoints").join(rec["checkpoint"].as_str().unwrap());
     assert_eq!(tree_digest(&cp), tree_digest(&t.exec_dir("killed-p4").join("work")), "the checkpoint recovery took equals the workspace");
     // A second recovery finds nothing to do.
-    assert!(t.agentos(&["recover", "killed-p4"]).contains("nothing to recover"));
+    assert!(t.norn(&["recover", "killed-p4"]).contains("nothing to recover"));
     // The resume runs the last step in the sandbox with the policy saved in
     // the execution, which is v0.1's `nix` preset (it names /nix/store). On
     // another system that policy's folders do not exist, so the resume is
     // only tried where it can work.
     if preset() == "nix" {
-        t.agentos(&["run", "--quiet", "--resume", "killed-p4"]);
+        t.norn(&["run", "--quiet", "--resume", "killed-p4"]);
         let events = t.events("killed-p4");
         assert!(events.iter().any(|e| e["type"] == "execution.finished" && e["status"] == "completed"), "{events:#?}");
         // (Read by folder name: the fixture's folders have fixed names, not the ids in their logs.)

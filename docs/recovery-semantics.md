@@ -1,10 +1,10 @@
 # Recovery semantics
 
-What AgentOS v0.1 promises about a run that is killed, what it does not promise, and how each promise is checked. Plain words first; terms are in the glossary of `decision-log.md`.
+What Norn v0.1 promises about a run that is killed, what it does not promise, and how each promise is checked. Plain words first; terms are in the glossary of `decision-log.md`.
 
 ## 1. The promise, in one paragraph
 
-If the `agentos` process is killed at any moment (`kill -9`, a crash, the terminal closing), then after `agentos recover <id>`:
+If the `norn` process is killed at any moment (`kill -9`, a crash, the terminal closing), then after `norn recover <id>`:
 
 - the event log is intact and says, for every tool call, exactly one of: **denied**, **completed**, **failed**, or **reconciled** as APPLIED or NOT APPLIED;
 - the workspace is exactly the state produced by the calls the log calls completed or APPLIED, and nothing else;
@@ -63,7 +63,7 @@ For a call with an intent and no ending ("uncertain"), by tool:
 | `fs.edit` | The same as `fs.write` (D-120). Before the intent is written, the runtime reads the file, replaces the one occurrence in memory and so knows the whole new content; the intent holds the same `pre_hash`, `new_hash` and temp name, and the file is replaced the same way. A resumed agent that asks for an edit again after it was APPLIED gets "old_str was not found", so an edit cannot be made twice | The effect is one atomic rename of a file whose content was fixed before the intent; `tests/recovery/main.rs`, `an_edit_is_recovered_like_a_write` |
 | `exec` | Kill the command's cgroup if it still exists, roll the workspace back to the last checkpoint, NOT APPLIED | What a command changed cannot be known; everything it can change is inside the workspace, which a folder copy restores exactly |
 
-The verdict is written as `tool.reconciled {applied, reason, checkpoint | restored}`. `agentos trace` shows it as `RECOVERED, APPLIED` or `RECOVERED, NOT APPLIED`.
+The verdict is written as `tool.reconciled {applied, reason, checkpoint | restored}`. `norn trace` shows it as `RECOVERED, APPLIED` or `RECOVERED, NOT APPLIED`.
 
 ## 4. Why recovery can be interrupted
 
@@ -75,7 +75,7 @@ Recovery is built from steps that give the same result when repeated:
 
 ## 5. Resuming
 
-`agentos run --resume <id>` always recovers first, then continues the agent:
+`norn run --resume <id>` always recovers first, then continues the agent:
 
 - The **scripted agent** replays the recorded results: each one either moved it to the next step or (NOT APPLIED) left it on the same step, which it then asks for again as a *new* call.
 - The **LLM agent** rebuilds its conversation from the `agent.message` events and receives, for the cut-off call, recovery's verdict as the tool result ("NOT APPLIED: the runtime was restarted … call the tool again"). A request to the model that was cut off is sent again; the answer may differ.
@@ -92,7 +92,7 @@ So after an uncertain `exec`, the same command may run again, as a new call with
 | I2 | No COMPLETED record whose effect is missing | Every completed or APPLIED mutating call names a checkpoint that exists and contains the write |
 | I3 | After recovery the workspace is the last checkpoint plus exactly the APPLIED calls | Workspace = last named checkpoint = the model computed from the log; no unnamed checkpoints or temp folders remain |
 | I4 | No uncertain call is re-executed before it is reconciled | No call is requested while another has no ending; none is left without one |
-| I5 | The log is a gap-free prefix | Sequence numbers are 1..n; `agentos trace` refuses any illegal order of records |
+| I5 | The log is a gap-free prefix | Sequence numbers are 1..n; `norn trace` refuses any illegal order of records |
 | — | Verdicts are right | Recovery's APPLIED / NOT APPLIED equals what the files said before recovery ran |
 | — | Nothing lost, nothing doubled | After resuming to the end, the files are exactly those of an uninterrupted run |
 
@@ -106,7 +106,7 @@ Result of record (`nix` preset, 2026-11-12, `docs/results/recovery-200-nix.md`):
 | Duplicated side effects | **0** |
 | Cut-off calls whose verdict matched the files | 3,918 of 3,918 |
 | Runs in which recovery itself was killed (P8 cells, 400 runs) | 311 |
-| `agentos recover` wall time (whole process, debug build, 8 trials in parallel) | p50 20.4 ms, p99 55.1 ms |
+| `norn recover` wall time (whole process, debug build, 8 trials in parallel) | p50 20.4 ms, p99 55.1 ms |
 
 Result of record (`fhs` preset, Ubuntu 24.04 in CI, 2026-11-13, <https://github.com/pessimistic-zer0/agentos/actions/runs/43385661105>, `docs/results/recovery-200-fhs.md`):
 
@@ -118,7 +118,7 @@ Result of record (`fhs` preset, Ubuntu 24.04 in CI, 2026-11-13, <https://github.
 | Duplicated side effects | **0** |
 | Cut-off calls whose verdict matched the files | 3,756 of 3,756 |
 | Runs in which recovery itself was killed (P8 cells, 400 runs) | 306 |
-| `agentos recover` wall time (shared CI runner, debug build, 8 trials in parallel) | p50 33.5 ms, p99 315.3 ms |
+| `norn recover` wall time (shared CI runner, debug build, 8 trials in parallel) | p50 33.5 ms, p99 315.3 ms |
 
 That green run was the third. The first two CI runs failed this suite, 1 and then 3 violations in 4,800 runs, and each found a real bug that the kills on the laptop had not: a checkpoint copy that outlived the killed runtime (B-007), and a lock that outlived it for a few milliseconds (B-008, brought in by the first fix). Both are in `docs/bugs.md`. Two things changed in the semantics as a result: the `cp` child that copies a folder is killed by the kernel when the runtime dies, and taking the execution's lock waits up to three seconds before reporting "in use".
 
@@ -130,22 +130,22 @@ The harness was also shown able to fail: with the rollback of an uncertain `exec
 - **Exactly-once execution.** See §5. An uncertain `exec` is rolled back and may be issued again.
 - **Effects outside the workspace.** v0.1 has none (no network, no external tools). The moment a tool can send an email or open a pull request, rollback no longer undoes it. That case was left for after v0.1 and is now covered, for one fake service, by the bonus tool: see §9.
 - **A crash during setup.** If the runtime dies before the workspace and its first checkpoint exist, `recover` says so and a new run must be started.
-- **Changes made to the execution folder by anyone else.** Recovery assumes only AgentOS writes there. A lock file (`flock`) keeps two `agentos` processes off the same execution; it does not stop other programs.
+- **Changes made to the execution folder by anyone else.** Recovery assumes only Norn writes there. A lock file (`flock`) keeps two `norn` processes off the same execution; it does not stop other programs.
 - **Disk full.** If a checkpoint or a log write fails for lack of space, the runtime stops with an error; the call in flight is then uncertain and is settled by the rules above, if recovery itself has room to work.
 - **Other machines.** Run on one laptop (NixOS 26.05, kernel 7.1.8, btrfs) and on one kind of CI runner (Ubuntu 24.04, `fhs` preset). Nothing else has been run.
 
 ## 8. Trying it
 
 ```sh
-RUN="systemd-run --user --scope -p Delegate=yes -q agentos --state-dir /tmp/agentos-crash"
-AGENTOS_CRASH_AT=P4 AGENTOS_CRASH_CALL=6 $RUN run --repo examples/demo-repo \
+RUN="systemd-run --user --scope -p Delegate=yes -q norn --state-dir /tmp/norn-crash"
+NORN_CRASH_AT=P4 NORN_CRASH_CALL=6 $RUN run --repo examples/demo-repo \
     --policy policies/nix.toml --script examples/scripts/fix-demo.toml   # killed: exit 137
-$RUN status                 # interrupted (run `agentos recover`)
+$RUN status                 # interrupted (run `norn recover`)
 $RUN recover <id>           # #6 fs.write APPLIED: file has the new content; checkpoint cp-0002 taken
 $RUN run --resume <id>      # continues with call #7
 ```
 
-`AGENTOS_CRASH_AT` takes `P1`…`P8`; `AGENTOS_CRASH_CALL` picks the call; `AGENTOS_CRASH_DELAY_US` sets the random delay for the mid-effect points P3 and P5 (`src/faults.rs`). `make demo` runs this sequence; `make eval-recovery` runs the whole harness.
+`NORN_CRASH_AT` takes `P1`…`P8`; `NORN_CRASH_CALL` picks the call; `NORN_CRASH_DELAY_US` sets the random delay for the mid-effect points P3 and P5 (`src/faults.rs`). `make demo` runs this sequence; `make eval-recovery` runs the whole harness.
 
 ## 9. The bonus: a call whose effect cannot be rolled back (added after v0.1)
 
@@ -171,7 +171,7 @@ From the runtime's side A and B look identical. Treating "no answer" as "failed"
 2. **An answer is one of three things** (D-076): HTTP 2xx, *applied*; HTTP 4xx, *refused, nothing done*; anything else (timeout, dropped connection, 5xx, nobody listening, a redirect), *unknown*.
 3. **Unknown is retried with the same key**, up to `external.attempts` times. The service promises to apply a key at most once and to repeat its first answer, so a retry cannot double anything.
 4. **Still unknown: stop.** The run ends with an error and the intent stays open. No COMPLETED and no FAILED is written, because neither is known to be true (D-079). The log now looks exactly as it would after a kill at that moment.
-5. **Recovery settles it forwards** (D-078, ADR 0012). It sends the same request again with the key from the intent. 2xx: `tool.reconciled`, APPLIED. 4xx: NOT APPLIED. No answer: recovery stops with an error, writes no verdict, and the execution stays interrupted. `agentos recover` is then simply run again later. `run --resume` recovers first, so the agent never moves on past an unsettled call.
+5. **Recovery settles it forwards** (D-078, ADR 0012). It sends the same request again with the key from the intent. 2xx: `tool.reconciled`, APPLIED. 4xx: NOT APPLIED. No answer: recovery stops with an error, writes no verdict, and the execution stays interrupted. `norn recover` is then simply run again later. `run --resume` recovers first, so the agent never moves on past an unsettled call.
 
 An `ext.call` takes no checkpoint, and a workspace rollback (for example after a later uncertain `exec`) does not touch what the service did.
 
@@ -219,7 +219,7 @@ The harness was shown able to fail here too: with recovery answering "not applie
 
 ### 9.5 What is not promised
 
-- **Exactly-once only with a service that honours the key.** With one that ignores it, every retry is a new effect, and AgentOS cannot tell.
+- **Exactly-once only with a service that honours the key.** With one that ignores it, every retry is a new effect, and Norn cannot tell.
 - **The service's own durability.** The fake keeps its state in memory and is never killed in the tests. Whether a real service remembers keys across its own crashes is its property.
 - **Progress while the service is down.** The call stays uncertain and the run stays stopped for as long as nobody answers. That is deliberate.
 - **The answer of a reconciled call.** The agent is told the call was applied; the service's answer is kept only as the first 200 characters in the verdict's reason.

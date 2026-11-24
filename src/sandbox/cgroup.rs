@@ -18,7 +18,7 @@ use crate::policy::Limits;
 
 const CGROUP_FS: &str = "/sys/fs/cgroup";
 /// The runtime and its parents live in this child of the delegated group.
-const LEAF: &str = "agentos-runtime";
+const LEAF: &str = "norn-runtime";
 const NEEDED: [&str; 3] = ["memory", "pids", "cpu"];
 
 /// The delegated cgroup under which per-exec groups are made.
@@ -40,9 +40,9 @@ fn own_cgroup() -> Result<PathBuf> {
 /// means nothing to someone who has not met cgroups, the command does.
 fn not_delegated(found: String) -> anyhow::Error {
     anyhow::anyhow!(
-        "agentos must be started inside a cgroup that systemd has handed over to it, \
+        "norn must be started inside a cgroup that systemd has handed over to it, \
          because it sets memory, process and CPU limits for the commands it runs. Start it like this:\n      \
-         systemd-run --user --scope -p Delegate=yes agentos run ...\n    (what was found: {found})"
+         systemd-run --user --scope -p Delegate=yes norn run ...\n    (what was found: {found})"
     )
 }
 
@@ -70,7 +70,7 @@ impl CgroupRoot {
     pub fn init() -> Result<CgroupRoot> {
         let mut dir = own_cgroup()?;
         if dir.file_name().and_then(|n| n.to_str()) == Some(LEAF) {
-            // Another agentos process in this scope already set things up, and
+            // Another norn process in this scope already set things up, and
             // we were started inside its leaf.
             dir = dir.parent().context("leaf cgroup has no parent")?.to_path_buf();
         }
@@ -92,7 +92,7 @@ impl CgroupRoot {
         let leaf = dir.join(LEAF);
         match fs::create_dir(&leaf) {
             Ok(()) => {}
-            // Another agentos process in this scope got there first: fine.
+            // Another norn process in this scope got there first: fine.
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(e) => return Err(not_delegated(format!("cannot create a child cgroup in {}: {e}", dir.display()))),
         }
@@ -101,7 +101,7 @@ impl CgroupRoot {
             NEEDED.iter().all(|c| on.split_whitespace().any(|x| x == *c))
         };
         let want: String = NEEDED.iter().map(|c| format!("+{c} ")).collect();
-        // Several agentos processes may start in the same scope at the same
+        // Several norn processes may start in the same scope at the same
         // moment (the test suites do this). A process that is spawned into
         // the scope's root between our "move everyone" and our "enable
         // controllers" makes the enable fail with EBUSY, so both steps are
@@ -141,7 +141,7 @@ impl CgroupRoot {
     /// works, a real exec group will work too.
     fn probe(&self) -> Result<()> {
         let limits = Limits { memory_mb: 64, pids: 16, cpu_percent: 100, call_timeout_s: 1, max_output_kb: 1, max_tool_calls: 1, workspace_mb: 1 };
-        let name = format!("agentos-probe-{}", std::process::id());
+        let name = format!("norn-probe-{}", std::process::id());
         let cg = self
             .create(&name, &limits)
             .map_err(|e| not_delegated(format!("cannot set limits in a child of {}: {e:#}", self.dir.display())))?;

@@ -1,4 +1,4 @@
-# Default AgentOS policy for FHS distributions (preset `fhs`).
+# Default Norn policy for FHS distributions (preset `fhs`).
 # The only difference from nix.toml is [sandbox].ro_mounts.
 #
 # For your own project, copy this file and change:

@@ -15,7 +15,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 
-use agentos::blob::content_hash;
+use norn::blob::content_hash;
 use common::*;
 use serde_json::Value;
 
@@ -97,8 +97,8 @@ fn binary_files_are_read_and_written_byte_for_byte() {
     assert_eq!(requested["call"]["bytes"], new_bytes.len());
     let done = events.iter().find(|e| e["type"] == "tool.completed" && e["call_id"] == 2).unwrap();
     assert_eq!(std::fs::read(t.exec_dir(&id).join("checkpoints").join(done["checkpoint"].as_str().unwrap()).join("src/new/out.bin")).unwrap(), new_bytes);
-    // `agentos apply` carries the binary file into the repository.
-    t.agentos(&["apply", &id]);
+    // `norn apply` carries the binary file into the repository.
+    t.norn(&["apply", &id]);
     assert_eq!(std::fs::read(repo.join("src/new/out.bin")).unwrap(), new_bytes);
 }
 
@@ -177,8 +177,8 @@ fn the_executable_bit_is_set_cleared_kept_and_shown() {
     let plan = |call: u64| events.iter().find(|e| e["type"] == "tool.intent" && e["call_id"] == call).unwrap()["plan"].clone();
     assert_eq!(plan(1)["mode"], 0o755);
     assert!(plan(2).get("mode").is_none());
-    // `agentos apply` carries the modes.
-    let shown = t.agentos(&["apply", &id]);
+    // `norn apply` carries the modes.
+    let shown = t.norn(&["apply", &id]);
     assert!(shown.contains("src/new.sh (executable, mode 755)"), "{shown}");
     assert_eq!(mode(&repo.join("src/new.sh")), 0o755);
     assert_eq!(mode(&repo.join("src/tool.sh")), 0o644);
@@ -192,13 +192,13 @@ fn kill_and_recover(name: &str, point: &str, step: &str) -> (Option<bool>, u32, 
     let script = t.write_script("s.toml", &format!("task = \"mode under a kill\"\n{step}[[step]]\ntool = \"fs.list\"\npath = \"src\"\n"));
     let killed = t
         .cmd(&["run", "--quiet", "--repo", repo.to_str().unwrap(), "--policy", t.policy.to_str().unwrap(), "--agent", "scripted", "--script", script.to_str().unwrap()])
-        .env("AGENTOS_CRASH_AT", point)
-        .env("AGENTOS_CRASH_CALL", "1")
+        .env("NORN_CRASH_AT", point)
+        .env("NORN_CRASH_CALL", "1")
         .output()
         .unwrap();
     assert_eq!(killed.status.signal(), Some(9), "{point}: {}", String::from_utf8_lossy(&killed.stderr));
     let id = std::fs::read_dir(t.state.join("executions")).unwrap().next().unwrap().unwrap().file_name().to_string_lossy().into_owned();
-    t.agentos(&["recover", "--quiet", &id]);
+    t.norn(&["recover", "--quiet", &id]);
     let verdict = t.events(&id).iter().find(|e| e["type"] == "tool.reconciled" && e["call_id"] == 1).map(|e| e["applied"] == true);
     let m = mode(&t.exec_dir(&id).join("work/src/plain.txt"));
     (verdict, m, t, id)
@@ -213,7 +213,7 @@ fn a_kill_around_a_write_that_only_changes_the_mode_is_classified_by_the_mode() 
     let (verdict, m, t, id) = kill_and_recover("bin-kill-p2", "P2", step);
     assert_eq!((verdict, m), (Some(false), 0o644));
     // The resumed run does it.
-    t.agentos(&["run", "--quiet", "--resume", &id]);
+    t.norn(&["run", "--quiet", "--resume", &id]);
     assert_eq!(mode(&t.exec_dir(&id).join("work/src/plain.txt")), 0o755);
     assert!(t.events(&id).iter().any(|e| e["type"] == "execution.finished" && e["status"] == "completed"));
     // Killed after the effect, before the checkpoint: applied, mode set,

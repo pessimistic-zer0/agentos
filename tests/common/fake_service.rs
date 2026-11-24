@@ -1,7 +1,7 @@
 //! The fake external service of the v1 "Bonus": a tiny HTTP server that
 //! "applies" requests and remembers them, with faults that can be switched on.
 //!
-//! It stands for anything outside AgentOS that cannot be rolled back (a
+//! It stands for anything outside Norn that cannot be rolled back (a
 //! payment, an email, a pull request). It is deliberately small: standard
 //! library only, one thread per connection, state in memory.
 //!

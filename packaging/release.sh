@@ -13,20 +13,20 @@
 set -eu
 cd "$(dirname "$0")/.."
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
-name="agentos-$version-$(uname -m)-linux"
+name="norn-$version-$(uname -m)-linux"
 dist=$PWD/target/dist
 stage=$dist/$name
 
-cargo build --release --locked --bin agentos
+cargo build --release --locked --bin norn
 
 rm -rf "$stage" "$dist/$name.tar.gz" "$dist/$name.tar.gz.sha256"
 mkdir -p "$stage/docs" "$stage/examples/scripts" "$stage/packaging/apparmor"
-install -m 755 target/release/agentos "$stage/agentos"
+install -m 755 target/release/norn "$stage/norn"
 # The release profile keeps line tables for profiling (48 MB). The packed
 # copy drops them; function names stay, so a panic still says where.
-strip --strip-debug "$stage/agentos"
+strip --strip-debug "$stage/norn"
 cp policies/*.toml "$stage/" 2>/dev/null && mkdir -p "$stage/policies" && mv "$stage"/*.toml "$stage/policies/"
-cp packaging/apparmor/agentos "$stage/packaging/apparmor/"
+cp packaging/apparmor/norn "$stage/packaging/apparmor/"
 cp README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE "$stage/"
 cp docs/compatibility.md docs/threat-model.md docs/recovery-semantics.md "$stage/docs/"
 cp -r examples/demo-repo "$stage/examples/"
@@ -46,12 +46,12 @@ if [ "${1:-}" = "--check" ]; then
   trap 'rm -rf "$try"' EXIT
   tar -C "$try" -xzf "$dist/$name.tar.gz"
   cd "$try/$name"
-  ./agentos --version
-  preset=${AGENTOS_TEST_PRESET:-nix}
+  ./norn --version
+  preset=${NORN_TEST_PRESET:-nix}
   # The packed program, the packed policy, the packed demo project.
-  id=$(./agentos --state-dir "$try/state" run --quiet --repo examples/demo-repo --policy "policies/$preset.toml" --script examples/scripts/fix-demo.toml)
-  ./agentos --state-dir "$try/state" trace "$id" | tail -n 4
-  ./agentos --state-dir "$try/state" trace "$id" | grep -q "finished: completed"
+  id=$(./norn --state-dir "$try/state" run --quiet --repo examples/demo-repo --policy "policies/$preset.toml" --script examples/scripts/fix-demo.toml)
+  ./norn --state-dir "$try/state" trace "$id" | tail -n 4
+  ./norn --state-dir "$try/state" trace "$id" | grep -q "finished: completed"
   grep -q "return sum(values) / len(values)" "$try/state/executions/$id/result.patch"
   echo "check: the packed program ran the demo task from the archive; the patch holds the fix"
 fi

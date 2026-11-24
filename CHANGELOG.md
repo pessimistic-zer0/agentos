@@ -1,10 +1,17 @@
 # Changelog
 
-What changed for someone who uses AgentOS, newest first. The reasons are in `docs/decision-log.md` (the `D-` numbers); the bugs in `docs/bugs.md` (the `B-` numbers).
+What changed for someone who uses Norn, newest first. The reasons are in `docs/decision-log.md` (the `D-` numbers); the bugs in `docs/bugs.md` (the `B-` numbers).
 
 ## Unreleased (will be 1.0.0)
 
-Not released yet. Open before the release: the project name (D-023).
+Not released yet.
+
+### Renamed
+
+- **The project is now called norn** (D-133). The program is `norn`, the settings are `NORN_LLM_BASE_URL`, `NORN_LLM_MODEL`, `NORN_LLM_API_KEY`, `NORN_STATE_DIR` and so on; the old `AGENTOS_…` names are still read when the new one is not set (D-134).
+- The default state folder is `~/.local/share/norn`. Executions made before are in `~/.local/share/agentos`: move that folder (`mv ~/.local/share/agentos ~/.local/share/norn`, if the new one does not exist yet) or pass `--state-dir`.
+- The AppArmor profile is `packaging/apparmor/norn`, for `/usr/local/bin/norn`. Remove an installed old one with `sudo apparmor_parser -R /etc/apparmor.d/agentos && sudo rm /etc/apparmor.d/agentos`.
+- Unchanged on purpose: the idempotency key of `ext.call` keeps the form `agentos-<execution id>-c<call id>`, so that a call left uncertain before the rename is not applied twice (D-134).
 
 ### Added
 
@@ -13,8 +20,8 @@ Not released yet. Open before the release: the project name (D-023).
 - **`filesystem.ro_dirs`**: a folder of the repository (`node_modules`) that is not copied; commands see the original read-only at its place (D-122).
 - **`limits.workspace_mb`**: a command that makes the workspace larger than this is stopped and undone. A measured limit, not a hard cap (D-117).
 - **A seccomp filter** for sandboxed commands: new namespaces, mounts, `bpf`, `ptrace`, `io_uring` and similar system calls are refused (D-116).
-- **`agentos apply`**: copy a finished run's result into the repository, including what a patch cannot carry; refuses if the repository changed since (D-108).
-- **`agentos check`** (what a run would do, without running) and **`agentos rm`** (delete executions) (D-103, D-104).
+- **`norn apply`**: copy a finished run's result into the repository, including what a patch cannot carry; refuses if the repository changed since (D-108).
+- **`norn check`** (what a run would do, without running) and **`norn rm`** (delete executions) (D-103, D-104).
 - **Policy lists** `skip`, `scratch`, `deny_except` (D-099, D-100), **`exec.helpers`** for programs that commands start themselves (D-112), **`[sandbox.env]`** and extra read-only mounts for packages outside the repository (D-091, D-092).
 - **`fs.read` with a line range** (`start_line`, `max_lines`) for files larger than the output limit (D-102).
 - **An AppArmor profile** for Ubuntu, so user namespaces need not be allowed for the whole system (D-093).
@@ -23,7 +30,7 @@ Not released yet. Open before the release: the project name (D-023).
 
 ### Changed
 
-- `agentos run` and `check` start themselves in a delegated cgroup scope; the `systemd-run` prefix is no longer needed (D-105).
+- `norn run` and `check` start themselves in a delegated cgroup scope; the `systemd-run` prefix is no longer needed (D-105).
 - `fs.write` makes missing folders (D-084).
 - Paths listed as `scratch` are no longer stored in checkpoints; after a rollback a cache is empty (D-118).
 - The patch lists what it cannot carry: binary files, modes, empty files and folders, symlinks (D-090, D-095).

@@ -238,7 +238,7 @@ fn reconcile_external(dir: &ExecDir, call_id: u64, service: &str, payload_hash: 
         Answer::Refused { status, .. } => Ok(not_applied(&format!("service `{service}` refused the request (HTTP {status}); it did nothing"))),
         Answer::Unknown { why } => bail!(
             "call #{call_id} to external service `{service}` is still UNCERTAIN: no answer after {sent} request(s) ({why}). \
-             Nothing was decided. Run `agentos recover {}` again when the service is reachable.",
+             Nothing was decided. Run `norn recover {}` again when the service is reachable.",
             dir.id
         ),
     }

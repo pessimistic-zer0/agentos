@@ -30,20 +30,20 @@ pub struct LlmConfig {
     pub base_url: String,
     pub model: String,
     pub task: String,
-    /// From `AGENTOS_LLM_API_KEY`; never serialized.
+    /// From `NORN_LLM_API_KEY`; never serialized.
     #[serde(skip)]
     pub api_key: Option<String>,
 }
 
 impl LlmConfig {
-    /// Read `AGENTOS_LLM_BASE_URL` (default: a local llama.cpp server),
-    /// `AGENTOS_LLM_MODEL` and `AGENTOS_LLM_API_KEY` (optional).
+    /// Read `NORN_LLM_BASE_URL` (default: a local llama.cpp server),
+    /// `NORN_LLM_MODEL` and `NORN_LLM_API_KEY` (optional).
     pub fn from_env(task: String) -> LlmConfig {
         LlmConfig {
-            base_url: std::env::var("AGENTOS_LLM_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8080/v1".into()),
-            model: std::env::var("AGENTOS_LLM_MODEL").unwrap_or_else(|_| "default".into()),
+            base_url: crate::env_var("LLM_BASE_URL").unwrap_or_else(|| "http://127.0.0.1:8080/v1".into()),
+            model: crate::env_var("LLM_MODEL").unwrap_or_else(|| "default".into()),
             task,
-            api_key: std::env::var("AGENTOS_LLM_API_KEY").ok().filter(|k| !k.is_empty()),
+            api_key: crate::env_var("LLM_API_KEY").filter(|k| !k.is_empty()),
         }
     }
 
@@ -61,23 +61,23 @@ impl LlmConfig {
         if ["http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"].iter().any(|v| std::env::var_os(v).is_some()) {
             return Ok(());
         }
-        let set = |v: &str| if std::env::var_os(v).is_some() { "set" } else { "not set" };
+        let set = |v: &str| if crate::env_var(v.trim_start_matches("NORN_")).is_some() { "set" } else { "not set" };
         let help = format!(
             "The LLM agent finds its server through the environment:\n    \
-             AGENTOS_LLM_BASE_URL  ({}; in use: {})\n    \
-             AGENTOS_LLM_MODEL     ({}; in use: {})\n    \
-             AGENTOS_LLM_API_KEY   ({}; only needed for a hosted API)\n  \
+             NORN_LLM_BASE_URL  ({}; in use: {})\n    \
+             NORN_LLM_MODEL     ({}; in use: {})\n    \
+             NORN_LLM_API_KEY   ({}; only needed for a hosted API)\n  \
              For a local model, start a server first, for example:\n    \
              llama-server -m <model>.gguf --jinja --port 8080",
-            set("AGENTOS_LLM_BASE_URL"),
+            set("NORN_LLM_BASE_URL"),
             self.base_url,
-            set("AGENTOS_LLM_MODEL"),
+            set("NORN_LLM_MODEL"),
             self.model,
-            set("AGENTOS_LLM_API_KEY"),
+            set("NORN_LLM_API_KEY"),
         );
-        let uri: ureq::http::Uri = self.base_url.parse().map_err(|e| anyhow::anyhow!("AGENTOS_LLM_BASE_URL `{}` is not a URL ({e}).\n  {help}", self.base_url))?;
+        let uri: ureq::http::Uri = self.base_url.parse().map_err(|e| anyhow::anyhow!("NORN_LLM_BASE_URL `{}` is not a URL ({e}).\n  {help}", self.base_url))?;
         let (Some(host), Some(scheme)) = (uri.host(), uri.scheme_str()) else {
-            bail!("AGENTOS_LLM_BASE_URL `{}` must look like http://host:port/v1.\n  {help}", self.base_url);
+            bail!("NORN_LLM_BASE_URL `{}` must look like http://host:port/v1.\n  {help}", self.base_url);
         };
         let port = uri.port_u16().unwrap_or(if scheme == "https" { 443 } else { 80 });
         let host = host.trim_start_matches('[').trim_end_matches(']'); // IPv6 literal
@@ -165,7 +165,10 @@ const MAX_SERVER_WAIT: Duration = Duration::from_secs(90);
 
 /// Start of the message that tells the model it stopped too early. Also how
 /// `restore` finds out, from the log, that the message was already sent.
-const GO_ON_MARK: &str = "[agentos] You answered without a tool call";
+const GO_ON_MARK: &str = "[norn] You answered without a tool call";
+/// The same mark as written before the rename (D-134), found when an older
+/// execution is resumed.
+const GO_ON_MARK_OLD: &str = "[agentos] You answered without a tool call";
 
 fn command_failed(result: &ToolResult) -> Option<bool> {
     match &result.output {
@@ -212,7 +215,7 @@ impl LlmAgent {
             let Some(ms) = wait_ms else { break };
             match asked {
                 Some(wait) if wait > MAX_SERVER_WAIT => {
-                    last = format!("{last}; it asked for a wait of {} s, longer than agentos waits", wait.as_secs());
+                    last = format!("{last}; it asked for a wait of {} s, longer than norn waits", wait.as_secs());
                     break;
                 }
                 // A little longer than asked: the server's clock decides.
@@ -228,7 +231,7 @@ impl LlmAgent {
         }
         bail!(
             "the LLM server keeps answering that it is busy ({last}). The execution is unfinished and nothing is lost: \
-             run `agentos run --resume <id>` when the server answers again"
+             run `norn run --resume <id>` when the server answers again"
         )
     }
 
@@ -276,8 +279,8 @@ impl LlmAgent {
             429 | 502 | 503 | 504 => Tried::Busy(format!("HTTP {status}: {shown}"), retry_after),
             401 | 403 | 404 => bail!(
                 "the LLM endpoint at {url} answered HTTP {status}: {shown}\n  \
-                 That is a wrong key, model name or address, not something the model did. Check AGENTOS_LLM_API_KEY, \
-                 AGENTOS_LLM_MODEL (in use: {}) and AGENTOS_LLM_BASE_URL (in use: {}).",
+                 That is a wrong key, model name or address, not something the model did. Check NORN_LLM_API_KEY, \
+                 NORN_LLM_MODEL (in use: {}) and NORN_LLM_BASE_URL (in use: {}).",
                 self.cfg.model,
                 self.cfg.base_url
             ),
@@ -339,7 +342,7 @@ impl LlmAgent {
                 }
                 let examples: Vec<String> = dropped.iter().take(4).map(|l| format!("`{l}`")).collect();
                 Some(format!(
-                    "\n[agentos] Warning: {} lines that were in {path} when you read it are not in what you wrote, for example {}. \
+                    "\n[norn] Warning: {} lines that were in {path} when you read it are not in what you wrote, for example {}. \
                      If you did not mean to delete them, write the file again with ALL of its lines.",
                     dropped.len(),
                     examples.join(", ")
@@ -373,7 +376,7 @@ impl Agent for LlmAgent {
                 }
                 if n >= REPEAT_NUDGE {
                     content.push_str(&format!(
-                        "\n[agentos] You have made this exact call {n} times and the result is the same. \
+                        "\n[norn] You have made this exact call {n} times and the result is the same. \
                          Repeating it will not help. Read the file you changed again and compare it with what the error says."
                     ));
                 }
@@ -392,7 +395,7 @@ impl Agent for LlmAgent {
                     // the loop's limit of three covers this too.
                     unusable = Some(why.clone());
                     self.push(json!({"role": "user", "content": format!(
-                        "[agentos] Your last reply could not be used; the server said: {why}\n\
+                        "[norn] Your last reply could not be used; the server said: {why}\n\
                          A reply that is too long gets cut off. Answer again with ONE tool call and keep it short. \
                          If a file is too long to send whole, say GIVE UP and why."
                     )}));
@@ -494,7 +497,7 @@ impl Agent for LlmAgent {
         self.unlogged.clear();
         self.pending = None;
         self.last_command_failed = history.iter().rev().find_map(command_failed).unwrap_or(false);
-        self.nudged_to_go_on = self.messages.iter().any(|m| m["role"] == "user" && m["content"].as_str().is_some_and(|c| c.starts_with(GO_ON_MARK)));
+        self.nudged_to_go_on = self.messages.iter().any(|m| m["role"] == "user" && m["content"].as_str().is_some_and(|c| c.starts_with(GO_ON_MARK) || c.starts_with(GO_ON_MARK_OLD)));
         let made = self.messages.iter().filter(|m| m["tool_calls"].is_array() && is_valid_call(m)).count();
         let last_is_call = self.messages.last().map(|m| m["tool_calls"].is_array()).unwrap_or(false);
         if last_is_call {

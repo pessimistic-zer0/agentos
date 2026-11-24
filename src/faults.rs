@@ -5,10 +5,10 @@
 //!
 //! | Variable | Meaning |
 //! |---|---|
-//! | `AGENTOS_CRASH_AT` | Crash point name: `P1` … `P8` (see the v1 table) |
-//! | `AGENTOS_CRASH_CALL` | Only crash while handling this call id (default: any) |
-//! | `AGENTOS_CRASH_HIT` | Crash on the n-th time the point is reached (default 1) |
-//! | `AGENTOS_CRASH_DELAY_US` | For mid-effect points: kill after a random delay up to this many microseconds |
+//! | `NORN_CRASH_AT` | Crash point name: `P1` … `P8` (see the v1 table) |
+//! | `NORN_CRASH_CALL` | Only crash while handling this call id (default: any) |
+//! | `NORN_CRASH_HIT` | Crash on the n-th time the point is reached (default 1) |
+//! | `NORN_CRASH_DELAY_US` | For mid-effect points: kill after a random delay up to this many microseconds |
 //!
 //! "Crash" means the process sends itself SIGKILL: no destructors run, no
 //! buffers are flushed, exactly like `kill -9` from outside (D-052).
@@ -30,13 +30,13 @@ static HITS: AtomicU64 = AtomicU64::new(0);
 fn config() -> Option<&'static Config> {
     CONFIG
         .get_or_init(|| {
-            let at = std::env::var("AGENTOS_CRASH_AT").ok()?;
-            let num = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<u64>().ok());
+            let at = crate::env_var("CRASH_AT")?;
+            let num = |k: &str| crate::env_var(k).and_then(|v| v.parse::<u64>().ok());
             Some(Config {
                 at,
-                call: num("AGENTOS_CRASH_CALL"),
-                hit: num("AGENTOS_CRASH_HIT").unwrap_or(1),
-                delay_us: num("AGENTOS_CRASH_DELAY_US").unwrap_or(2000),
+                call: num("CRASH_CALL"),
+                hit: num("CRASH_HIT").unwrap_or(1),
+                delay_us: num("CRASH_DELAY_US").unwrap_or(2000),
             })
         })
         .as_ref()

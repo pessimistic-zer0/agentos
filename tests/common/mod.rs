@@ -1,5 +1,5 @@
 //! Helpers shared by the integration tests. Each test gets its own state
-//! folder and drives the real `agentos` binary.
+//! folder and drives the real `norn` binary.
 #![allow(dead_code)] // each test file uses a different subset
 
 pub mod fake_service;
@@ -13,14 +13,14 @@ pub fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-pub fn agentos_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_agentos"))
+pub fn norn_bin() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_norn"))
 }
 
-/// The policy preset under test: `AGENTOS_TEST_PRESET=fhs|nix` (default nix).
+/// The policy preset under test: `NORN_TEST_PRESET=fhs|nix` (default nix).
 /// Both suites must pass on both presets (CLAUDE.md, "Portability").
 pub fn preset() -> String {
-    std::env::var("AGENTOS_TEST_PRESET").unwrap_or_else(|_| "nix".into())
+    std::env::var("NORN_TEST_PRESET").unwrap_or_else(|_| "nix".into())
 }
 
 pub fn preset_policy() -> PathBuf {
@@ -51,21 +51,21 @@ impl TestEnv {
     }
 
     pub fn cmd(&self, args: &[&str]) -> Command {
-        let mut c = Command::new(agentos_bin());
+        let mut c = Command::new(norn_bin());
         c.arg("--state-dir").arg(&self.state).args(args).current_dir(repo_root());
         c
     }
 
     pub fn output(&self, args: &[&str]) -> Output {
-        self.cmd(args).output().expect("running agentos")
+        self.cmd(args).output().expect("running norn")
     }
 
-    /// Run agentos and return stdout; panic with stderr if it fails.
-    pub fn agentos(&self, args: &[&str]) -> String {
+    /// Run norn and return stdout; panic with stderr if it fails.
+    pub fn norn(&self, args: &[&str]) -> String {
         let out = self.output(args);
         if !out.status.success() {
             panic!(
-                "agentos {args:?} failed ({}):\nstdout:\n{}\nstderr:\n{}",
+                "norn {args:?} failed ({}):\nstdout:\n{}\nstderr:\n{}",
                 out.status,
                 String::from_utf8_lossy(&out.stdout),
                 String::from_utf8_lossy(&out.stderr)
@@ -74,13 +74,13 @@ impl TestEnv {
         String::from_utf8(out.stdout).unwrap()
     }
 
-    /// `agentos run` with the scripted agent on the demo repo; returns the id.
+    /// `norn run` with the scripted agent on the demo repo; returns the id.
     pub fn run_script(&self, script: &str) -> String {
         self.run_script_on(script, &repo_root().join("examples/demo-repo"))
     }
 
     pub fn run_script_on(&self, script: &str, repo: &Path) -> String {
-        let out = self.agentos(&[
+        let out = self.norn(&[
             "run",
             "--quiet",
             "--repo",
@@ -105,9 +105,9 @@ impl TestEnv {
         self.state.join("executions").join(id)
     }
 
-    /// All events of an execution, from `agentos trace --json`.
+    /// All events of an execution, from `norn trace --json`.
     pub fn events(&self, id: &str) -> Vec<Value> {
-        self.agentos(&["trace", id, "--json"]).lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+        self.norn(&["trace", id, "--json"]).lines().map(|l| serde_json::from_str(l).unwrap()).collect()
     }
 
     /// The full tool output stored in the blob store for a completed call.

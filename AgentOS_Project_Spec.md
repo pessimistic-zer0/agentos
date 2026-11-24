@@ -1,5 +1,7 @@
 # AgentOS — Project Specification
 
+> **Name.** Since 2026-11-25 the project is called **norn** (D-133). This document keeps the working name "AgentOS" in its text and file name, because the history refers to it (D-134).
+
 **A secure, durable execution runtime for tool-using AI agents**
 
 | | |

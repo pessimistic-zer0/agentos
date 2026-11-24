@@ -21,7 +21,7 @@ case "$DEBIAN" in
   13) code=trixie ;;
   *) echo "DEBIAN must be 12 or 13" >&2; exit 2 ;;
 esac
-CACHE=${CACHE:-$HOME/.cache/agentos-ci}
+CACHE=${CACHE:-$HOME/.cache/norn-ci}
 WORK=${WORK:-$PWD/target/debian-vm}
 PORT=${PORT:-2222}
 SEED_PORT=${SEED_PORT:-8791}
@@ -48,7 +48,7 @@ users:
     ssh_authorized_keys:
       - $(cat "$WORK/key.pub")
 SEED
-printf 'instance-id: agentos-ci\nlocal-hostname: debian-ci\n' > "$WORK/seed/meta-data"
+printf 'instance-id: norn-ci\nlocal-hostname: debian-ci\n' > "$WORK/seed/meta-data"
 # cloud-init reads its settings over HTTP from the host (10.0.2.2 is the
 # host as the VM sees it), which avoids building a CD image.
 python3 -m http.server "$SEED_PORT" --bind 127.0.0.1 --directory "$WORK/seed" > "$WORK/seed.log" 2>&1 &
@@ -82,11 +82,11 @@ vm 'sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq && sudo DEBIAN_FRONTE
 vm 'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable > /dev/null 2>&1; . ~/.cargo/env; rustc --version'
 
 echo "== copying the repository (tracked files, as they are in the working tree)"
-git ls-files -z | tar --null -T - -cf - | vm 'mkdir -p agentos && tar -C agentos -xf -'
+git ls-files -z | tar --null -T - -cf - | vm 'mkdir -p norn && tar -C norn -xf -'
 
 echo "== make test, preset fhs"
 set +e
-vm '. ~/.cargo/env; cd agentos && AGENTOS_TEST_PRESET=fhs make test 2>&1' | tee "$WORK/test.log" | grep -E "^test .*(FAILED|ok)$|test result|panicked|Running|error" 
+vm '. ~/.cargo/env; cd norn && NORN_TEST_PRESET=fhs make test 2>&1' | tee "$WORK/test.log" | grep -E "^test .*(FAILED|ok)$|test result|panicked|Running|error" 
 status=${PIPESTATUS[0]}
 set -e
 echo "== summary"

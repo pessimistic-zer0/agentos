@@ -1,6 +1,6 @@
-# AgentOS — Project Overview
+# Norn — Project Overview
 
-A single document that explains what AgentOS is, why it exists, what each feature is for, what is built, and what is still to come. For the full plan, see `AgentOS v1 — Scoped Design.md`. For every decision and its reasons, see `docs/decision-log.md`.
+A single document that explains what Norn is, why it exists, what each feature is for, what is built, and what is still to come. For the full plan, see `AgentOS v1 — Scoped Design.md`. For every decision and its reasons, see `docs/decision-log.md`.
 
 Status on 2026-11-15: **`v0.1` is the last tagged release; `main` is well past it** (milestones M7 to M10 and two changes after). Everything up to commit `2a6a3d1` is verified on both presets: `nix` on the development machine and `fhs` (Ubuntu 24.04) in CI. This overview was first written on 2026-11-13, before that work; sections 1 to 5 still describe the core correctly. What was added since is in section 5.4, and section 6 is rewritten.
 
@@ -8,21 +8,21 @@ Status on 2026-11-15: **`v0.1` is the last tagged release; `main` is well past i
 
 ## 1. What it is
 
-AgentOS is a small program written in Rust. It sits between an AI coding agent and your computer.
+Norn is a small program written in Rust. It sits between an AI coding agent and your computer.
 
-An AI coding agent works by asking for "tool calls": read this file, write that file, run `pytest`. Normally those calls run directly on your machine. AgentOS changes this:
+An AI coding agent works by asking for "tool calls": read this file, write that file, run `pytest`. Normally those calls run directly on your machine. Norn changes this:
 
 - The agent **cannot do anything itself**. It can only *ask*.
-- AgentOS checks every request against a **policy** (a small rules file). If no rule allows the request, the answer is no.
+- Norn checks every request against a **policy** (a small rules file). If no rule allows the request, the answer is no.
 - Allowed commands run inside a **sandbox**: a locked box that holds only a *copy* of the code, with no network, no home folder, and limits on memory, CPU and the number of processes.
-- Before doing anything, AgentOS **writes down what it is about to do**, and makes sure that note is safely on disk. After the work, it writes down that it is done.
+- Before doing anything, Norn **writes down what it is about to do**, and makes sure that note is safely on disk. After the work, it writes down that it is done.
 - After every change, it takes a **checkpoint** (a full copy of the code folder).
 
-Because of the notes and the checkpoints, AgentOS can be killed at any moment (`kill -9`, the strongest way to stop a program) and, when it starts again, it can say for every call whether it happened. It never runs an uncertain call again by accident.
+Because of the notes and the checkpoints, Norn can be killed at any moment (`kill -9`, the strongest way to stop a program) and, when it starts again, it can say for every call whether it happened. It never runs an uncertain call again by accident.
 
 The end result of a run is a **patch** (a file listing the changes). Your original code is never touched. You read the patch and decide whether to apply it.
 
-In one line: *AgentOS runs a coding agent's tool calls inside a rootless Linux sandbox and survives `kill -9` without losing track of what happened.*
+In one line: *Norn runs a coding agent's tool calls inside a rootless Linux sandbox and survives `kill -9` without losing track of what happened.*
 
 It is a **learning and portfolio project**, not a product. It deliberately does one thing: one agent, one copy of one repository, five tools, and a command line.
 
@@ -56,7 +56,7 @@ AI agents now run real commands with real effects. The common setup, "give the m
 - The agent's final message rarely matches what it really did.
 - A reviewer needs the full list: every call, its arguments, the policy decision, the result, and what was refused.
 
-Sandboxing alone is common: tools like bubblewrap, nsjail, E2B and Daytona do it. **What AgentOS adds is recovery that is proven by a test harness that kills the program thousands of times**, plus an adversarial test suite that tries to break out of the sandbox.
+Sandboxing alone is common: tools like bubblewrap, nsjail, E2B and Daytona do it. **What Norn adds is recovery that is proven by a test harness that kills the program thousands of times**, plus an adversarial test suite that tries to break out of the sandbox.
 
 ---
 
@@ -140,14 +140,14 @@ Each `exec` runs in a fresh child process with its own set of Linux isolation fe
 | **Write globs enforced after each `exec`** | After a command, the workspace is compared with the checkpoint. Any change outside the allowed write paths is put back and logged as a policy violation. | Post-exec diff and revert (ADR 0009) | Code run by `pytest` can write anywhere in `/work`; this keeps it to the allowed paths. |
 | **Log and checkpoints hidden from the box** | The sandbox sees `work/` and nothing else of the execution folder. | Mount layout | The agent rewriting its own history. (Design rule 9.) |
 | **Distro presets** | Where programs live differs between Linux systems, so the read-only system folders are set in the policy: `fhs` (`/usr`, `/bin`, `/lib`, `/lib64`) or `nix` (`/nix/store`). | Policy presets (ADR 0011) | Keeps `src/` free of distro-specific code; the same binary works on Ubuntu and NixOS. |
-| **Startup checks** | On start, AgentOS checks for user namespaces, Landlock, `openat2` and cgroup delegation, and stops with a clear message if one is missing. | Feature probes | A missing feature found halfway through a run would leave a mess; found at start, it changes nothing. |
+| **Startup checks** | On start, Norn checks for user namespaces, Landlock, `openat2` and cgroup delegation, and stops with a clear message if one is missing. | Feature probes | A missing feature found halfway through a run would leave a mess; found at start, it changes nothing. |
 
 ### 4.4 Durability: surviving `kill -9`
 
 | Feature | What it is | Why it is needed |
 |---|---|---|
-| **Intent before effect** | Before any effect, an "intent" record is written to the log and forced to disk (`fsync`). | After a crash, a call with an intent but no "done" record is known to be *uncertain*. Without the intent, AgentOS would not even know the call had started. (Design rule 3.) |
-| **Append-only event log in SQLite** | Every request, policy decision, intent, result and LLM message is a row. WAL mode, `synchronous=FULL`. | It is the diary that recovery reads, and the record that `agentos trace` prints for audit. |
+| **Intent before effect** | Before any effect, an "intent" record is written to the log and forced to disk (`fsync`). | After a crash, a call with an intent but no "done" record is known to be *uncertain*. Without the intent, Norn would not even know the call had started. (Design rule 3.) |
+| **Append-only event log in SQLite** | Every request, policy decision, intent, result and LLM message is a row. WAL mode, `synchronous=FULL`. | It is the diary that recovery reads, and the record that `norn trace` prints for audit. |
 | **Tool-call state machine** | Each call moves through fixed states: requested → allowed/denied → intent → completed/failed, or UNCERTAIN after a crash. | Makes "what happened to call #6" a question with a definite answer. |
 | **Atomic file writes** | `fs.write` writes a temporary file, forces it to disk, then renames it over the target. | A crash never leaves a half-written file. |
 | **Checkpoint after every change** | A full copy of the workspace (fast copy-on-write `reflink` on btrfs/XFS), written under a temporary name and then renamed. | Gives recovery a known-good state to return to. Directory copies were chosen over git because a test showed git misses ignored files, empty folders, file modes and a nested `.git` (ADR 0007). |
@@ -155,7 +155,7 @@ Each `exec` runs in a fresh child process with its own set of Linux isolation fe
 | **Hashes in the log, contents in blobs** | The `fs.write` intent stores the hash of the file before and after. | Lets recovery decide whether an interrupted write happened by looking at the file (ADR 0004). |
 | **Per-tool recovery rules** | `fs.read`/`fs.list`: not applied, may be asked again. `fs.write`: file matches new hash → APPLIED; old hash → NOT APPLIED; anything else → roll back. `exec`: cannot be known → roll back to the last checkpoint. | An uncertain call is never re-run before it is settled. (Design rule 5, ADR 0003.) |
 | **Re-entrant recovery** | Recovery itself can be killed and run again. | A crash during recovery must not make things worse. |
-| **Resume** | `agentos run --resume <id>` recovers, rebuilds the agent's conversation from the log, gives it a result for each settled call, and continues. | The agent picks up where it stopped, and nothing runs twice (ADR 0005). |
+| **Resume** | `norn run --resume <id>` recovers, rebuilds the agent's conversation from the log, gives it a result for each settled call, and continues. | The agent picks up where it stopped, and nothing runs twice (ADR 0005). |
 | **Child processes die with the runtime** | Every helper process (the sandbox helper, the `cp` that makes a checkpoint) is set to be killed by the kernel when the runtime dies. | Without it, a copy kept running after the runtime was killed and wrote a folder *after* recovery had cleaned up (bug B-007). |
 
 ### 4.5 Agents and the command line
@@ -165,7 +165,7 @@ Each `exec` runs in a fresh child process with its own set of Linux isolation fe
 | **Scripted agent** | Reads a fixed list of tool calls from a TOML file. | Tests need the same calls every time; a real model is not repeatable. |
 | **LLM agent** | A minimal loop that talks to any OpenAI-compatible endpoint (a local `llama-server`, or a hosted API with a key). The model is called by the runtime, outside the sandbox; the key is never written to disk. | Shows the system works with a real model, not only with a script. |
 | **CLI** | `run`, `status`, `trace`, `recover`, `run --resume`. | `trace` prints one line per call (or every record, or JSON), which is the audit view. |
-| **Fault-injection hooks** | `AGENTOS_CRASH_AT=P4 AGENTOS_CRASH_CALL=6` makes the runtime kill itself at an exact point. | Lets the test harness (and a person) prove recovery at every crash point. |
+| **Fault-injection hooks** | `NORN_CRASH_AT=P4 NORN_CRASH_CALL=6` makes the runtime kill itself at an exact point. | Lets the test harness (and a person) prove recovery at every crash point. |
 
 ---
 
@@ -178,7 +178,7 @@ All of these are done and tagged locally (`m0` … `m6`, `v0.1`). Each has a doc
 | Milestone | What was built | Exit criterion | Result |
 |---|---|---|---|
 | **M0** Rust ramp | A practice CLI: TOML file in, SQLite rows out | Works | Done |
-| **M1** Vertical slice | Gateway, the four tools, policy, scripted agent, event log, `agentos trace` (no sandbox yet) | Scripted agent fixes the demo repo's failing test; `trace` prints every call | Done |
+| **M1** Vertical slice | Gateway, the four tools, policy, scripted agent, event log, `norn trace` (no sandbox yet) | Scripted agent fixes the demo repo's failing test; `trace` prints every call | Done |
 | **M2** Sandbox | Namespaces, new root, cgroup v2, Landlock, `openat2`, environment scrubbing, both presets | 20 adversarial cases, 0 escapes | Done |
 | **M3** Durability | State machine, intent fsync, directory checkpoints, `recover`, `--resume`, fault-injection harness | P1–P8 pass all invariants over 200 runs each | Done (`nix`) |
 | **M4** LLM agent | Agent loop against an OpenAI-compatible endpoint | A real LLM completes the demo task in the sandbox | Done (local 4B model; three failed attempts are also recorded) |
@@ -211,9 +211,9 @@ Seven bugs in the runtime itself were found by the suites or the demo, each with
 | A fifth tool, `ext.call` (off by default) | A request to an outside service, which a checkpoint cannot undo; settled after a crash by sending the same request with the same key | M7, ADR 0012 |
 | Six more bugs fixed (B-009 to B-014) | Found after every suite passed: by hand, by a real project, by the benchmarks and by CI on Ubuntu | `docs/bugs.md`, `docs/what-the-suites-missed.md` |
 | Packages from outside the repo | A virtualenv or a folder of packages is mounted read-only; the policy can set environment variables | M8, D-091, D-092 |
-| Ubuntu without switching off a system-wide protection | An AppArmor profile for agentos; the startup check tries instead of reading switches | M8, D-093, D-096 |
-| A patch that says what it cannot carry, and `agentos apply` that carries it | Binary and empty files, modes, empty folders | M8, M10, D-090, D-108 |
-| Commands for everyday use | `agentos check`, `rm`, `apply`; no `systemd-run` prefix; a message on Ctrl-C | M9, M10 |
+| Ubuntu without switching off a system-wide protection | An AppArmor profile for norn; the startup check tries instead of reading switches | M8, D-093, D-096 |
+| A patch that says what it cannot carry, and `norn apply` that carries it | Binary and empty files, modes, empty folders | M8, M10, D-090, D-108 |
+| Commands for everyday use | `norn check`, `rm`, `apply`; no `systemd-run` prefix; a message on Ctrl-C | M9, M10 |
 | Policy lists | `ro_dirs` (not copied; commands see the repository's folder read-only at its place, D-122), `skip` (not copied), `scratch` (caches; not in checkpoints since D-118), `deny_except`, `helpers` (programs that commands start) | M9, D-099, D-100, D-112 |
 | Reading part of a large file | `fs.read` with `start_line` and `max_lines` | M9, D-102 |
 | A model that stops early or whose reply is cut off | Reminded once, then the run ends as `stopped` with its patch | M9, D-107, D-111 |
@@ -227,7 +227,7 @@ Seven bugs in the runtime itself were found by the suites or the demo, each with
 
 | Item | State | What is needed |
 |---|---|---|
-| **Project name** | Open (D-023, D-068) | Prince decides |
+| **Project name** | norn (D-133); the rename and what keeps the old name: D-134 | Done |
 | **A release after `v0.1`** | Not tagged. Rule since D-113: tag only after the CI run on that commit is green | Decide what the release is called and what it must contain |
 | **The newest change on `fhs`** | `exec.helpers` (D-112) has run on `nix` only | A push and a green CI run |
 | **Known limits that are parked** | Downloads in the sandbox; a merge for `apply`; checkpoint pruning. (Built for v1.0: binary files and the executable bit through the file tools, D-123; a read-only folder inside the workspace, D-122; build folders outside the checkpoints, D-118) | `AgentOS_Project_Spec.md` §22 |
@@ -245,7 +245,7 @@ These are **not committed work**. The spec is a list of ideas; the v1 document w
 |---|---|---|---|
 | 2 | Hardening and real-world effects | seccomp filter; hash-chained log; disk-full and fsync-failure injection; network allowlist proxy and a package mirror; credential brokering and secret redaction; git tools and a first external tool (open a PR) with reconciliation; approval workflow; agent as a separate process; token and cost budgets | Real agents need some network, some secrets and some external effects; each needs its own containment and recovery story. |
 | 3 | TraceWeaver (observability) | Versioned event schema; timeline and inspector (CLI/TUI, later web); causal graph; file-change and security views; replay; run diff; OpenTelemetry export | Answer "why did the agent do that?" and compare runs. |
-| 4 | Integrations | Local daemon and API; Python SDK; AgentOS as an MCP server and MCP client adapter; policy packs; examples with popular agent frameworks | Let other agents use AgentOS as their execution backend. |
+| 4 | Integrations | Local daemon and API; Python SDK; Norn as an MCP server and MCP client adapter; policy packs; examples with popular agent frameworks | Let other agents use Norn as their execution backend. |
 | 5 | Scale | Concurrent executions, scheduler, multi-agent, remote workers, shared storage, organisation-level policy | Many agents, many machines. |
 | 6 | Research | Other sandbox backends (gVisor, microVMs); migration; information-flow control; policy synthesis from traces | Open questions, each a project of its own. |
 
@@ -277,10 +277,10 @@ nix develop -c make eval      # the three suites at full size (about 13 min)
 By hand:
 
 ```sh
-alias agentos=target/debug/agentos        # it moves itself into a delegated cgroup scope (D-105)
-agentos check --policy policies/nix.toml --repo examples/demo-repo
-agentos run --repo examples/demo-repo --policy policies/nix.toml --agent scripted --script examples/scripts/fix-demo.toml
-agentos trace
+alias norn=target/debug/norn        # it moves itself into a delegated cgroup scope (D-105)
+norn check --policy policies/nix.toml --repo examples/demo-repo
+norn run --repo examples/demo-repo --policy policies/nix.toml --agent scripted --script examples/scripts/fix-demo.toml
+norn trace
 ```
 
 ---

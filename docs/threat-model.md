@@ -1,17 +1,17 @@
 # Threat model
 
-What AgentOS v0.1 protects, against whom, how, with which test, and where it stops. Plain words first; the Linux term is given next to it. Terms are explained in the glossary of `decision-log.md`.
+What Norn v0.1 protects, against whom, how, with which test, and where it stops. Plain words first; the Linux term is given next to it. Terms are explained in the glossary of `decision-log.md`.
 
 ## 1. Who is trusted
 
 | Trusted | Not trusted |
 |---|---|
 | The host kernel | The agent (scripted or LLM) and every request it makes |
-| The `agentos` binary and the user who runs it | Everything in the target repository (it may contain text that steers the model, or code that runs under `pytest`) |
+| The `norn` binary and the user who runs it | Everything in the target repository (it may contain text that steers the model, or code that runs under `pytest`) |
 | The policy file | Every process started by an allowed command, and its output |
 | The programs in the read-only system folders, as files (not what they do with hostile input) | |
 
-The agent may be hostile from the start or become so by reading a file ("prompt injection"). AgentOS does not try to tell the two apart, and does not try to stop the model from being talked into things. It limits what any request can do.
+The agent may be hostile from the start or become so by reading a file ("prompt injection"). Norn does not try to tell the two apart, and does not try to stop the model from being talked into things. It limits what any request can do.
 
 **The allowlist is not the boundary.** `pytest` runs the repository's `conftest.py`; `cargo test` runs `build.rs`. Any allowed test command is arbitrary code execution. The argv allowlist limits what the agent *asks for*; the **sandbox** limits what the code *can do*. Every test below that says "from code" assumes the attacker runs arbitrary code inside the sandbox.
 
@@ -75,15 +75,15 @@ The second line of defence for rows 10, 11, 22, 27: Landlock allows only `/work`
 
 These are not defended against. They are limits, not oversights.
 
-- **Kernel exploits.** The sandbox is kernel features; a kernel bug that breaks namespaces or Landlock breaks AgentOS. Since D-116 a seccomp filter refuses about 45 system calls (row 33), among them new namespaces, `bpf`, `io_uring` and `ptrace`. It is a deny list: every other call an unprivileged process may make is still allowed, which is more kernel surface than the allow list of a hardened container runtime.
+- **Kernel exploits.** The sandbox is kernel features; a kernel bug that breaks namespaces or Landlock breaks Norn. Since D-116 a seccomp filter refuses about 45 system calls (row 33), among them new namespaces, `bpf`, `io_uring` and `ptrace`. It is a deny list: every other call an unprivileged process may make is still allowed, which is more kernel surface than the allow list of a hardened container runtime.
 - **A malicious host user or root.** Anyone who can run commands as the user can read the log and edit the workspace.
 - **Side channels.** Timing, cache, CPU frequency.
 - **A malicious or leaky LLM provider.** With a hosted API, everything the agent reads is sent to it. Denied files are never in the workspace, so they cannot be sent; anything else can.
 - **Several mutually hostile agents on one host.** v1 runs one agent per execution and makes no claim about two executions attacking each other.
 - **Filling the disk, in part.** Since D-117 `limits.workspace_mb` bounds the workspace: one file can never be larger (`RLIMIT_FSIZE`, enforced by the kernel), and the whole workspace is measured every 50 ms while a command runs and once when it ends; a command over the limit is killed and everything it changed is undone (`tests/hardening.rs`; both presets, D-121). It is not a hard cap (ADR 0010): between two measurements a command can write about its write speed times the interval past the limit (20 to 40 MB in the experiment `m11-disk-limit`), so a nearly full disk can still be filled. And the limit is for the workspace, not the execution: every mutating call adds a checkpoint that copies the workspace, so an execution can take up to about `workspace_mb` × (`max_tool_calls` + 1). Sandbox `/tmp` is bounded by the memory limit.
 - **Power loss.** The tests kill the process; they do not cut power. Checkpoint contents are not fsynced. No power-loss claim is made (D-022).
-- **What `agentos apply` copies.** It is the user's command, and it puts the agent's result into the user's repository: changed code, new executable files, symlinks (to anywhere), changed test hooks and CI files. It lists every change and refuses a repository that differs from the copy, and it never writes through a symlink or outside the target folder (`tests/apply.rs`). It does not judge the content. Read the patch, or the `--dry-run` list, first (D-108).
-- **What happens after the patch is applied.** A patch can change test hooks, CI files or build scripts that later run unsandboxed on the human's machine. Containment ends when the patch leaves AgentOS. Read the patch.
+- **What `norn apply` copies.** It is the user's command, and it puts the agent's result into the user's repository: changed code, new executable files, symlinks (to anywhere), changed test hooks and CI files. It lists every change and refuses a repository that differs from the copy, and it never writes through a symlink or outside the target folder (`tests/apply.rs`). It does not judge the content. Read the patch, or the `--dry-run` list, first (D-108).
+- **What happens after the patch is applied.** A patch can change test hooks, CI files or build scripts that later run unsandboxed on the human's machine. Containment ends when the patch leaves Norn. Read the patch.
 - **The quality of the model's work.** A wrong but harmless patch is not a security failure.
 
 ## 5. Known weaknesses inside the scope
@@ -116,7 +116,7 @@ Sections 1 to 6 describe v0.1, which had no way to reach anything outside the wo
 
 | Trusted | Not trusted |
 |---|---|
-| The service's promise to apply an idempotency key at most once (AgentOS cannot check it) | The payload: the agent writes it |
+| The service's promise to apply an idempotency key at most once (Norn cannot check it) | The payload: the agent writes it |
 | The policy's choice of services | The service's answer: it is shown to the agent like any tool output, and could carry text that steers a model |
 
 **Attacks, defences, tests** (tests in `tests/external.rs` unless another file is named)
@@ -136,7 +136,7 @@ Sections 1 to 6 describe v0.1, which had no way to reach anything outside the wo
 - **It is a way out for data.** The payload is whatever the agent chooses, so anything the agent can read (every file in the workspace, every command output) can be sent to the listed service. Denied files are still never in the workspace. With v0.1's four tools the only way out was the patch; this is a second one. The loopback rule limits *where* it goes, not *what* goes.
 - **It is a way in for text.** The service's answer becomes a tool result. A hostile service could use it for prompt injection. Only the scripted agent can call `ext.call` today (the LLM agent is not offered the tool), so this is a limit to remember, not an open hole.
 - **There is no human approval.** A model that has been talked into it could trigger a real, irreversible effect with one call. v1 cut approval workflows. That is acceptable for a fake ledger and would not be for a real payment service.
-- **The exactly-once result depends on the service.** If a service ignores the idempotency key, every retry is a second effect. AgentOS cannot detect that from outside.
+- **The exactly-once result depends on the service.** If a service ignores the idempotency key, every retry is a second effect. Norn cannot detect that from outside.
 - **`127.0.0.1` means "this machine", not "safe".** Any program listening on the named port receives the request. Which port to name is the policy author's decision.
 - **Budget:** a call can hold the runtime for `attempts × timeout_ms` (6 seconds with the defaults).
 

@@ -250,7 +250,7 @@ fn exec_cannot_read_a_denied_file() {
     ));
     let (r, out) = attack(&t, &repo, &code);
     assert_blocked(&out, &["read .env in workspace", "read .env by host path", "find .env anywhere in /work"]);
-    assert_nowhere(&t, &r.id, "agentos-demo-canary-7f3a91");
+    assert_nowhere(&t, &r.id, "norn-demo-canary-7f3a91");
 }
 
 #[test]
@@ -271,7 +271,7 @@ fn conftest_cannot_read_a_denied_file() {
     let stdout = out["stdout"].as_str().unwrap();
     assert!(!stdout.contains("ESCAPED"), "{stdout}");
     assert_eq!(stdout.matches("BLOCKED:").count(), 3, "{stdout}");
-    assert_nowhere(&t, &r.id, "agentos-demo-canary-7f3a91");
+    assert_nowhere(&t, &r.id, "norn-demo-canary-7f3a91");
 }
 
 #[test]
@@ -317,7 +317,7 @@ fn exec_sees_no_host_secrets_in_environment_or_proc() {
     let t = env("sec-env");
     let repo = make_repo(&t);
     let code = py(
-        "probe('env canary', lambda: os.environ['AGENTOS_TEST_SECRET'])\n\
+        "probe('env canary', lambda: os.environ['NORN_TEST_SECRET'])\n\
          probe('canary in /proc/*/environ', lambda: [p for p in os.listdir('/proc') if p.isdigit() and b'CANARY' in open(f'/proc/{p}/environ','rb').read()] or (_ for _ in ()).throw(LookupError()))\n\
          probe('host processes visible', lambda: [p for p in os.listdir('/proc') if p.isdigit() and int(p) > 2] or (_ for _ in ()).throw(LookupError()))\n\
          print('env keys:', sorted(os.environ))",
@@ -326,7 +326,7 @@ fn exec_sees_no_host_secrets_in_environment_or_proc() {
     let script = t.write_script("env.toml", &format!("task = \"t\"\n[[step]]\ntool = \"exec\"\nargv = [\"python3\", \"-c\", '''\n{code}\n''']\n"));
     let out = t
         .cmd(&["run", "--quiet", "--repo", repo.to_str().unwrap(), "--policy", t.policy.to_str().unwrap(), "--script", script.to_str().unwrap()])
-        .env("AGENTOS_TEST_SECRET", "SECRET-CANARY-42")
+        .env("NORN_TEST_SECRET", "SECRET-CANARY-42")
         .output()
         .unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
@@ -335,7 +335,7 @@ fn exec_sees_no_host_secrets_in_environment_or_proc() {
     let o = t.output_of(&id, &events, 1).unwrap();
     assert_blocked(&o, &["env canary", "canary in /proc/*/environ", "host processes visible"]);
     let stdout = o["stdout"].as_str().unwrap();
-    assert!(!stdout.contains("AGENTOS_TEST_SECRET"));
+    assert!(!stdout.contains("NORN_TEST_SECRET"));
     assert_nowhere(&t, &id, "SECRET-CANARY-42");
 }
 
@@ -431,7 +431,7 @@ fn exec_cannot_reach_host_abstract_unix_sockets() {
     // network namespace, so a new namespace cannot see the host's.
     let t = env("sec-abstract");
     let repo = make_repo(&t);
-    let name = format!("agentos-test-{}", std::process::id());
+    let name = format!("norn-test-{}", std::process::id());
     use std::os::linux::net::SocketAddrExt; // abstract names are Linux-only
     let addr = std::os::unix::net::SocketAddr::from_abstract_name(name.as_bytes()).unwrap();
     let _l = std::os::unix::net::UnixListener::bind_addr(&addr).unwrap();
@@ -598,7 +598,7 @@ fn exec_cannot_signal_host_processes() {
 fn exec_tmp_is_private() {
     let t = env("sec-tmp");
     let repo = make_repo(&t);
-    let marker = format!("/tmp/agentos-sec-tmp-{}", std::process::id());
+    let marker = format!("/tmp/norn-sec-tmp-{}", std::process::id());
     let code = format!("open({marker:?}, 'w').write('x')\nprint('wrote')");
     let (_, out) = attack(&t, &repo, &code);
     assert_eq!(out["exit_code"], 0);
@@ -630,7 +630,7 @@ fn patch_does_not_follow_symlinks_to_host_files() {
 /// through `src/swap/...`, something keeps re-pointing the symlink `src/swap`
 /// between a folder inside the workspace and a folder outside it.
 ///
-/// Inside AgentOS nothing can run at the same time as a file tool (one call
+/// Inside Norn nothing can run at the same time as a file tool (one call
 /// at a time, and every sandboxed process is dead when its call returns), so
 /// the test plays a stronger attacker than the threat model allows: a host
 /// thread doing the swaps directly on the workspace folder.
@@ -721,7 +721,7 @@ fn toctou_attempt(n: usize) -> (u64, usize, usize) {
     });
     let first = child.wait_with_output().unwrap();
     // The swapper also races the runtime's own checkpoint copy (`cp -a`),
-    // which nothing inside AgentOS could ever do. When that copy fails the
+    // which nothing inside Norn could ever do. When that copy fails the
     // runtime stops with an error; the test then resumes the execution (which
     // recovers first) until every step is settled, so that all 300 racy calls
     // really happen.

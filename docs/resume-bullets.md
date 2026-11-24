@@ -4,7 +4,7 @@ Rule of the project: no number without a script or a record that produces it. Ea
 
 ## Short form (three lines)
 
-- Built **AgentOS**, a Rust runtime that runs an AI coding agent's tool calls in a rootless Linux sandbox (user, mount, PID and network namespaces, cgroup v2, Landlock, `openat2`) behind a default-deny policy, with a write-ahead event log and checkpoints.
+- Built **Norn**, a Rust runtime that runs an AI coding agent's tool calls in a rootless Linux sandbox (user, mount, PID and network namespaces, cgroup v2, Landlock, `openat2`) behind a default-deny policy, with a write-ahead event log and checkpoints.
 - Survives `kill -9` at any point: **4,800 injected kills at 8 crash points, 0 invariant violations, 0 duplicated effects**, on NixOS and on Ubuntu 24.04 in CI; **32 adversarial tests, 0 sandbox escapes**.
 - Used it on Python, Node and Rust projects; found and fixed **14 bugs**, 6 of them after every test suite had passed, and wrote up why the suites missed them.
 

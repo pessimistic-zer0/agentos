@@ -43,7 +43,7 @@ use crate::workspace::ExecDir;
 /// What the sandbox needs from the runtime.
 pub struct SandboxCtx {
     pub cgroups: CgroupRoot,
-    /// The agentos binary, started again as the sandbox helper.
+    /// The norn binary, started again as the sandbox helper.
     pub helper: PathBuf,
 }
 
@@ -471,11 +471,11 @@ impl Gateway {
                     ))),
                     // Neither COMPLETED nor FAILED would be true. Stop with the
                     // intent open: that is exactly the state a crash leaves, and
-                    // `agentos recover` settles it the same way (D-079).
+                    // `norn recover` settles it the same way (D-079).
                     Answer::Unknown { why } => anyhow::bail!(
                         "call #{call_id} to external service `{service}` is UNCERTAIN: no answer after {sent} request(s) ({why}). \
                          It may or may not have been carried out. The run is stopped here. \
-                         When the service is reachable, run `agentos recover {id}` (or `agentos run --resume {id}`): \
+                         When the service is reachable, run `norn recover {id}` (or `norn run --resume {id}`): \
                          it sends the same request again with the same idempotency key.",
                         id = self.dir.id
                     ),
@@ -491,7 +491,7 @@ impl Gateway {
     /// that fails, not the runtime (bug B-009, D-085). The workspace is put
     /// back to the last checkpoint first, so FAILED keeps its meaning:
     /// nothing was changed. If even that cannot be done, the runtime stops,
-    /// with the intent open, and `agentos recover` deals with it.
+    /// with the intent open, and `norn recover` deals with it.
     fn undo_exec(&self, why: anyhow::Error) -> Result<ToolError> {
         use anyhow::Context;
         self.rollback_workspace().with_context(|| format!("rolling back the workspace after: {why:#}"))?;
@@ -527,7 +527,7 @@ impl Gateway {
 
     /// Put the workspace back to the last checkpoint, after a command whose
     /// changes cannot be kept. If this fails the runtime stops with the
-    /// intent open, and `agentos recover` rolls back the same way.
+    /// intent open, and `norn recover` rolls back the same way.
     fn rollback_workspace(&self) -> Result<()> {
         let base = self.dir.checkpoints().join(&self.last_checkpoint);
         checkpoint::restore(&self.dir.work(), &base)

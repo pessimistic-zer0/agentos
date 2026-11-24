@@ -1,4 +1,4 @@
-# AgentOS
+# Norn
 
 A small Rust runtime that runs a coding agent's tool calls inside a rootless Linux sandbox, and survives `kill -9` at any moment without losing track of what happened.
 
@@ -11,7 +11,7 @@ It is a learning and portfolio project, not a product. It does one thing: one ag
 **Usable on a real project, on two tested systems, with its limits written down.** The last tagged release is `v0.1`; the work since then is on `main`.
 
 - **What it has been run on.** The demo; a Python project with real PyPI packages in a virtualenv; a Node project with npm packages; a Rust project. On each, tickets were fixed through the gateway and the result applied to a fresh clone, where the project's own tests passed ([`docs/results/real-repo-trial-nix.md`](docs/results/real-repo-trial-nix.md), [`second-stack-trial-nix.md`](docs/results/second-stack-trial-nix.md)). A local 4-billion-parameter model solved a one-line ticket through it and reached its own limit on a two-file one.
-- **Where it is verified.** NixOS 26.05 on the development machine (`nix` preset), and Ubuntu 24.04 in CI (`fhs` preset), including a job that keeps Ubuntu's restriction on user namespaces switched on and uses the AppArmor profile that comes with agentos. Latest green run on everything but the newest change: [43733350171](https://github.com/pessimistic-zer0/agentos/actions/runs/43733350171). Debian, Fedora and Arch use the same `fhs` preset and have not been run.
+- **Where it is verified.** NixOS 26.05 on the development machine (`nix` preset), and Ubuntu 24.04 in CI (`fhs` preset), including a job that keeps Ubuntu's restriction on user namespaces switched on and uses the AppArmor profile that comes with norn. Latest green run on everything but the newest change: [43733350171](https://github.com/pessimistic-zer0/agentos/actions/runs/43733350171). Debian, Fedora and Arch use the same `fhs` preset and have not been run.
 - **What the suites say.** 4,800 kills at 8 points with 0 invariant violations, 32 attacks with 0 escapes, 130 tests in all. See [What it shows](#what-it-shows).
 - **What it is not.** Not hardened like a container runtime (a seccomp deny list but no allow list, a measured disk limit but no hard cap), no network for commands, one agent at a time. Read [what it does not do](#what-it-does-not-do) before trusting it with anything.
 - **How it got here.** Fourteen bugs were found on the way: eight by the suites and the first CI runs, and six after every suite had passed (four by using the program on things the suites did not try, one by the benchmarks, one by CI on the other system). Each has a note in [`docs/bugs.md`](docs/bugs.md), and the six are told as a story in [`docs/what-the-suites-missed.md`](docs/what-the-suites-missed.md). The history by milestone is in [`docs/milestones/`](docs/milestones/) (M0 to M10).
@@ -20,7 +20,7 @@ It is a learning and portfolio project, not a product. It does one thing: one ag
 ## The demo
 
 ```sh
-git clone <this repository> && cd agentos
+git clone <this repository> norn && cd norn
 nix develop -c make demo
 ```
 
@@ -43,8 +43,8 @@ What you will see:
 
 3. The result is a **patch**; the original repo is not modified.
 4. The same task again, but the runtime kills itself with SIGKILL right after the file write and before its checkpoint.
-5. `agentos recover` looks at the file, compares it with the hashes stored in the intent, and reports `#6 fs.write APPLIED`.
-6. `agentos run --resume` continues with call #7. Nothing runs twice.
+5. `norn recover` looks at the file, compares it with the hashes stored in the intent, and reports `#6 fs.write APPLIED`.
+6. `norn run --resume` continues with call #7. Nothing runs twice.
 
 A full transcript is in [`docs/demo-transcript.md`](docs/demo-transcript.md).
 
@@ -61,34 +61,34 @@ make demo                                                       # picks policies
 **Ubuntu 23.10 and newer** allow user namespaces only to programs that have an AppArmor profile. Pick one:
 
 ```sh
-# (a) For agentos alone: install the program and the profile that comes with it.
+# (a) For norn alone: install the program and the profile that comes with it.
 #     Tried by the CI job `fhs-apparmor` on Ubuntu 24.04 (with the path changed to the
 #     test binary; the install to /usr/local/bin below was not itself run in CI).
 cargo build --release
-sudo install -m 755 target/release/agentos /usr/local/bin/agentos
-sudo install -m 644 packaging/apparmor/agentos /etc/apparmor.d/agentos
-sudo apparmor_parser -r /etc/apparmor.d/agentos
+sudo install -m 755 target/release/norn /usr/local/bin/norn
+sudo install -m 644 packaging/apparmor/norn /etc/apparmor.d/norn
+sudo apparmor_parser -r /etc/apparmor.d/norn
 
 # (b) For every program on the machine (what `make demo` and the main CI job use,
 #     because they run the binary from target/, where the profile does not apply):
 sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 ```
 
-If something is missing, `agentos` stops at startup and says what (for example, how to get a delegated cgroup).
+If something is missing, `norn` stops at startup and says what (for example, how to get a delegated cgroup).
 
 ### Installing it
 
-`agentos` is one program. It needs no service and no root; `agentos check` tells you whether your machine can run it.
+`norn` is one program. It needs no service and no root; `norn check` tells you whether your machine can run it.
 
 ```sh
 # From source (any Linux that meets the list above):
 cargo build --release
-install -m 755 target/release/agentos ~/.local/bin/agentos      # or, with sudo, /usr/local/bin
-agentos check --policy policies/fhs.toml                        # on NixOS: policies/nix.toml
+install -m 755 target/release/norn ~/.local/bin/norn      # or, with sudo, /usr/local/bin
+norn check --policy policies/fhs.toml                        # on NixOS: policies/nix.toml
 
 # Or pack it and move the archive to another machine with the same or a newer C library:
-packaging/release.sh --check       # builds, packs target/dist/agentos-<version>-<machine>-linux.tar.gz, runs the demo from it
-tar -xzf agentos-*.tar.gz && cd agentos-*/ && ./agentos check --policy policies/fhs.toml
+packaging/release.sh --check       # builds, packs target/dist/norn-<version>-<machine>-linux.tar.gz, runs the demo from it
+tar -xzf norn-*.tar.gz && cd norn-*/ && ./norn check --policy policies/fhs.toml
 ```
 
 The archive holds the program, the two policy presets, the AppArmor profile, the demo project and the documents. CI builds it on Ubuntu 24.04 and runs the demo task from the unpacked archive (job `release`); it is kept as a build artifact of each run. There are no packages for a distribution's package manager.
@@ -99,7 +99,7 @@ Three suites, one command (`nix develop -c make eval`). Results of record, with 
 
 | Suite | Result (`nix` preset, development machine) | Result (`fhs` preset, Ubuntu 24.04 in CI) |
 |---|---|---|
-| **Fault injection.** The runtime is killed at 8 points (before the intent, after it, during the effect, before, during and after the checkpoint, after completion, and during recovery itself) for each tool, 200 times each. After recovery, 5 invariants are checked against an independent oracle, then the run is resumed to the end. | 4,800 runs, 4,797 killed, **0 invariant violations**, 0 duplicated effects, 3,918 of 3,918 cut-off calls classified correctly. `agentos recover`: p50 20 ms, p99 55 ms | 4,800 runs, 4,800 killed, **0 invariant violations**, 0 duplicated effects, 3,756 of 3,756 classified correctly. `agentos recover` on a shared runner: p50 34 ms, p99 315 ms |
+| **Fault injection.** The runtime is killed at 8 points (before the intent, after it, during the effect, before, during and after the checkpoint, after completion, and during recovery itself) for each tool, 200 times each. After recovery, 5 invariants are checked against an independent oracle, then the run is resumed to the end. | 4,800 runs, 4,797 killed, **0 invariant violations**, 0 duplicated effects, 3,918 of 3,918 cut-off calls classified correctly. `norn recover`: p50 20 ms, p99 55 ms | 4,800 runs, 4,800 killed, **0 invariant violations**, 0 duplicated effects, 3,756 of 3,756 classified correctly. `norn recover` on a shared runner: p50 34 ms, p99 315 ms |
 | **Adversarial security.** 32 attacks: path traversal, symlinks, a symlink flipped ~6,000 times during 300 file calls (TOCTOU), reading denied and host files from code run by an allowed command, writing outside the allowed paths, network, fork bomb, memory hog, infinite loop, privilege tricks, the event log, the output patch. | 32 passed, **0 escapes** | 32 passed, **0 escapes** |
 | **Benign.** 23 ordinary operations under the shipped policy. | **0 false denials** | **0 false denials** |
 | **Overhead** (release build, i5-13420H, btrfs). | Sandboxed `true`: p50 5.6 ms, p99 8.4 ms (direct: 1.1 / 1.5 ms). `fs.write` 4 KB with fsynced log and checkpoint: p50 13.3 ms, p99 21.3 ms (durable direct write: 1.9 / 2.7 ms). Demo task end to end: p50 481 ms vs 354 ms direct (+36%). Measured on 2026-11-14 at commit `15fab27` (`docs/results/bench-nix-m8/`); the v0.1 run is kept in `docs/results/bench-nix/`. The direct runs were faster too, so the difference between the two runs is the machine's state, not the code | Not run |
@@ -132,7 +132,7 @@ payload = "order-1"
 
 - Before the request leaves, the intent records an **idempotency key** (`agentos-<execution id>-c<call id>`). The service applies a key at most once.
 - A timeout does not say whether the service did the work. The gateway sends the *same* request with the *same* key again; if no attempt is answered, the run **stops** with the call uncertain instead of recording a guess.
-- After a crash or such a stop, `agentos recover` sends the same request again. Answered: APPLIED, exactly once. Not answered: still uncertain, and the agent does not continue.
+- After a crash or such a stop, `norn recover` sends the same request again. Answered: APPLIED, exactly once. Not answered: still uncertain, and the agent does not continue.
 
 The service is a small fake (`tests/common/fake_service.rs`; run it with `cargo run --example fake_service`) that can lose a request or lose an answer on demand. Eight extra fault-injection cells kill the runtime around the request or make the service go silent, and check the service's own record:
 
@@ -183,25 +183,25 @@ More: [`docs/threat-model.md`](docs/threat-model.md), [`docs/recovery-semantics.
 
 ## Using it
 
-Commands run in a cgroup that systemd delegated to you (no root needed). `agentos run` and `agentos check` move themselves into one, by starting themselves again through `systemd-run --user --scope -p Delegate=yes`; you do not type that.
+Commands run in a cgroup that systemd delegated to you (no root needed). `norn run` and `norn check` move themselves into one, by starting themselves again through `systemd-run --user --scope -p Delegate=yes`; you do not type that.
 
 ```sh
-alias agentos=target/debug/agentos
+alias norn=target/debug/norn
 
-agentos check --policy policies/nix.toml --repo <repo>     # the machine, the policy, what would be copied; starts nothing
-agentos run --repo <repo> --policy policies/nix.toml --agent scripted --script <steps.toml>
-agentos run --repo <repo> --policy policies/nix.toml --agent llm --task "Make the failing test pass"
-agentos status                 # all executions; "interrupted" means it was stopped or killed
-agentos trace [<id>]           # one line per call; --events for every record; --json for scripts
-agentos recover <id>           # settle the call that was cut off, repair the workspace
-agentos run --resume <id>      # recover, then let the agent continue
-agentos apply <id>             # copy the result into the repo (after reading the patch); --dry-run, --to <folder>
-agentos rm <id>...             # delete executions; also --older-than <days>, --all, --dry-run
+norn check --policy policies/nix.toml --repo <repo>     # the machine, the policy, what would be copied; starts nothing
+norn run --repo <repo> --policy policies/nix.toml --agent scripted --script <steps.toml>
+norn run --repo <repo> --policy policies/nix.toml --agent llm --task "Make the failing test pass"
+norn status                 # all executions; "interrupted" means it was stopped or killed
+norn trace [<id>]           # one line per call; --events for every record; --json for scripts
+norn recover <id>           # settle the call that was cut off, repair the workspace
+norn run --resume <id>      # recover, then let the agent continue
+norn apply <id>             # copy the result into the repo (after reading the patch); --dry-run, --to <folder>
+norn rm <id>...             # delete executions; also --older-than <days>, --all, --dry-run
 ```
 
-State lives in `--state-dir`, else `$AGENTOS_STATE_DIR`, else `~/.local/share/agentos`. Each execution has a folder with its log, policy copy, workspace, checkpoints, blobs and `result.patch`. Apply a patch with `patch -p1 < result.patch` in the original repo, after reading it.
+State lives in `--state-dir`, else `$NORN_STATE_DIR`, else `~/.local/share/norn`. Each execution has a folder with its log, policy copy, workspace, checkpoints, blobs and `result.patch`. Apply a patch with `patch -p1 < result.patch` in the original repo, after reading it.
 
-The LLM agent talks to any OpenAI-compatible endpoint: `AGENTOS_LLM_BASE_URL` (default `http://127.0.0.1:8080/v1`, a local `llama-server --jinja`), `AGENTOS_LLM_MODEL`, and `AGENTOS_LLM_API_KEY` for hosted APIs. The model is called by the runtime, outside the sandbox; the key is never written to disk.
+The LLM agent talks to any OpenAI-compatible endpoint: `NORN_LLM_BASE_URL` (default `http://127.0.0.1:8080/v1`, a local `llama-server --jinja`), `NORN_LLM_MODEL`, and `NORN_LLM_API_KEY` for hosted APIs. The model is called by the runtime, outside the sandbox; the key is never written to disk.
 
 A policy, in full:
 
@@ -244,7 +244,7 @@ The shipped policies fit the demo. For a real repository, copy one and change fo
 1. **Where the agent may write.** `[filesystem] write`: for example `["src/**", "tests/**", "pyproject.toml"]`. `fs.write` makes missing folders inside these paths. Anything else is refused, and what a command changes elsewhere is put back.
 2. **Which commands it may run.** `[exec] allow`: argv prefixes, bare program names. Every allowed command is arbitrary code (your test suite runs your code); the sandbox is what confines it. There is no network in the sandbox, so a command that downloads something will fail: dependencies must already be on disk. If a command starts other programs by name, list them in `[exec] helpers`; the agent cannot run those itself. Two that were tried: `allow = [["cargo", "test"]]` needs `helpers = ["cc"]` and `scratch = ["target/**"]`; `allow = [["npm", "test"]]` needs `helpers = ["sh"]` (`[["node", "--test"]]` needs none).
 3. **The packages your tests need.** The sandbox sees the copy of the repo and the folders in `sandbox.ro_mounts`, nothing else. Not your home folder, and not a virtualenv, even one inside the repo.
-   - *A virtualenv:* add its folder to `ro_mounts`, start `agentos` with it activated, and if it lives inside the repo put it in `skip` so that it is not copied. A mount may not be under `/tmp`. If you forget to activate it, `agentos` prints a note.
+   - *A virtualenv:* add its folder to `ro_mounts`, start `norn` with it activated, and if it lives inside the repo put it in `skip` so that it is not copied. A mount may not be under `/tmp`. If you forget to activate it, `norn` prints a note.
 
      ```toml
      [filesystem]
@@ -254,7 +254,7 @@ The shipped policies fit the demo. For a real repository, copy one and change fo
      ```
      ```sh
      source /home/me/proj/.venv/bin/activate
-     agentos run --repo /home/me/proj --policy my-policy.toml --agent llm --task "..."
+     norn run --repo /home/me/proj --policy my-policy.toml --agent llm --task "..."
      ```
    - *Any other folder of packages:* mount it the same way and point at it with a variable:
 
@@ -271,17 +271,17 @@ The shipped policies fit the demo. For a real repository, copy one and change fo
    Everything under a mount or a read-only folder can be read by the code the agent runs (never written). Do not mount a folder that holds secrets. A read-only folder is the live original: it is not in checkpoints, and the run will not start if something in it matches a deny rule.
 4. **The limits.** `call_timeout_s` (60) must be longer than your test suite takes; `max_tool_calls` (50) is the whole run's budget; `max_output_kb` (64) is also the largest file `fs.read` returns; `workspace_mb` (2048) is how large the workspace may get before a command is stopped and undone.
 
-Then run `agentos check --policy my-policy.toml --repo /home/me/proj`. It says what `run` would refuse, and how many files and megabytes would be copied; if that number is large, add the big folders to `skip`.
+Then run `norn check --policy my-policy.toml --repo /home/me/proj`. It says what `run` would refuse, and how many files and megabytes would be copied; if that number is large, add the big folders to `skip`.
 
 Things to know before the first run:
 
-- **The result is a patch**, printed at the end as `patch: <path>`. A run never changes your repository. Read the patch, then either apply it yourself (`git apply <path>` or `patch -p1 < <path>`) or run `agentos apply <id>`, which copies every change into the repository the run was started on. A patch is text: if the run added a binary file or an empty file, changed a file's mode or made an empty folder, the run ends with `NOT in the patch: …` and the patch lists them; `agentos apply` carries them across. It refuses, and changes nothing, if any file the run changed has changed in your repository since; then the patch is the way, because merging is yours to do. `agentos apply <id> --dry-run` shows the list first.
+- **The result is a patch**, printed at the end as `patch: <path>`. A run never changes your repository. Read the patch, then either apply it yourself (`git apply <path>` or `patch -p1 < <path>`) or run `norn apply <id>`, which copies every change into the repository the run was started on. A patch is text: if the run added a binary file or an empty file, changed a file's mode or made an empty folder, the run ends with `NOT in the patch: …` and the patch lists them; `norn apply` carries them across. It refuses, and changes nothing, if any file the run changed has changed in your repository since; then the patch is the way, because merging is yours to do. `norn apply <id> --dry-run` shows the list first.
 - **The file tools are made for text.** `fs.read` returns at most `max_output_kb` at a time; for a larger file the agent asks for lines (`start_line`, `max_lines`). `fs.write` replaces a whole file; `fs.edit` replaces one piece of text in an existing file, which must occur in it exactly once. A binary file is read and written whole, as base64 (`encoding = "base64"`), so only small ones fit: about three quarters of `max_output_kb`. `fs.write` can make a file executable or not (`executable`); other permission bits only a command can set.
 - **`.git` is not in the workspace** (the shipped deny list leaves it out), so commands that ask git for something will not find a repository.
 - **The whole workspace is copied** at the start and again after every change. On btrfs and XFS the copies share disk blocks. Elsewhere a repository with a large `node_modules` or `target/` folder is slow and takes space: 20,000 small files took 5.4 s for a 7-call run here, against 0.6 s for the demo. `skip` leaves a folder out, but then it is not in the workspace at all; that suits a virtualenv (it is used from its own path) and does not suit `node_modules`.
-- **If you stop a run** (Ctrl-C, or the terminal closes), it says how to go on: `agentos run --resume <id>`. `agentos status` shows it as `interrupted`.
+- **If you stop a run** (Ctrl-C, or the terminal closes), it says how to go on: `norn run --resume <id>`. `norn status` shows it as `interrupted`.
 - **If the model gives up**, the run ends as `STOPPED`, not `COMPLETED`: a model that answers with words while its last command is still failing is reminded once, then the run is closed with its last words.
-- **Nothing is deleted for you.** Each execution keeps its workspace and one checkpoint per change. `agentos rm --older-than 14` removes old ones; it keeps executions that are running or can still be resumed.
+- **Nothing is deleted for you.** Each execution keeps its workspace and one checkpoint per change. `norn rm --older-than 14` removes old ones; it keeps executions that are running or can still be resumed.
 
 ## What it does not do
 
@@ -292,7 +292,7 @@ Things to know before the first run:
 - **No network, ever**, for commands. No web search, no package downloads. The only thing that leaves the runtime is the bonus tool's request to a `127.0.0.1` service that a policy names, and the LLM request.
 - **The sandbox can see** the read-only system folders in full (on NixOS, all of `/nix/store`) and some facts about the host (host name, kernel version, the workspace's path).
 - **Prompt injection is contained, not prevented.** A file can talk the model into asking for something bad; the policy and sandbox then refuse or confine it.
-- **Containment ends at the patch.** A patch can change test hooks or CI files that later run unsandboxed on your machine. Read it before applying. The same goes for `agentos apply`: it copies what the agent made, executable bits and symlinks included, and lists each one.
+- **Containment ends at the patch.** A patch can change test hooks or CI files that later run unsandboxed on your machine. Read it before applying. The same goes for `norn apply`: it copies what the agent made, executable bits and symlinks included, and lists each one.
 - One agent, one workspace. No dashboard, no replay, no MCP, no SDK, no multi-agent, no approvals. Those were cut on purpose (see the plan).
 
 ## Repository

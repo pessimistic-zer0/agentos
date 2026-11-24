@@ -553,7 +553,7 @@ This file records every decision made on this project: what was chosen, what was
 
 ### D-023 — Project name
 - **Date:** 2026-11-10
-- **Status:** Open
+- **Status:** Replaced by D-133
 - **Area:** process
 - **ADR:** none
 
@@ -3298,6 +3298,63 @@ The recovery times are higher than in D-129 (p99 342 ms against 70 ms) on a runn
 A first attempt to watch the run (`gh run watch`) ended with `error connecting to api.github.com`; that was the network on the development machine, not the run.
 
 **Concepts to learn.** A lightweight git tag has no date of its own: `git for-each-ref --format=%(creatordate)` shows the commit's date, not when the tag was made. The reflog shows when commits were made, not tags.
+### D-133 — The project is called norn
+- **Date:** 2026-11-25
+- **Status:** Taken
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** The working name "AgentOS" is replaced by **norn**. Prince chose it. In Norse myth the Norns spin each life's thread, cut it, and carve what happened into the world tree. That matches what the program is known for: a run can be cut off by `kill -9`, and the record of what happened (the event log) survives and lets it go on. The program, the command and the Rust package are all called `norn`. In prose the name is written "Norn" at the start of a sentence and in titles, and `norn` when it means the command. This closes D-023 and the last open item of D-068.
+
+**The problem.** D-023: "AgentOS" says "operating system", which the project is not, and other projects use the name. D-114 put the name before the `v1.0` tag.
+
+**Options looked at.** Prince proposed the names; Claude checked each one on crates.io (the Rust package registry) and with a web search, and described how well it fits.
+| Option | Result | Why |
+|---|---|---|
+| norn | Taken | Prince's choice. The meaning fits the crash-and-record story best. Clash: an AI coding agent called Norn exists (the crate `aion-integration-norn` connects the Aion project to it); how widely it is used is not known. The crate name `norn` on crates.io is an old compiler library; it matters only if this is ever published there (`publish = false` today) |
+| enma | Discarded | The judge of the dead in Japanese Buddhism, who keeps a ledger of every deed: fits the policy and the log, says nothing about surviving a crash. No clash found in agent tooling; crates.io name taken by an anime information crate. Claude's first choice; Prince preferred norn after the two were compared |
+| possum | Discarded | "Playing possum": plays dead and gets up again. Fits the crash story; crates.io name taken by a small text editor. Prince did not pick it |
+| sanzu | Discarded | The river the dead cross in Japanese Buddhism. Free on crates.io; a Rust remote-desktop tool of the same name exists (cea-sec/sanzu). Loose fit |
+| skuld | Discarded | The Norn of what is still to come. crates.io name taken by an active Rust test harness, close to this project's area |
+| veles | Discarded | Slavic god of the underworld. crates.io name taken by Veles code search, which has an MCP server: the same users |
+| Keep "AgentOS" | Discarded | The reasons of D-023 |
+
+**What this means for the code.** The rename itself and what deliberately keeps the old name: D-134.
+
+**Evidence.** `cargo search` for each name (2026-11-25): `norn = "0.1.0"  # High-level compiler library`; `skuld = "0.7.0"  # A test harness with runtime preconditions…`; `veles-mcp = "0.6.0"  # MCP (Model Context Protocol) server for Veles code search`; `possum = "0.1.0"  # Possum text editor`; `enma = "0.9.2"  # A crate serving anime and manga information`; no crate named `sanzu`. `cargo info aion-integration-norn`: "The first-party Norn adapter for Aion: implements the aion-integrations AgentHarness trait against a Norn `--protocol jsonrpc` process", repository `github.com/ablative-io/aion`. One web search each for `sanzu` (found cea-sec/sanzu, a remote-desktop tool) and for `possum` and `enma` as agent or sandbox tools (nothing found). These were quick checks, not a trademark search.
+
+**Concepts to learn.** A crate name on crates.io is first come, first served and separate from the name of a binary; a package can be called `norn-something` and still build a program called `norn`.
+
+### D-134 — How the rename to norn is done: what changes, and what keeps the old name on purpose
+- **Date:** 2026-11-25
+- **Status:** Taken
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** Everything a user types or reads now says `norn`: the program, the Rust package and library, the settings read from the environment (`NORN_LLM_MODEL` and so on), the default state folder (`~/.local/share/norn`), the AppArmor profile (`packaging/apparmor/norn`, for `/usr/local/bin/norn`), the release archive, the scripts, CI, and the documents that describe the program as it is now. A few things keep the old name on purpose, because changing them would break something or rewrite history. The most important is the idempotency key of `ext.call`.
+
+**The problem.** A rename touches 124 files. Some of the old names are not just words: they are stored in execution folders or sent to other programs, and the compatibility promise (D-126) says what v0.1 wrote must keep working.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| The `ext.call` idempotency key keeps its form `agentos-<execution id>-c<call id>` | Taken | The key is computed again when an uncertain call is reconciled (D-077, design rule 5). An execution left uncertain by an older version would be resent with a different key, and the service would apply the order twice. The tests `tests/external.rs` and `tests/recovery/main.rs` assert the exact key; the first test run after the mechanical rename failed on exactly this (Findings) |
+| Rename the key prefix too | Discarded | The duplicate effect above |
+| Environment settings read as `NORN_<name>`, and if that is unset, as `AGENTOS_<name>` (`norn::env_var`) | Taken | A shell set up for v0.1 keeps working instead of silently using the defaults (for `LLM_BASE_URL` that would mean a different server). Five lines and a unit test. Claude had offered this to Prince before he chose the name |
+| Only the new names | Discarded | Simpler, but an old `AGENTOS_LLM_*` setting would be ignored without a word |
+| The LLM agent's "go on" mark is recognised in both spellings when a conversation is resumed (`[norn] …` and `[agentos] …`) | Taken | It is found in stored messages to avoid repeating the nudge; an execution from before the rename stores the old one |
+| Default state folder `~/.local/share/norn`, no automatic look in the old folder | Taken | Executions from before are still usable with `--state-dir ~/.local/share/agentos`, or after moving the folder (the CHANGELOG says how). Searching two folders would make `status` and `rm` act on a folder the user did not name |
+| Frozen fixtures (`tests/fixtures/compat/`), the decision log's earlier entries, milestone documents M0–M13, `docs/results/`, `docs/bugs.md`, the ADRs, `docs/demo-transcript.md`, `docs/what-the-suites-missed.md`, `experiments/` keep "AgentOS" | Taken | They record what happened under that name. Fixtures are never regenerated (D-126); history is not rewritten (CLAUDE.md) |
+| The two plan documents keep their file names (`AgentOS v1 — Scoped Design.md`, `AgentOS_Project_Spec.md`) and get a note at the top | Taken | Hundreds of references in the history point at those names |
+| Rename the GitHub repository and the local folder | Not done | Prince's to do; the links to `pessimistic-zer0/agentos` stay valid until he does |
+| Temporary file names (`.norn-tmp-…`, `.norn-apply-…`) and the cgroup leaf (`norn-runtime`) | Renamed | Not promised (D-126 "Not promised"); a leftover temporary file from an old crash is in the workspace, which is not changed by the name of the next one |
+
+**What this means for the code.** `Cargo.toml` `name = "norn"`; `use norn::…` in the binary and tests; `src/lib.rs` `env_var`; `src/tools/ext.rs` keeps `agentos-` with a comment saying why. The patch notes read `# norn: …`; the demo repository's canary secret is `norn-demo-canary-7f3a91`.
+
+**Evidence.** `nix develop -c cargo clippy --all-targets`: no warnings. `nix develop -c make test`: 168 passed, 0 failed (167 before, plus the fallback test). `make demo`: finished, kill, recover and resume as before. `packaging/release.sh --check`: `norn 0.1.0`, "the packed program ran the demo task from the archive". Not yet run on `fhs`: needs a push and a CI run.
+
+**Concepts to learn.** Fallback (a second place to look when the first is empty); why a value that is sent to another system is part of the format, not a name.
+
 ---
 
 ## Still open
@@ -3305,7 +3362,7 @@ A first attempt to watch the run (`gh run watch`) ended with `error connecting t
 | Question | Notes |
 |---|---|
 | ~~A key for the hosted-model trial (M13)~~ | Not needed: Claude through a relay, at Prince's request (D-130) |
-| Project name | See D-023. Still open at v0.1 (D-068). Must be settled before the `v1.0` tag (D-114) |
+| ~~Project name~~ | Answered by D-133: norn (Prince, 2026-11-25) |
 | ~~License~~ | Answered by D-069: dual MIT OR Apache-2.0 |
 | ~~Public repo from day one, or after v0.1?~~ | Answered by events: Prince pushed `main` to GitHub on 2026-11-12, after v0.1 was tagged locally |
 | ~~Does the `fhs` preset pass on Ubuntu?~~ | Answered by D-072: yes on Ubuntu 24.04, CI run 43385661105 (third run; the first two found B-007 and B-008) |
@@ -3389,6 +3446,7 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-16 | The first CI run that printed its kernel showed 7.0 (`7.0.0-1014-aws`, `7.0.0-1017-azure`) on the Ubuntu 24.04 runners. Earlier the same day a document had said 6.8, from the distribution's release notes, and was corrected for having no source | The assumed number was not only unsourced, it was wrong. Hosted CI images carry their provider's kernel |
 | 2026-11-17 | Six of six tickets solved by Claude through the relay, each checked on a clone against the solution notes. The six subagents, working independently, reported the same two problems: the stop rule refuses to finish in a project whose suite has other tickets' failures (four of six had a final answer refused and narrowed the test command to get past it), and a denial does not say what is allowed | With a capable model the runtime held; the friction moved to what the agent is told. Several independent reports of the same thing are a stronger signal than one |
 | 2026-11-18 | Recording the CI run a second time showed that the scheduling commit (`c13f224`) had overwritten the first record of it (D-131 in `f9fb2d6`); how the entry got lost in that edit is not known. A "correction" written in the same hour then claimed `m13` was tagged before CI, read from the date of a lightweight tag, which is the commit's date. Both are undone in D-132 | Read `git log` and the file from disk before adding an entry; check `git diff --stat` for removed lines before committing a log change; a lightweight tag carries no time of its own |
+| 2026-11-25 | The first test run after the mechanical rename (every `agentos` to `norn`, with the key's text protected in `src/` and two documents) failed three tests in `tests/external.rs`: the rename had also changed the expected keys in the tests, and the code still sent `agentos-…` | The tests that pin the exact idempotency key did their job: a renamed key would have resent old uncertain calls as new orders. A search-and-replace across a code base needs a list of the strings that are formats, not words, and must reach the tests too |
 
 ---
 
@@ -3480,3 +3538,4 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | Fixture | A file kept with the tests as fixed input; a frozen fixture is never regenerated, so it stays evidence of what an older version produced |
 | Virtual machine (VM) | A whole computer simulated in software, with its own kernel; unlike a container, which shares the host's kernel |
 | cloud-init | The first-boot setup that cloud images run: it creates the user and installs the SSH key it is told about |
+| Fallback | A second place to look when the first is empty. Since D-134 a setting is read as `NORN_<name>`, and if that is not set, as `AGENTOS_<name>` |

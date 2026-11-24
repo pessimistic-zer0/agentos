@@ -28,16 +28,16 @@ fn set(text: String) {
 /// A run of this execution is under way.
 pub fn running(id: &str) {
     set(format!(
-        "\nagentos: stopped. Execution {id} is unfinished; nothing is lost.\n  \
-         Go on with it:                 agentos run --resume {id}\n  \
-         Only settle the cut-off call:  agentos recover {id}\n  \
+        "\nnorn: stopped. Execution {id} is unfinished; nothing is lost.\n  \
+         Go on with it:                 norn run --resume {id}\n  \
+         Only settle the cut-off call:  norn recover {id}\n  \
          (Add the same --state-dir if you used one.)\n"
     ));
 }
 
 /// Recovery of this execution is under way.
 pub fn recovering(id: &str) {
-    set(format!("\nagentos: stopped during recovery of {id}. Recovery is safe to repeat:  agentos recover {id}\n"));
+    set(format!("\nnorn: stopped during recovery of {id}. Recovery is safe to repeat:  norn recover {id}\n"));
 }
 
 /// The execution is finished; a signal now needs no explanation.
@@ -58,7 +58,7 @@ extern "C" fn on_signal(sig: libc::c_int) {
 }
 
 /// Catch SIGINT (Ctrl-C), SIGTERM and SIGHUP (the terminal closed).
-/// A signal that is ignored when agentos starts stays ignored: that is how
+/// A signal that is ignored when norn starts stays ignored: that is how
 /// `nohup` and a shell's background jobs ask not to be stopped.
 pub fn install() {
     for sig in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {

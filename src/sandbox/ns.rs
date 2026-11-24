@@ -2,7 +2,7 @@
 //! command" and "the command runs", building the sandbox around it.
 //!
 //! The runtime starts a fresh copy of its own binary as
-//! `agentos __sandbox-init <spec as JSON>`. A fresh process has exactly one
+//! `norn __sandbox-init <spec as JSON>`. A fresh process has exactly one
 //! thread, which matters: `unshare(CLONE_NEWUSER)` refuses to run in a
 //! process with several threads, and forking a multi-threaded process is
 //! risky. (Go container tools use the same re-exec trick for the same reason.)
@@ -106,7 +106,7 @@ pub const PROBE_STEPS: [&str; 6] = [
 ///
 /// This runs in a forked child of the runtime, between `fork` and what
 /// would be `exec` (`Command::pre_exec`), so it works whatever program the
-/// runtime is part of: `agentos`, a benchmark, a test (bug B-013). In that
+/// runtime is part of: `norn`, a benchmark, a test (bug B-013). In that
 /// place only async-signal-safe calls are allowed, because another thread
 /// of the parent may have held a lock (for example the allocator's) at the
 /// moment of the fork. So: raw system calls only, no allocation, no
@@ -175,7 +175,7 @@ pub unsafe fn probe_in_child(uid_map: &[u8], gid_map: &[u8]) -> ! {
     libc::_exit(0)
 }
 
-/// Entry point of `agentos __sandbox-init <json>`. Never returns.
+/// Entry point of `norn __sandbox-init <json>`. Never returns.
 pub fn helper_main(spec_json: &str) -> ! {
     let mut status = status_file();
     let code = match helper(spec_json, &mut status) {

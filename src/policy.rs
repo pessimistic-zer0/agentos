@@ -2,7 +2,7 @@
 //! write, which commands it may run, and with what limits.
 //!
 //! Design rule 2: no matching rule means deny. Every decision names the rule
-//! that produced it, so `agentos trace` can show *why* a call was allowed or
+//! that produced it, so `norn trace` can show *why* a call was allowed or
 //! refused.
 
 use std::path::{Path, PathBuf};

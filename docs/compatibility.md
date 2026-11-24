@@ -2,7 +2,7 @@
 
 *From version 1.0 on. Decision: D-126. Tests: `tests/compat.rs`.*
 
-AgentOS writes two kinds of file that outlive the program that wrote them: the **policy file** you write, and the **execution folder** a run leaves (its event log, checkpoints, blobs and patch). This page says what a later 1.x version promises about them, and what it does not.
+Norn writes two kinds of file that outlive the program that wrote them: the **policy file** you write, and the **execution folder** a run leaves (its event log, checkpoints, blobs and patch). This page says what a later 1.x version promises about them, and what it does not.
 
 ## The promise
 
@@ -24,7 +24,7 @@ AgentOS writes two kinds of file that outlive the program that wrote them: the *
 - **The other direction.** An *older* program reading a *newer* file. A 1.0 program refuses a policy that uses a setting added in 1.1 (an unknown key is always an error, so that a misspelt `deny` never silently protects nothing), and may not understand a newer event.
 - **Resuming on another machine.** An execution folder holds absolute paths from the machine it ran on (the repository, the sandbox's read-only folders). `trace` and `apply --to` work anywhere; `run --resume` needs the same paths to exist.
 - **The words on the screen.** The text of `trace`, `status` and error messages may change. Programs should read the event log, not the screen.
-- **The Rust library.** `agentos` is built as a program; the functions inside it are not a public interface.
+- **The Rust library.** `norn` is built as a program; the functions inside it are not a public interface.
 - **The inside of a checkpoint or blob** beyond what the commands above need, and the name or layout of temporary files.
 - **Tool calls offered to a model.** The names and arguments of the tools in a script (`fs.read`, `fs.write`, `fs.edit`, `fs.list`, `exec`, `ext.call`) follow rule 1 (new optional arguments only). The exact wording of the tool descriptions and of the system prompt sent to a model may change.
 

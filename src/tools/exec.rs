@@ -93,7 +93,7 @@ impl Programs {
                 if is_executable(&own) && !on_path && !same(&own, &as_found) && !same(&own, &real) {
                     notes.push(format!(
                         "sandbox.ro_mounts has {}, which holds its own `{prog}` ({}), but its bin folder is not on PATH; the `{prog}` in use is {}. \
-                         If that folder is a virtualenv, activate it before starting agentos (its bin folder must come first on PATH); \
+                         If that folder is a virtualenv, activate it before starting norn (its bin folder must come first on PATH); \
                          otherwise its packages will not be used.",
                         m.display(),
                         own.display(),

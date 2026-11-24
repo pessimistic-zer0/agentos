@@ -1,5 +1,7 @@
 # AgentOS v1 — Scoped Design
 
+> **Name.** Since 2026-11-25 the project is called **norn** (D-133). This document keeps the working name "AgentOS" in its text and file name, because the history refers to it (D-134).
+
 Nov 10, 2026 · @Prince
 
 > **This document is the plan.** `AgentOS_Project_Spec.md` is a "maybe someday" list and does not add work to v1. If the two disagree, this document wins. The outline, the build order and the cut list below are fixed; changing any of them needs an ADR with a written reason.

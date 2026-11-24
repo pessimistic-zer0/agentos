@@ -9,21 +9,21 @@
 //! measures only the spawn itself (cgroup create → helper → namespaces → new
 //! root → Landlock → execve(true) → wait → cgroup removed).
 //!
-//! The helper is the `agentos` binary next to this one (target/<profile>/agentos).
+//! The helper is the `norn` binary next to this one (target/<profile>/norn).
 
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use agentos::policy::Policy;
-use agentos::sandbox::{self, cgroup::CgroupRoot, SandboxSpec};
-use agentos::tools::exec::Programs;
+use norn::policy::Policy;
+use norn::sandbox::{self, cgroup::CgroupRoot, SandboxSpec};
+use norn::tools::exec::Programs;
 use anyhow::{bail, Context, Result};
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let preset = std::env::var("AGENTOS_TEST_PRESET").unwrap_or_else(|_| "nix".into());
+    let preset = std::env::var("NORN_TEST_PRESET").unwrap_or_else(|_| "nix".into());
     let text = std::fs::read_to_string(root.join("policies").join(format!("{preset}.toml")))?;
     // The preset, with `true` as the only allowed command.
     let start = text.find("allow = [").context("policy has no exec.allow")?;
@@ -31,8 +31,8 @@ fn main() -> Result<()> {
     let policy = Policy::parse(&format!("{}allow = [[\"true\"]]{}", &text[..start], &text[end..]))?;
     let programs = Programs::resolve(&policy, &std::env::var("PATH").unwrap_or_default())?;
     let program = programs.lookup("true").context("`true` not found")?.to_path_buf();
-    // target/<profile>/examples/sandbox_spawn -> target/<profile>/agentos
-    let helper = std::env::current_exe()?.parent().and_then(|p| p.parent()).context("no parent")?.join("agentos");
+    // target/<profile>/examples/sandbox_spawn -> target/<profile>/norn
+    let helper = std::env::current_exe()?.parent().and_then(|p| p.parent()).context("no parent")?.join("norn");
     if !helper.exists() {
         bail!("{} not found; build it first (cargo build --release)", helper.display());
     }

@@ -87,7 +87,7 @@ pub fn list_executions(state_dir: &Path) -> Result<Vec<String>> {
 }
 
 /// Every folder under `executions/`, also ones without a log (a run that
-/// died before its log was created). For `agentos rm`.
+/// died before its log was created). For `norn rm`.
 pub fn all_execution_dirs(state_dir: &Path) -> Result<Vec<String>> {
     let dir = state_dir.join("executions");
     let mut ids = Vec::new();
@@ -130,7 +130,7 @@ pub fn age_in_days(id: &str) -> Option<i64> {
 
 /// What `create` would do with `repo`, without copying anything: how many
 /// files and bytes would be copied and which paths left out. For
-/// `agentos check`.
+/// `norn check`.
 pub fn survey(repo: &Path, policy: &Policy) -> Result<(CopyReport, u64)> {
     fn walk(src: &Path, rel: &str, policy: &Policy, report: &mut CopyReport, bytes: &mut u64) -> Result<()> {
         for entry in fs::read_dir(src).with_context(|| format!("reading {}", src.display()))? {
@@ -171,7 +171,7 @@ pub fn survey(repo: &Path, policy: &Policy) -> Result<(CopyReport, u64)> {
 }
 
 /// A new execution id: `YYYYMMDD-HHMMSSmmm-xxxxxx` (UTC, to the millisecond).
-/// Ids sort by creation time, which `agentos trace` and `status` rely on to
+/// Ids sort by creation time, which `norn trace` and `status` rely on to
 /// find the latest execution. The suffix (from the clock's nanoseconds and
 /// the process id) keeps apart two runs started in the same millisecond;
 /// only those two could sort in the wrong order.
@@ -326,7 +326,7 @@ mod tests {
 
     #[test]
     fn denied_files_are_not_copied_and_links_stay_links() -> Result<()> {
-        let base = std::env::temp_dir().join(format!("agentos-ws-test-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("norn-ws-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let repo = base.join("repo");
         fs::create_dir_all(repo.join("src"))?;

@@ -2,16 +2,16 @@
 //!
 //! For each crash point P1..P8 and each tool, many times over:
 //!
-//! 1. run the scripted agent with `AGENTOS_CRASH_AT=<point>` so the runtime
+//! 1. run the scripted agent with `NORN_CRASH_AT=<point>` so the runtime
 //!    kills itself (SIGKILL) at that point while handling a chosen call;
 //! 2. look at what was left behind (before recovery touches it);
-//! 3. run `agentos recover`, timing it;
+//! 3. run `norn recover`, timing it;
 //! 4. check the five invariants from the v1 design;
-//! 5. run `agentos run --resume` to the end and check the final workspace is
+//! 5. run `norn run --resume` to the end and check the final workspace is
 //!    exactly what an uninterrupted run produces (no lost and no doubled effect).
 //!
-//! Runs per (point, tool): `AGENTOS_RECOVERY_RUNS` (default 3, so `cargo test`
-//! stays quick; `make eval` uses 200). Parallel workers: `AGENTOS_RECOVERY_JOBS`
+//! Runs per (point, tool): `NORN_RECOVERY_RUNS` (default 3, so `cargo test`
+//! stays quick; `make eval` uses 200). Parallel workers: `NORN_RECOVERY_JOBS`
 //! (default 8). The report goes to stdout and to `target/recovery-report.json`.
 //!
 //! The second big test, `external_calls_hold_under_kills_and_timeouts`, does
@@ -32,7 +32,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use agentos::blob::content_hash;
+use norn::blob::content_hash;
 use common::fake_service::{FakeService, Fault};
 use common::*;
 use serde_json::{json, Value};
@@ -235,7 +235,7 @@ fn check_model(work: &Path, m: &Model, v: &mut Vec<String>, when: &str) {
 fn check_invariants(t: &TestEnv, id: &str, events: &[Value], v: &mut Vec<String>, when: &str) {
     let dir = t.exec_dir(id);
     let work = dir.join("work");
-    // I5: the log is a gap-free prefix. (`agentos trace` already refused any
+    // I5: the log is a gap-free prefix. (`norn trace` already refused any
     // illegal order of records, or `t.events` would have panicked.)
     let seqs: Vec<u64> = events.iter().map(|e| e["seq"].as_u64().unwrap()).collect();
     if seqs != (1..=seqs.len() as u64).collect::<Vec<_>>() {
@@ -331,9 +331,9 @@ fn run_trial(job: &Job, seed: u64) -> Outcome {
     };
     let status = t
         .cmd(&["run", "--quiet", "--repo", repo.to_str().unwrap(), "--policy", t.policy.to_str().unwrap(), "--script", script.to_str().unwrap()])
-        .env("AGENTOS_CRASH_AT", first_point)
-        .env("AGENTOS_CRASH_CALL", call.to_string())
-        .env("AGENTOS_CRASH_DELAY_US", delay_us.to_string())
+        .env("NORN_CRASH_AT", first_point)
+        .env("NORN_CRASH_CALL", call.to_string())
+        .env("NORN_CRASH_DELAY_US", delay_us.to_string())
         .output()
         .unwrap();
     out.crashed = status.status.signal() == Some(9);
@@ -367,7 +367,7 @@ fn run_trial(job: &Job, seed: u64) -> Outcome {
 
     // --- Recovery (for P8: killed part-way first, then run again). ---
     if job.point == "P8" {
-        let st = t.cmd(&["recover", "--quiet", &id]).env("AGENTOS_CRASH_AT", "P8").env("AGENTOS_CRASH_HIT", (1 + rng.below(5)).to_string()).output().unwrap();
+        let st = t.cmd(&["recover", "--quiet", &id]).env("NORN_CRASH_AT", "P8").env("NORN_CRASH_HIT", (1 + rng.below(5)).to_string()).output().unwrap();
         out.recovery_crashed = st.status.signal() == Some(9);
     }
     let started = Instant::now();
@@ -440,22 +440,22 @@ fn checkpoint_copy_dies_with_the_runtime() {
     let st = t
         .cmd(&["run", "--quiet", "--repo", repo.to_str().unwrap(), "--policy", t.policy.to_str().unwrap(), "--script", script.to_str().unwrap()])
         .env("PATH", &slow_path)
-        .env("AGENTOS_CRASH_AT", "P5")
-        .env("AGENTOS_CRASH_CALL", "2")
-        .env("AGENTOS_CRASH_DELAY_US", "1000")
+        .env("NORN_CRASH_AT", "P5")
+        .env("NORN_CRASH_CALL", "2")
+        .env("NORN_CRASH_DELAY_US", "1000")
         .output()
         .unwrap();
     assert_eq!(st.status.signal(), Some(9), "the run must be killed during the copy: {}", String::from_utf8_lossy(&st.stderr));
     let id = std::fs::read_dir(t.state.join("executions")).unwrap().next().unwrap().unwrap().file_name().to_string_lossy().into_owned();
 
     // Recovery uses the normal cp, straight away, as a person or script would.
-    t.agentos(&["recover", "--quiet", &id]);
+    t.norn(&["recover", "--quiet", &id]);
     // Longer than the wrapper's sleep: a copy that survived would be done by now.
     std::thread::sleep(Duration::from_millis(900));
     let mut v = Vec::new();
     check_invariants(&t, &id, &events_of(&t, &id), &mut v, "after recovery and a pause");
     assert!(v.is_empty(), "{v:?}");
-    t.agentos(&["run", "--quiet", "--resume", &id]);
+    t.norn(&["run", "--quiet", "--resume", &id]);
     check_invariants(&t, &id, &events_of(&t, &id), &mut v, "after resume");
     assert!(v.is_empty(), "{v:?}");
 }
@@ -473,8 +473,8 @@ fn recovery_waits_for_a_lock_that_is_about_to_be_released() {
     let script = t.write_script("workload.toml", &script_text());
     let st = t
         .cmd(&["run", "--quiet", "--repo", repo.to_str().unwrap(), "--policy", t.policy.to_str().unwrap(), "--script", script.to_str().unwrap()])
-        .env("AGENTOS_CRASH_AT", "P4")
-        .env("AGENTOS_CRASH_CALL", "2")
+        .env("NORN_CRASH_AT", "P4")
+        .env("NORN_CRASH_CALL", "2")
         .output()
         .unwrap();
     assert_eq!(st.status.signal(), Some(9));
@@ -487,7 +487,7 @@ fn recovery_waits_for_a_lock_that_is_about_to_be_released() {
     let started = Instant::now();
     let out = t.output(&["recover", "--quiet", &id]);
     assert!(!out.status.success(), "recover must not run while the lock is held");
-    assert!(String::from_utf8_lossy(&out.stderr).contains("in use by another agentos process"));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("in use by another norn process"));
     assert!(started.elapsed() >= Duration::from_secs(2), "it should have waited before giving up");
     assert!(!events_of(&t, &id).iter().any(|e| e["type"] == "recovery.started"));
 
@@ -496,7 +496,7 @@ fn recovery_waits_for_a_lock_that_is_about_to_be_released() {
         std::thread::sleep(Duration::from_millis(400));
         drop(held);
     });
-    t.agentos(&["recover", "--quiet", &id]);
+    t.norn(&["recover", "--quiet", &id]);
     releaser.join().unwrap();
     let mut v = Vec::new();
     check_invariants(&t, &id, &events_of(&t, &id), &mut v, "after recovery");
@@ -513,8 +513,8 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
 
 #[test]
 fn recovery_holds_at_every_crash_point() {
-    let runs: usize = std::env::var("AGENTOS_RECOVERY_RUNS").ok().and_then(|v| v.parse().ok()).unwrap_or(3);
-    let workers: usize = std::env::var("AGENTOS_RECOVERY_JOBS").ok().and_then(|v| v.parse().ok()).unwrap_or(8);
+    let runs: usize = std::env::var("NORN_RECOVERY_RUNS").ok().and_then(|v| v.parse().ok()).unwrap_or(3);
+    let workers: usize = std::env::var("NORN_RECOVERY_JOBS").ok().and_then(|v| v.parse().ok()).unwrap_or(8);
     let all = ["fs.read", "fs.list", "fs.write", "exec"];
     let mutating = ["fs.write", "exec"];
     // P4..P6 sit around the checkpoint, which only mutating calls take.
@@ -577,7 +577,7 @@ fn recovery_holds_at_every_crash_point() {
     let (p50, p99) = (percentile(&all_times, 0.50), percentile(&all_times, 0.99));
     println!(
         "\ntotal: {total_runs} runs, {total_crashed} killed, {total_viol} invariant violations, {total_dup} duplicated effects, \
-         {total_cls_ok}/{total_cls} cut-off calls classified correctly; `agentos recover` wall time p50 {p50:.1} ms, p99 {p99:.1} ms; \
+         {total_cls_ok}/{total_cls} cut-off calls classified correctly; `norn recover` wall time p50 {p50:.1} ms, p99 {p99:.1} ms; \
          harness took {:.0} s with {workers} workers",
         elapsed.as_secs_f64()
     );
@@ -607,7 +607,7 @@ fn recovery_holds_at_every_crash_point() {
 // The bonus: `ext.call`, an effect outside the workspace (D-080).
 //
 // Same idea as above, with a different oracle. The fake service runs inside
-// this test program, so it survives every kill of `agentos`, and its own
+// this test program, so it survives every kill of `norn`, and its own
 // list of applied requests is the ground truth: each order must be there
 // exactly once at the end, whatever was killed or lost on the way.
 // ---------------------------------------------------------------------------
@@ -723,7 +723,7 @@ fn run_ext_trial(cell: &'static str, n: usize, seed: u64) -> ExtOutcome {
 
     let mut cmd = t.cmd(&["run", "--quiet", "--repo", repo.to_str().unwrap(), "--policy", t.policy.to_str().unwrap(), "--script", script.to_str().unwrap()]);
     if let Some(point) = first_point {
-        cmd.env("AGENTOS_CRASH_AT", point).env("AGENTOS_CRASH_CALL", call.to_string()).env("AGENTOS_CRASH_DELAY_US", kill_delay_us.to_string());
+        cmd.env("NORN_CRASH_AT", point).env("NORN_CRASH_CALL", call.to_string()).env("NORN_CRASH_DELAY_US", kill_delay_us.to_string());
     }
     let first = cmd.output().unwrap();
     out.crashed = first.status.signal() == Some(9);
@@ -770,7 +770,7 @@ fn run_ext_trial(cell: &'static str, n: usize, seed: u64) -> ExtOutcome {
             break;
         }
         if cell == "P8" && first_recovery {
-            let st = t.cmd(&["recover", "--quiet", &id]).env("AGENTOS_CRASH_AT", "P8").env("AGENTOS_CRASH_HIT", (1 + rng.below(3)).to_string()).output().unwrap();
+            let st = t.cmd(&["recover", "--quiet", &id]).env("NORN_CRASH_AT", "P8").env("NORN_CRASH_HIT", (1 + rng.below(3)).to_string()).output().unwrap();
             out.recovery_crashed = st.status.signal() == Some(9);
         }
         let calls_before = requested(&events_of(&t, &id));
@@ -882,8 +882,8 @@ fn run_ext_trial(cell: &'static str, n: usize, seed: u64) -> ExtOutcome {
 
 #[test]
 fn external_calls_hold_under_kills_and_timeouts() {
-    let runs: usize = std::env::var("AGENTOS_RECOVERY_RUNS").ok().and_then(|v| v.parse().ok()).unwrap_or(3);
-    let workers: usize = std::env::var("AGENTOS_RECOVERY_JOBS").ok().and_then(|v| v.parse().ok()).unwrap_or(8);
+    let runs: usize = std::env::var("NORN_RECOVERY_RUNS").ok().and_then(|v| v.parse().ok()).unwrap_or(3);
+    let workers: usize = std::env::var("NORN_RECOVERY_JOBS").ok().and_then(|v| v.parse().ok()).unwrap_or(8);
     let jobs: Vec<(&'static str, usize)> = EXT_CELLS.iter().flat_map(|(cell, _)| (0..runs).map(move |n| (*cell, n))).collect();
     let seed0 = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() as u64;
     let next = AtomicUsize::new(0);
@@ -936,7 +936,7 @@ fn external_calls_hold_under_kills_and_timeouts() {
     let (p50, p99) = (percentile(&times, 0.50), percentile(&times, 0.99));
     println!(
         "\nexternal total: {t_runs} runs, {t_viol} invariant violations, {t_dup} duplicated effects, {t_cls_ok}/{t_cls} cut-off calls classified correctly, \
-         {t_stops} stops with the call left uncertain; successful `agentos recover` wall time (includes waiting for the service) p50 {p50:.1} ms, p99 {p99:.1} ms; \
+         {t_stops} stops with the call left uncertain; successful `norn recover` wall time (includes waiting for the service) p50 {p50:.1} ms, p99 {p99:.1} ms; \
          harness took {:.0} s with {workers} workers",
         elapsed.as_secs_f64()
     );
@@ -993,9 +993,9 @@ fn run_edit_trial(point: &'static str, n: usize, seed: u64) -> (bool, Vec<String
     let first_point = if point == "P8" { ["P2", "P3", "P4", "P5", "P6"][rng.below(5) as usize] } else { point };
     let status = t
         .cmd(&["run", "--quiet", "--repo", repo.to_str().unwrap(), "--policy", t.policy.to_str().unwrap(), "--script", script.to_str().unwrap()])
-        .env("AGENTOS_CRASH_AT", first_point)
-        .env("AGENTOS_CRASH_CALL", "2")
-        .env("AGENTOS_CRASH_DELAY_US", "4000")
+        .env("NORN_CRASH_AT", first_point)
+        .env("NORN_CRASH_CALL", "2")
+        .env("NORN_CRASH_DELAY_US", "4000")
         .output()
         .unwrap();
     let crashed = status.status.signal() == Some(9);
@@ -1017,7 +1017,7 @@ fn run_edit_trial(point: &'static str, n: usize, seed: u64) -> (bool, Vec<String
     let expect_applied = all_open.contains(&2).then(|| intent_of(&before, 2).is_some() && at_crash.as_deref() == Some(mid.as_str()));
 
     if point == "P8" {
-        let _ = t.cmd(&["recover", "--quiet", &id]).env("AGENTOS_CRASH_AT", "P8").env("AGENTOS_CRASH_HIT", (1 + rng.below(5)).to_string()).output().unwrap();
+        let _ = t.cmd(&["recover", "--quiet", &id]).env("NORN_CRASH_AT", "P8").env("NORN_CRASH_HIT", (1 + rng.below(5)).to_string()).output().unwrap();
     }
     let st = t.output(&["recover", "--quiet", &id]);
     if !st.status.success() {
@@ -1037,7 +1037,7 @@ fn run_edit_trial(point: &'static str, n: usize, seed: u64) -> (bool, Vec<String
         if on_disk != want || dir.join("work.restore-tmp").exists() {
             v.push(format!("{when}: leftovers (checkpoints on disk {on_disk:?}, named {want:?})"));
         }
-        if std::fs::read_dir(work.join("src")).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().starts_with(".agentos-tmp-")) {
+        if std::fs::read_dir(work.join("src")).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().starts_with(".norn-tmp-")) {
             v.push(format!("{when}: a temporary file was left in the workspace"));
         }
     };
@@ -1080,8 +1080,8 @@ type EditTrial = (&'static str, usize, bool, Vec<String>);
 
 #[test]
 fn an_edit_is_recovered_like_a_write() {
-    let runs: usize = std::env::var("AGENTOS_RECOVERY_RUNS").ok().and_then(|v| v.parse().ok()).unwrap_or(3);
-    let workers: usize = std::env::var("AGENTOS_RECOVERY_JOBS").ok().and_then(|v| v.parse().ok()).unwrap_or(8);
+    let runs: usize = std::env::var("NORN_RECOVERY_RUNS").ok().and_then(|v| v.parse().ok()).unwrap_or(3);
+    let workers: usize = std::env::var("NORN_RECOVERY_JOBS").ok().and_then(|v| v.parse().ok()).unwrap_or(8);
     let points = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8"];
     let jobs: Vec<(&'static str, usize)> = points.iter().flat_map(|p| (0..runs).map(move |n| (*p, n))).collect();
     let seed0 = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() as u64;

@@ -83,7 +83,7 @@ mod tests {
 
     #[test]
     fn put_get_round_trip() -> Result<()> {
-        let dir = std::env::temp_dir().join(format!("agentos-blob-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("norn-blob-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let store = BlobStore::new(&dir);
         let h = store.put(b"hello")?;
