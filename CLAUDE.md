@@ -172,6 +172,6 @@ M13 (tag `m13` locally, on `5e17acb`; `docs/milestones/M13-hosted-model.md`), 20
 
 Open, and only Prince can close them:
 
-- Nothing is open. Pushing the tag `v1.0` is his to do.
+- Nothing is open. The tags `v1.0` and `m14` are on GitHub, pushed by Prince on 2026-11-25.
 
 Update this section when any of these changes.
