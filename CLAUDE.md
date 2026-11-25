@@ -7,7 +7,7 @@ A Rust runtime that runs a coding agent's tool calls inside a rootless Linux san
 - `AgentOS v1 — Scoped Design.md` is **the plan**. Read it before any design or code work.
 - `AgentOS_Project_Spec.md` is a "maybe someday" list. It never adds work to v1. If the two disagree, the v1 document wins.
 - `docs/decision-log.md` records every decision taken or discarded, with reasons. Prince will study from it later, so it must stay complete.
-- `docs/v2-scope.md` is the **draft** scope of v2 (D-138). It adds no work until Prince approves it. The order of the versions after it is D-137.
+- `docs/v2-scope.md` is **the plan for v2** (approved 2026-11-26, D-139): norn as an MCP server, M15 to M18, released as 1.1.0. The order of the versions after it is D-137; each needs its own approval.
 - `docs/decisions/` holds the ADRs. `docs/threat-model.md`, `docs/recovery-semantics.md`, `docs/bugs.md` and `docs/results/` are the other documents of record.
 
 ## Keep the decision log up to date
@@ -24,7 +24,7 @@ Follow the entry template in that file. Write "In plain words" for a beginner. U
 
 ## Scope is fixed
 
-The five parts (gateway, policy, sandbox, event log, checkpoints + recovery), the build order, and the cut list in the v1 document do not change during normal work. The "Bonus" of the v1 document (one fake external tool) is built (M7, D-073); it is finished. On 2026-11-14 Prince approved exactly two more additions (D-088): packages from outside the repo for sandboxed commands, and an AppArmor profile for Ubuntu. Neither is a tool. Later the same day he opened scope for the parked conveniences (M9, D-098), except binary file tools, which stay parked. An `apply` command was held at first and approved on 2026-11-15 (D-108). On 2026-11-16 Prince approved the v1.0 scope (D-114; section "v1.0 scope" of the v1 document): seccomp, a measured disk limit, scratch folders out of checkpoints, a read-only folder in the workspace, `fs.edit`, binary files and modes in the file tools, a hosted-model trial, and release engineering (name, 1.0.0, CHANGELOG, compatibility promise, one more distribution in CI). The tool list is four plus the bonus plus `fs.edit`.
+The five parts (gateway, policy, sandbox, event log, checkpoints + recovery), the build order, and the cut list in the v1 document do not change during normal work. The "Bonus" of the v1 document (one fake external tool) is built (M7, D-073); it is finished. On 2026-11-14 Prince approved exactly two more additions (D-088): packages from outside the repo for sandboxed commands, and an AppArmor profile for Ubuntu. Neither is a tool. Later the same day he opened scope for the parked conveniences (M9, D-098), except binary file tools, which stay parked. An `apply` command was held at first and approved on 2026-11-15 (D-108). On 2026-11-16 Prince approved the v1.0 scope (D-114; section "v1.0 scope" of the v1 document): seccomp, a measured disk limit, scratch folders out of checkpoints, a read-only folder in the workspace, `fs.edit`, binary files and modes in the file tools, a hosted-model trial, and release engineering (name, 1.0.0, CHANGELOG, compatibility promise, one more distribution in CI). The tool list is four plus the bonus plus `fs.edit`. On 2026-11-26 Prince approved the v2 scope (D-139; `docs/v2-scope.md`): `norn mcp` over stdio, resuming a killed session, the trial fixes (test baseline, denials that say what is allowed, `fs.search`, `fs.delete`, `replace_all`, ending at once on `413`), and a trial with Claude Code. The tool list becomes eight with `fs.search` and `fs.delete`.
 
 - Do not add features, tools, dependencies or abstractions that the v1 document does not list.
 - If an idea comes up that is outside v1, add one line to the parking lot (§22 of the spec) and continue with the current milestone.
@@ -74,6 +74,10 @@ At the end of each milestone, write `docs/milestones/M<n>-<name>.md` from `docs/
 | `M12-real-projects.md` | v1.0 | `fs.edit`, read-only folder in the workspace, binary files and modes |
 | `M13-hosted-model.md` | v1.0 | A capable hosted model through the six inventory tickets |
 | `M14-release.md` | v1.0 | Name, 1.0.0, CHANGELOG, compatibility promise, another distribution, tag `v1.0` |
+| `M15-mcp-server.md` | v2 | `norn mcp`: MCP over stdio, one session is one execution (D-139) |
+| `M16-mcp-recovery.md` | v2 | `norn mcp --resume`, kill cells and security cases through MCP |
+| `M17-agent-friction.md` | v2 | Test baseline, denials that say what is allowed, `fs.search`, `fs.delete`, `replace_all`, end on `413` |
+| `M18-mcp-trial-release.md` | v2 | Claude Code on the six tickets through norn; documents; 1.1.0, tag `v1.1` |
 | `M8-first-user.md` | after M7 | Bugs found by hand (B-009 to B-013), folder-making writes, first messages, the patch's notes, packages from outside the repo, the AppArmor profile, the first trial on a real project |
 
 ## Design rules that must hold
@@ -174,6 +178,6 @@ M13 (tag `m13` locally, on `5e17acb`; `docs/milestones/M13-hosted-model.md`), 20
 Open, and only Prince can close them:
 
 - The tags `v1.0` and `m14` are on GitHub, pushed by Prince on 2026-11-25.
-- Approve the v2 scope (`docs/v2-scope.md`, D-138) and answer its three questions: which items, whether the trial may use his Claude Code account, and the version number. The order of later versions is agreed (D-137): v2 MCP, v3 hardening, v4 TraceWeaver, v5 scale.
+- Nothing else is open. v2 is approved (D-139) and in progress, starting with M15; later versions are ordered (D-137) but not yet scoped.
 
 Update this section when any of these changes.

@@ -3432,7 +3432,7 @@ A first attempt to wait for the run found nothing: `gh run list --commit` was gi
 
 ### D-138 — The v2 scope, drafted: norn as an MCP server, a killed session, the trial fixes, a trial with Claude Code
 - **Date:** 2026-11-26
-- **Status:** Open (waiting for Prince's approval)
+- **Status:** Replaced by D-139 (approved as drafted)
 - **Area:** scope
 - **ADR:** none
 
@@ -3458,6 +3458,32 @@ Open questions for Prince, in the draft (§8): approval of the items; whether th
 
 **Concepts to learn.** MCP; JSON-RPC 2.0; stdio transport; semantic versioning (major.minor.patch, and what each number promises).
 
+### D-139 — The v2 scope is approved: all four milestones, the trial with Prince's Claude Code account, version 1.1.0
+- **Date:** 2026-11-26
+- **Status:** Taken
+- **Area:** scope
+- **ADR:** none
+
+**In plain words.** Prince approved the v2 draft (D-138) as written: M15 norn as an MCP server, M16 a killed session, M17 the trial fixes, M18 evidence and release. The trial in M18 may use his Claude Code account. The release will be numbered **1.1.0**, because everything in v2 adds and nothing breaks; "v2" stays the name of the plan. `docs/v2-scope.md` is now the plan for v2, the way "v1.0 scope" was for v1.0. Everything not in it stays parked.
+
+**The problem.** D-138 left three questions open: which items, whose account for the trial, which version number.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| All four milestones | Taken | Prince's choice |
+| M15 and M16 only | Discarded | Offered as the smaller v2; not chosen |
+| Trial with Prince's Claude Code account | Taken | Prince's choice |
+| Trial with the local model through another MCP client | Discarded | Offered; not chosen |
+| Version 1.1.0 | Taken | Semantic versioning: a minor number for additions; the compatibility promise holds. Prince's choice, as recommended |
+| Version 2.0.0 | Discarded | Would announce a break that does not exist |
+
+**What this means for the code.** Work starts with the experiments of M15 (E1 to E3). Tags: `m15` … `m18`, and `v1.1` at the end, each after a green CI run (D-113). The tool list will become eight: `fs.read`, `fs.list`, `fs.write`, `fs.edit`, `fs.search`, `fs.delete`, `exec`, `ext.call`.
+
+**Evidence.** Prince's words: "approve all four, use my account, go with 1.1.0".
+
+**Concepts to learn.** None new.
+
 ---
 
 ## Still open
@@ -3466,7 +3492,7 @@ Open questions for Prince, in the draft (§8): approval of the items; whether th
 |---|---|
 | ~~A key for the hosted-model trial (M13)~~ | Not needed: Claude through a relay, at Prince's request (D-130) |
 | ~~Project name~~ | Answered by D-133: norn (Prince, 2026-11-25) |
-| The v2 scope (`docs/v2-scope.md`) | D-138: drafted 2026-11-26; Prince to approve, and to answer its three questions |
+| ~~The v2 scope (`docs/v2-scope.md`)~~ | Answered by D-139: approved as drafted; trial with Prince's account; version 1.1.0 |
 | ~~License~~ | Answered by D-069: dual MIT OR Apache-2.0 |
 | ~~Public repo from day one, or after v0.1?~~ | Answered by events: Prince pushed `main` to GitHub on 2026-11-12, after v0.1 was tagged locally |
 | ~~Does the `fhs` preset pass on Ubuntu?~~ | Answered by D-072: yes on Ubuntu 24.04, CI run 43385661105 (third run; the first two found B-007 and B-008) |

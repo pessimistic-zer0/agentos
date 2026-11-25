@@ -1,8 +1,8 @@
-# norn v2 — Scope (draft, waiting for Prince's approval)
+# norn v2 — Scope
 
-*Drafted 2026-11-26. Decision: D-138 (open until approved). Road map it belongs to: D-137.*
+*Drafted 2026-11-26 (D-138); approved by Prince the same day, as drafted (D-139). Road map it belongs to: D-137.*
 
-**Status: draft.** Nothing in this document is approved yet, and nothing in it is built. Until Prince approves it, the scope of the project is still v1.0 (D-114), and the rule in CLAUDE.md holds: no feature that the approved plan does not list. When he approves it (all of it, or with items struck out), the decision is recorded and this page becomes the plan for v2, the way "v1.0 scope" in the v1 design document did for v1.0.
+**Status: approved; this is the plan for v2.** All four milestones are in. The M18 trial uses Prince's Claude Code account. The release is numbered 1.1.0. Anything not listed here stays parked (spec §22), and the rule in CLAUDE.md holds: no feature that this plan does not list.
 
 ## 1. In one paragraph
 
@@ -98,7 +98,7 @@ If E2 finds that a client cannot be kept from going around norn, the scope does 
 - The six-ticket trial with Claude Code is recorded, solved or not.
 - Every item has tests; `make test` passes on both presets and on Debian in CI; each milestone has its document.
 
-## 8. Questions only Prince can answer
+## 8. Questions only Prince can answer (answered 2026-11-26, D-139: all four milestones; yes, his account; 1.1.0)
 
 1. **Approve the scope**: all of it, or which items to strike. (A smaller v2: M15 and M16 only, with M17 left for later.)
 2. **The trial in M18 uses your Claude Code account.** Is that all right, or should the trial use the local model through an MCP-capable client instead?
