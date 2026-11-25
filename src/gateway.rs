@@ -71,11 +71,14 @@ pub struct Gateway {
 enum Approved {
     Read { fd: OwnedFd, rel: String, start_line: Option<u64>, max_lines: Option<u64>, base64: bool },
     List { fd: OwnedFd, rel: String },
-    /// `edit_line` is set when the content came from an `fs.edit`: the line
-    /// where the replaced text began.
+    /// `edit` is set when the content came from an `fs.edit`: the line
+    /// where the (first) replaced text began, and how many were replaced.
     /// `mode`: permission bits to set (`executable` of `fs.write`), or
     /// `None` to keep what the file has.
-    Write { target: WriteTarget, content: Vec<u8>, mode: Option<u32>, edit_line: Option<u64> },
+    Write { target: WriteTarget, content: Vec<u8>, mode: Option<u32>, edit: Option<(u64, u64)> },
+    /// `bytes`: the size of the file now, for the answer.
+    Delete { target: WriteTarget, bytes: u64 },
+    Search { fd: OwnedFd, rel: String, pattern: String },
     Exec { argv: Vec<String> },
     /// `url` comes from the policy rule that allowed the call, never from the agent.
     Ext { service: String, url: String, payload: String },
@@ -143,7 +146,13 @@ impl Gateway {
             Decided::Allow(d, a) => (d, a),
             Decided::Deny(d) => {
                 self.log.append(EventBody::ToolDenied { call_id, rule: d.rule.clone(), reason: "policy".into() })?;
-                return Ok(ToolResult { call_id, outcome: ToolOutcome::Denied { rule: d.rule }, output: None });
+                // The log keeps the bare rule; the agent is also told what
+                // the policy does allow (D-146).
+                let rule = match self.policy.allowed_hint(&call, &d.rule) {
+                    Some(hint) => format!("{}. {hint}", d.rule),
+                    None => d.rule,
+                };
+                return Ok(ToolResult { call_id, outcome: ToolOutcome::Denied { rule }, output: None });
             }
             Decided::Invalid(msg) => {
                 self.log.append(EventBody::ToolDenied { call_id, rule: "invalid request".into(), reason: msg.clone() })?;
@@ -157,7 +166,7 @@ impl Gateway {
         };
         // The file an edit will produce is content like any other: stored
         // before the intent names its hash.
-        if let Approved::Write { content, edit_line: Some(_), .. } = &approved {
+        if let Approved::Write { content, edit: Some(_), .. } = &approved {
             self.blobs.put(content)?;
         }
 
@@ -312,7 +321,7 @@ impl Gateway {
                         if let Some(rule) = target.new_dirs().iter().find_map(|dir| policy.denied(dir)) {
                             return Decided::Deny(Decision { allowed: false, rule });
                         }
-                        Decided::Allow(d, Approved::Write { target, content, mode, edit_line: None })
+                        Decided::Allow(d, Approved::Write { target, content, mode, edit: None })
                     }
                     Err(e) => match beneath::lexical_rel(path).map(|r| policy.check_path(Access::Write, &r)) {
                         Some(d) if d.allowed => Decided::Fail(d, e),
@@ -325,7 +334,7 @@ impl Gateway {
             // file as it is now, with one piece replaced (D-120). From here
             // on it is an `fs.write` in every respect: the same intent, the
             // same atomic replace, the same recovery.
-            ToolCall::FsEdit { path, old_str, new_str } => {
+            ToolCall::FsEdit { path, old_str, new_str, replace_all } => {
                 if let Some(d) = requested_denied(path) {
                     return d;
                 }
@@ -353,13 +362,65 @@ impl Gateway {
                                 Err(_) => return Decided::Fail(d, ToolError::new(format!("`{}` is not UTF-8 text; fs.edit only edits text files", target.rel))),
                             },
                         };
-                        match fstool::edited(&text, old_str, new_str, &target.rel) {
-                            Ok((content, line)) => Decided::Allow(d, Approved::Write { target, content: content.into_bytes(), mode: None, edit_line: Some(line) }),
+                        match fstool::edited(&text, old_str, new_str, &target.rel, replace_all.unwrap_or(false)) {
+                            Ok((content, line, n)) => Decided::Allow(d, Approved::Write { target, content: content.into_bytes(), mode: None, edit: Some((line, n)) }),
                             Err(e) => Decided::Fail(d, e),
                         }
                     }
                     Err(e) => match beneath::lexical_rel(path).map(|r| policy.check_path(Access::Write, &r)) {
                         Some(d) if d.allowed => Decided::Fail(d, e),
+                        Some(d) => Decided::Deny(d),
+                        None => Decided::Invalid(e.0),
+                    },
+                }
+            }
+            // A delete is a write whose new state is "no file" (D-147): the
+            // same opening beneath the workspace, the same policy check.
+            ToolCall::FsDelete { path } => {
+                if let Some(d) = requested_denied(path) {
+                    return d;
+                }
+                match fstool::open_for_write(&work, path) {
+                    Ok(OpenedParent::Outside(e)) => escape(e),
+                    Ok(OpenedParent::Inside(target)) => {
+                        let d = policy.check_path(Access::Write, &target.rel);
+                        if !d.allowed {
+                            return Decided::Deny(d);
+                        }
+                        match fstool::current_bytes(&target) {
+                            Err(e) => Decided::Fail(d, e),
+                            Ok(None) => Decided::Fail(d, ToolError::new(format!("`{}` does not exist; nothing to delete", target.rel))),
+                            Ok(Some(bytes)) => Decided::Allow(d, Approved::Delete { target, bytes: bytes.len() as u64 }),
+                        }
+                    }
+                    Err(e) => match beneath::lexical_rel(path).map(|r| policy.check_path(Access::Write, &r)) {
+                        Some(d) if d.allowed => Decided::Fail(d, e),
+                        Some(d) => Decided::Deny(d),
+                        None => Decided::Invalid(e.0),
+                    },
+                }
+            }
+            // A search reads, so it needs the read rules for the folder it
+            // starts in; each file it opens is checked again inside
+            // `fstool::search` (D-147).
+            ToolCall::FsSearch { pattern, path } => {
+                let path = path.as_deref().unwrap_or(".");
+                if let Some(d) = requested_denied(path) {
+                    return d;
+                }
+                match fstool::open_for_read(&work, path, true) {
+                    Ok(Opened::Outside(e)) => escape(e),
+                    Ok(Opened::Inside { fd, rel }) => {
+                        // The workspace root itself has no read rule of its
+                        // own; what is found under it is checked file by file.
+                        let d = if rel.is_empty() { Decision { allowed: true, rule: "fs.search from the workspace root".into() } } else { policy.check_path(Access::Read, &rel) };
+                        if !d.allowed {
+                            return Decided::Deny(d);
+                        }
+                        Decided::Allow(d, Approved::Search { fd, rel, pattern: pattern.clone() })
+                    }
+                    Err(e) => match beneath::lexical_rel(path).map(|r| policy.check_path(Access::Read, &r)) {
+                        Some(d) if d.allowed || path == "." => Decided::Fail(d, e),
                         Some(d) => Decided::Deny(d),
                         None => Decided::Invalid(e.0),
                     },
@@ -407,6 +468,15 @@ impl Gateway {
                 }
                 plan
             }
+            // The same fields as a write's intent, so recovery decides it the
+            // same way: absent now means the delete happened (D-147).
+            Approved::Delete { target, .. } => json!({
+                "path": target.rel,
+                "pre_hash": fstool::current_hash(target)?,
+                "delete": true,
+                "temp": fstool::temp_name(call_id),
+            }),
+            Approved::Search { rel, pattern, .. } => json!({ "path": rel, "pattern": pattern }),
             Approved::Exec { argv } => {
                 let program = self
                     .programs
@@ -445,13 +515,27 @@ impl Gateway {
                 })
             }
             Approved::List { fd, rel } => fstool::list(fd, &rel).map(|entries| ToolOutput::List { entries }),
-            Approved::Write { target, content, mode, edit_line } => match self.write_fits(&target.rel, content.len() as u64) {
+            Approved::Write { target, content, mode, edit } => match self.write_fits(&target.rel, content.len() as u64) {
                 Err(e) => Err(e),
-                Ok(()) => fstool::write(&target, &content, mode, call_id).map(|bytes| match edit_line {
-                    Some(line) => ToolOutput::Edit { bytes, line },
+                Ok(()) => fstool::write(&target, &content, mode, call_id).map(|bytes| match edit {
+                    Some((line, replaced)) => ToolOutput::Edit { bytes, line, replaced },
                     None => ToolOutput::Write { bytes },
                 }),
             },
+            Approved::Delete { target, bytes } => fstool::delete(&target).map(|()| ToolOutput::Delete { bytes }),
+            Approved::Search { fd, rel, pattern } => {
+                let policy = &self.policy;
+                // A folder is entered if something under it could be
+                // readable; a file is searched if it is readable. Denied
+                // paths and caches are skipped either way.
+                let include = |p: &str, is_dir: bool| {
+                    if policy.denied(p).is_some() || policy.scratch(p) {
+                        return false;
+                    }
+                    is_dir || policy.check_path(Access::Read, p).allowed
+                };
+                fstool::search(fd, &rel, &pattern, &include).map(|(matches, truncated, files_searched)| ToolOutput::Search { matches, truncated, files_searched })
+            }
             Approved::Exec { argv } => {
                 let out = match self.run_exec(call_id, &argv)? {
                     Ok(out) => out,

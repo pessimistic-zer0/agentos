@@ -3618,6 +3618,105 @@ Open questions for Prince, in the draft (§8): approval of the items; whether th
 
 **Concepts to learn.** Test oracle; why one oracle shared by two drivers is stronger than two.
 
+### D-145 — The test baseline: a command's result before the agent's first file change; finishing needs fewer failures and no new ones
+- **Date:** 2026-11-26
+- **Status:** Taken
+- **Area:** policy
+- **ADR:** none
+
+**In plain words.** In a project that already has failing tests, the LLM agent's rule "do not finish while the last command fails" (D-107) could never be met, so agents narrowed their test command to get past it (relay trial, 2026-11-17). Now norn remembers what each command failed the first time it ran *before the agent changed any file*, and reads the names of the failing tests from the output (pytest, cargo test, node's test runner). A final answer is accepted when the same command now fails strictly fewer tests and none that did not fail before. After every later run of the command, the agent (built-in or through MCP) is told what failed before, what fails now, what is new and what is fixed.
+
+**The problem.** v2 item C1. Four of six relay-trial agents had a finished answer refused because of other tickets' tests, and narrowed the command; five of six reported it.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Baseline = the command's first result before the first successful `fs.write`/`fs.edit`/`fs.delete`; no extra run | Taken | Agents run the tests first almost always; nothing runs that the agent did not ask for; the result is already in the log, so it survives a restart (`Baseline::from_log`) |
+| Run a test command named in the policy once at the start | Discarded | A new policy setting, a call nobody asked for in every execution (and in its call ids), and its side effects in the base checkpoint |
+| Done when there are fewer failures and none new | Taken | Progress is required: an agent that changed nothing, or broke something, is not done (D-107 still applies then) |
+| Done when there are no new failures (the plan's wording) | Discarded | An agent that changed nothing at all would pass; stricter costs nothing for an agent that fixed its ticket |
+| Know which test is the ticket's | Discarded | The task is words; norn cannot know |
+| Read failing test names from three runners' output; otherwise "unknown" and the old rule | Taken | The three the trials used; no parsing guesses for others |
+| A command that edits files before the first file tool does | Accepted as a limit | Its later baseline is "after its own change"; stated in `src/baseline.rs` |
+
+**What this means for the code.** `src/baseline.rs` (new); the LLM agent's stop rule and its tool results; `norn mcp` appends the comparison to `exec` results. The system prompt says it.
+
+**Evidence.** `cargo test --lib baseline`: 2 tests (the three runners' formats; first-run-before-change rules). `tests/llm_agent.rs`: `in_a_project_that_was_already_red_fewer_failures_and_no_new_ones_is_done` (completed, no reminder, the note in the summary) and `…no_progress_is_still_not_done` (stopped). `tests/mcp.rs`: the note through MCP, and rebuilt from the log after a restart. The first version of the agent code never saw a call: `track_file_content` takes `last_call` out of the agent before the new code ran (Findings).
+
+**Concepts to learn.** Baseline; set difference.
+
+### D-146 — A refusal tells the agent what the policy does allow; the log keeps the bare rule
+- **Date:** 2026-11-26
+- **Status:** Taken
+- **Area:** policy
+- **ADR:** none
+
+**In plain words.** "DENIED by policy: no matching rule" told an agent nothing it could use. Now a refused command lists the allowed command prefixes, a refused write lists the write globs, a refused read the read globs, a refused `ext.call` the services; a path refused by a deny rule says it is denied on purpose, and a read-only folder says so. Only the agent's answer carries this; the event log still records the rule that decided, as before.
+
+**The problem.** v2 item C2: reported by the six relay-trial agents independently.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| `Policy::allowed_hint`, added to the agent's result by the gateway | Taken | One place, both front doors (built-in agent and MCP) |
+| Put the hint into the log's `tool.denied` rule | Discarded | The rule field says what decided; tests and tools read it. The compatibility promise keeps its meaning |
+| List the deny rules too | Discarded | Tells an agent exactly which names to try around them; the deny list is the policy author's business |
+
+**What this means for the code.** `Policy::allowed_hint`; one branch in `Gateway::handle`. The system prompt says a refusal says what is allowed.
+
+**Evidence.** `tests/mcp.rs`: `refusals_say_what_is_allowed…` (command, write and deny-rule cases; the log's rule is still `no matching rule`). `make test`: the security suite's checks of `tool.denied` rules pass unchanged on both front doors.
+
+**Concepts to learn.** None new.
+
+### D-147 — Two new tools, `fs.delete` and `fs.search`, and `replace_all` for `fs.edit`
+- **Date:** 2026-11-26
+- **Status:** Taken
+- **Area:** tooling
+- **ADR:** none
+
+**In plain words.** An agent could not delete a file, and had to read files one by one to find something. `fs.delete {path}` deletes one file; it is a write whose new state is "no file", with the same intent fields (path, old hash), the same checkpoint, and a recovery rule of the same shape: file absent means the delete happened, old content means it did not, anything else is rolled back. `fs.search {pattern, path?}` finds lines containing a piece of plain text in the files the agent may read. `fs.edit` takes `replace_all = true` to change every occurrence. The tool list is now eight.
+
+**The problem.** v2 items C3, C4, C5 (spec §22, from the trials).
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| `fs.delete` as a write-shaped intent; `unlinkat` through the folder's handle | Taken | Recovery and the kill cells follow the write's proven pattern; `unlinkat` removes the name and never follows a symlink; a symlink, folder or missing file is refused before the intent |
+| Deleting folders | Left out | A folder's contents are many files; a recursive delete is a different tool with a different recovery |
+| Plain-text search | Taken | No new dependency (CLAUDE.md); a regular expression engine would be one |
+| Allow `grep` as a command instead | Discarded | A command sees the whole workspace through the sandbox, not the read rules; the tool applies them file by file |
+| Search walks folders with `openat` + `O_NOFOLLOW` from the starting folder's handle; skips denied paths, unreadable files, scratch paths (caches), non-UTF-8 and files over 1 MiB; at most 200 matches, lines cut at 200 characters | Taken | The same confinement as `fs.list`; caches like `target/` are large and never what an agent looks for |
+| `replace_all` as an optional argument | Taken | Old scripts and logs stay valid (an optional field, D-126) |
+
+**What this means for the code.** `ToolCall`/`LoggedCall` `FsDelete`, `FsSearch`, `FsEdit.replace_all`; `ToolOutput::Delete`, `Search`, `Edit.replaced`; `fstool::delete`, `fstool::search`; the gateway's decide, plan and effect; a recovery branch; the LLM agent's schemas, parser and result text; MCP offers them as `fs_delete`, `fs_search`. `norn apply` already carries deletions.
+
+**Evidence.** `tests/agent_tools.rs` (4 tests: delete with patch and apply, delete refuses a symlink, search rules and limits, `replace_all`). `a_delete_is_recovered_like_a_write` at 200 per point: 1,600 runs, 1,600 killed, 0 violations (`docs/results/recovery-delete-200-nix.md`). `make test` on `nix`: 223 passed.
+
+**Concepts to learn.** `unlinkat`; why a delete can be reconciled like a write.
+
+### D-148 — HTTP 413 from the model's server ends the run at once, as stopped, with its patch
+- **Date:** 2026-11-26
+- **Status:** Taken
+- **Area:** tooling
+- **ADR:** none
+
+**In plain words.** `413 Request too large` means the whole conversation no longer fits what the server accepts. Before, norn told the model "your reply could not be used" up to three times, which only made the next request larger. Now the run ends at once as `stopped`, with its patch, and the summary says a model or plan with a larger limit is needed.
+
+**The problem.** v2 item C6, from the hosted-model trial (2026-11-16).
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| End at once as `stopped` with the patch | Taken | Nothing the model can do helps; the work so far is kept |
+| End as `interrupted` (resumable) | Discarded | Resuming sends the same too-large conversation again |
+| Shorten the conversation | Left out | Parked (spec §22): large, and changes what the model knows |
+
+**What this means for the code.** `Reply::TooLarge` in `src/agent/llm.rs`.
+
+**Evidence.** `tests/llm_agent.rs`: `a_conversation_too_large_for_the_server_ends_the_run_at_once_as_stopped` (2 requests in all, `stopped`, patch present).
+
+**Concepts to learn.** HTTP status codes 413 and 429.
+
 ---
 
 ## Still open
@@ -3717,6 +3816,8 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-26 | The first Claude Code session through `norn mcp` failed at every call with `allowed program pytest was not found on PATH`: Claude Code had been started outside the dev shell and passes its own environment to the server. The model reported the message and changed nothing (`docs/results/mcp-claude-code-demo-nix.md`) | A client starts the server in the client's environment, not the user's shell. Putting the reason in every tool result made the failure readable from both sides; the README now says so |
 | 2026-11-26 | A new assertion that every P8 trial through MCP kills recovery failed (2 of 3 in one cell). The trial picks the n-th pass of the crash point at random, and a recovery with little to do never reaches it; the original harness counts these and never asserted them | An assertion written from what a test is meant to do, not from how it picks its cases, fails for the wrong reason. Read the existing harness's rules before adding a stricter one |
 | 2026-11-26 | The security suite through MCP finished in the same 4.2 s as the scripted pass, which looked like the switch had not taken effect. Checked: the execution says `agent mcp` and the server's stop message is in the test's stderr | A result that looks too similar deserves one look at where it came from before it is written down |
+| 2026-11-26 | The first version of the test baseline in the LLM agent never saw a call: `track_file_content`, which runs just before, takes the agent's `last_call` out (`Option::take`). The red-project test failed with `stopped`; the parser was fine (pytest's output in the sandbox had the `FAILED` lines) | A field that one helper consumes is a trap for the next reader of it. Take a copy before anything else uses it, and test the whole path, not only the parser |
+| 2026-11-26 | Two M17 tests failed on their own guesses: `stats.py` holds `values` 7 times, not 10; and a sandboxed `pytest` run did not leave `.pytest_cache` in the workspace, which the test assumed. Both now take their facts from the files | Count from the data in the test, and set up the preconditions a test needs instead of expecting a program to make them |
 
 ---
 
@@ -3816,3 +3917,4 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | Signal escalation | Asking a program to stop more and more firmly: SIGINT (like Ctrl-C), then SIGTERM, then SIGKILL, which cannot be caught. Claude Code waits 100 ms and 400 ms between them (D-141) |
 | File descriptor | A small number a process uses to refer to an open file or pipe: 0 is standard input, 1 standard output, 2 standard error. `dup2(2, 1)` makes 1 point where 2 points. Close-on-exec: a descriptor that programs started later do not inherit (D-143) |
 | Test oracle | The part of a test that decides whether a result is right. The kill harness's oracle is its five invariants and the final-state check; M16 reuses it for MCP (D-144) |
+| Baseline (of a command) | What a command failed the first time it ran before the agent changed any file; later runs are compared with it (D-145) |

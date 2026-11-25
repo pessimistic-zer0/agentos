@@ -1340,3 +1340,142 @@ fn recovery_holds_through_mcp() {
     assert_eq!(cls_ok, cls, "misclassified cut-off calls");
     assert!(killed * 2 > results.len(), "only {killed} of {} runs were killed", results.len());
 }
+
+// ---------------------------------------------------------------------------
+// `fs.delete` (v2, M17, D-147): a write whose new state is "no file". Killed
+// while it deletes `src/a.txt` (call 2), recovered, resumed; the third step
+// writes the file again, so the end state shows whether the delete was lost,
+// or happened after the new write.
+// ---------------------------------------------------------------------------
+
+fn run_delete_trial(point: &'static str, n: usize, seed: u64) -> (bool, Vec<String>) {
+    let mut rng = Rng::new(seed);
+    let mut v = Vec::new();
+    let t = TestEnv::new(&format!("rec-delete-{point}-{n}")).with_policy_text(&policy_text());
+    let repo = t.root.join("repo");
+    make_repo(&repo);
+    std::fs::write(repo.join("src/a.txt"), big("D")).unwrap();
+    let script = t.write_script(
+        "delete.toml",
+        "task = \"delete workload\"\n[[step]]\ntool = \"fs.read\"\npath = \"src/small.txt\"\n\
+         [[step]]\ntool = \"fs.delete\"\npath = \"src/a.txt\"\n\
+         [[step]]\ntool = \"fs.write\"\npath = \"src/a.txt\"\ncontent = \"after\\n\"\n",
+    );
+    let first_point = if point == "P8" { ["P2", "P3", "P4", "P5", "P6"][rng.below(5) as usize] } else { point };
+    let status = t
+        .cmd(&["run", "--quiet", "--repo", repo.to_str().unwrap(), "--policy", t.policy.to_str().unwrap(), "--script", script.to_str().unwrap()])
+        .env("NORN_CRASH_AT", first_point)
+        .env("NORN_CRASH_CALL", "2")
+        .env("NORN_CRASH_DELAY_US", "1500")
+        .output()
+        .unwrap();
+    let crashed = status.status.signal() == Some(9);
+    if !crashed && !status.status.success() {
+        return (false, vec![format!("run failed without being killed: {}", String::from_utf8_lossy(&status.stderr))]);
+    }
+    let id = std::fs::read_dir(t.state.join("executions")).unwrap().next().unwrap().unwrap().file_name().to_string_lossy().into_owned();
+    let dir = t.exec_dir(&id);
+    let work = dir.join("work");
+    let file = work.join("src/a.txt");
+
+    // The truth about the cut-off delete, read from the folder itself.
+    let before = events_of(&t, &id);
+    let (_, all_open) = pending(&before);
+    let expect_applied = all_open.contains(&2).then(|| intent_of(&before, 2).is_some() && !file.exists());
+
+    if point == "P8" {
+        let _ = t.cmd(&["recover", "--quiet", &id]).env("NORN_CRASH_AT", "P8").env("NORN_CRASH_HIT", (1 + rng.below(5)).to_string()).output().unwrap();
+    }
+    let st = t.output(&["recover", "--quiet", &id]);
+    if !st.status.success() {
+        v.push(format!("recover failed: {}", String::from_utf8_lossy(&st.stderr)));
+        return (crashed, v);
+    }
+    let settled = |events: &[Value], when: &str, v: &mut Vec<String>| {
+        let named = named_checkpoints(events);
+        if tree_digest(&work) != tree_digest(&dir.join("checkpoints").join(named.last().unwrap())) {
+            v.push(format!("{when}: workspace differs from the last checkpoint"));
+        }
+        let mut on_disk: Vec<String> = std::fs::read_dir(dir.join("checkpoints")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        on_disk.sort();
+        let mut want = named.clone();
+        want.sort();
+        if on_disk != want || dir.join("work.restore-tmp").exists() {
+            v.push(format!("{when}: leftovers (checkpoints on disk {on_disk:?}, named {want:?})"));
+        }
+    };
+    let after = events_of(&t, &id);
+    settled(&after, "after recovery", &mut v);
+    if let Some(want) = expect_applied {
+        let got = after.iter().find(|e| e["type"] == "tool.reconciled" && e["call_id"] == 2).map(|e| e["applied"] == true);
+        if got != Some(want) {
+            v.push(format!("delete: the folder says applied={want}, recovery said {got:?}"));
+        }
+        if file.exists() == want {
+            v.push("after recovery the file does not match what recovery decided".into());
+        }
+    }
+
+    let st = t.output(&["run", "--quiet", "--resume", &id]);
+    if !st.status.success() {
+        v.push(format!("resume failed: {}", String::from_utf8_lossy(&st.stderr)));
+        return (crashed, v);
+    }
+    let end = events_of(&t, &id);
+    settled(&end, "after resume", &mut v);
+    if !end.iter().any(|e| e["type"] == "execution.finished" && e["status"] == "completed") {
+        v.push("resumed run did not complete".into());
+    }
+    if std::fs::read_to_string(&file).ok().as_deref() != Some("after\n") {
+        v.push("final: src/a.txt is not what an uninterrupted run leaves".into());
+    }
+    if end.iter().any(|e| e["type"] == "tool.failed") {
+        v.push("final: a call failed (a delete that was repeated finds no file)".into());
+    }
+    if v.is_empty() {
+        let _ = std::fs::remove_dir_all(&t.root);
+    }
+    (crashed, v)
+}
+
+#[test]
+fn a_delete_is_recovered_like_a_write() {
+    let runs: usize = std::env::var("NORN_RECOVERY_RUNS").ok().and_then(|v| v.parse().ok()).unwrap_or(3);
+    let workers: usize = std::env::var("NORN_RECOVERY_JOBS").ok().and_then(|v| v.parse().ok()).unwrap_or(8);
+    let points = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8"];
+    let jobs: Vec<(&'static str, usize)> = points.iter().flat_map(|p| (0..runs).map(move |n| (*p, n))).collect();
+    let seed0 = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() as u64;
+    let next = AtomicUsize::new(0);
+    let results: Mutex<Vec<EditTrial>> = Mutex::new(Vec::new());
+    let started = Instant::now();
+    std::thread::scope(|s| {
+        for _ in 0..workers {
+            s.spawn(|| loop {
+                let i = next.fetch_add(1, Ordering::SeqCst);
+                let Some((point, n)) = jobs.get(i) else { break };
+                let (crashed, v) = run_delete_trial(point, *n, seed0.wrapping_add(i as u64 * 7919));
+                results.lock().unwrap().push((point, *n, crashed, v));
+            });
+        }
+    });
+    let results = results.into_inner().unwrap();
+    println!("\n| point | tool | runs | killed | violations |");
+    println!("|---|---|---|---|---|");
+    let (mut total_viol, mut total_killed) = (0, 0);
+    for p in points {
+        let rs: Vec<_> = results.iter().filter(|r| r.0 == p).collect();
+        let killed = rs.iter().filter(|r| r.2).count();
+        let viol: usize = rs.iter().map(|r| r.3.len()).sum();
+        println!("| {p} | fs.delete | {} | {killed} | {viol} |", rs.len());
+        total_viol += viol;
+        total_killed += killed;
+        if p != "P3" {
+            assert_eq!(killed, rs.len(), "{p}: every run must be killed, or the cell proves nothing");
+        }
+    }
+    println!("fs.delete total: {} runs, {total_killed} killed, {total_viol} violations; harness took {:.0} s with {workers} workers", results.len(), started.elapsed().as_secs_f64());
+    for r in results.iter().filter(|r| !r.3.is_empty()).take(20) {
+        println!("VIOLATION {} #{}: {:?}", r.0, r.1, r.3);
+    }
+    assert_eq!(total_viol, 0, "violations");
+}

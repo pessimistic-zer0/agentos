@@ -56,7 +56,7 @@ fn a_client_fixes_the_demo_and_the_person_finishes_and_applies_it() {
 
     let list = c.request("tools/list", json!({}));
     let names: Vec<&str> = list["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["fs_list", "fs_read", "fs_edit", "fs_write", "exec"], "D-142: wire names use `_`");
+    assert_eq!(names, ["fs_list", "fs_read", "fs_edit", "fs_search", "fs_delete", "fs_write", "exec"], "D-142: wire names use `_`");
     assert_eq!(list["result"]["cacheScope"], "private");
     for tool in list["result"]["tools"].as_array().unwrap() {
         assert_eq!(tool["inputSchema"]["type"], "object", "{tool}");
@@ -103,7 +103,7 @@ fn a_client_fixes_the_demo_and_the_person_finishes_and_applies_it() {
     let sessions = mcp_sessions(&events);
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0]["message"]["mcp_session"]["protocol"], "2026-07-28");
-    assert_eq!(sessions[0]["message"]["mcp_session"]["tools"].as_array().unwrap().len(), 5);
+    assert_eq!(sessions[0]["message"]["mcp_session"]["tools"].as_array().unwrap().len(), 7);
     let trace = t.norn(&["trace", &id]);
     assert!(trace.contains("DENY") && trace.contains("finished: completed"), "{trace}");
 }
@@ -157,7 +157,7 @@ fn the_older_revision_with_initialize_is_served_too() {
     // Requests without `_meta` are fine in this era; `ping` exists here.
     assert_eq!(c.request_plain("ping", json!({}))["result"], json!({}));
     let list = c.request_plain("tools/list", json!({}));
-    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 5, "{list}");
+    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 7, "{list}");
     assert!(list["result"].get("resultType").is_none(), "2026 fields only in the 2026 era");
     let a = c.request_plain("tools/call", json!({"name": "fs_read", "arguments": {"path": "src/stats.py"}}));
     assert_eq!(a["result"]["isError"], false, "{a}");
@@ -312,7 +312,53 @@ fn hostile_messages_never_crash_the_server_or_reach_the_gateway() {
     assert_eq!(c.read()["id"], "same");
     // Still serving.
     let list = c.request("tools/list", json!({}));
-    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 5);
+    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 7);
     assert_eq!(c.close().code(), Some(0));
     assert!(status_lines(&t).is_empty(), "nothing reached the gateway: {:?}", status_lines(&t));
+}
+
+#[test]
+fn refusals_say_what_is_allowed_and_test_runs_are_compared_with_the_baseline() {
+    // M17: C2 (D-146) and C1 (D-145) as an MCP client sees them.
+    let t = TestEnv::new("mcp-hints");
+    let repo = t.root.join("red");
+    assert!(std::process::Command::new("cp").arg("-a").arg(demo()).arg(&repo).status().unwrap().success());
+    std::fs::write(repo.join("tests/test_other.py"), "def test_other_ticket():\n    assert 1 == 2\n").unwrap();
+    let mut c = McpClient::start(&t, &repo);
+
+    let (err, text) = c.call("exec", json!({"argv": ["sh", "-c", "id"]}));
+    assert!(err && text.contains("A command must start with one of: `pytest`"), "{text}");
+    let (err, text) = c.call("fs_write", json!({"path": "README.md", "content": "x"}));
+    assert!(err && text.contains("Paths that may be changed: src/**, tests/**"), "{text}");
+    let (err, text) = c.call("fs_read", json!({"path": ".env"}));
+    assert!(err && text.contains("denied on purpose"), "{text}");
+
+    let (_, first) = c.call("exec", json!({"argv": ["pytest", "-q"]}));
+    assert!(first.contains("exit 1") && !first.contains("[norn] Before the first file change"), "the first run is the baseline: {first}");
+    let (err, _) = c.call("fs_write", json!({"path": "src/stats.py", "content": fixed_stats()}));
+    assert!(!err);
+    let (_, second) = c.call("exec", json!({"argv": ["pytest", "-q"]}));
+    assert!(second.contains("already failed 2 test(s). Now 1 fail. New failures since then: none. Fixed since then: tests/test_stats.py::test_mean."), "{second}");
+    c.stop();
+
+    // The log keeps the bare rule; the hint was only for the agent.
+    let events = t.events(&only_execution(&t));
+    let rules: Vec<&str> = events.iter().filter(|e| e["type"] == "tool.denied").map(|e| e["rule"].as_str().unwrap()).collect();
+    assert_eq!(rules[0], "no matching rule");
+    assert_eq!(rules[1], "no matching rule");
+}
+
+#[test]
+fn the_baseline_survives_a_restart_of_the_server() {
+    let t = TestEnv::new("mcp-baseline-restart");
+    let repo = t.root.join("red");
+    assert!(std::process::Command::new("cp").arg("-a").arg(demo()).arg(&repo).status().unwrap().success());
+    let mut c = McpClient::start(&t, &repo);
+    c.call("exec", json!({"argv": ["pytest", "-q"]}));
+    c.call("fs_write", json!({"path": "src/stats.py", "content": fixed_stats()}));
+    c.kill();
+    let mut c = McpClient::start(&t, &repo);
+    let (_, text) = c.call("exec", json!({"argv": ["pytest", "-q"]}));
+    assert!(text.contains("exit 0") && text.contains("already failed 1 test(s). Now 0 fail."), "rebuilt from the log: {text}");
+    c.stop();
 }

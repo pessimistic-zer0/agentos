@@ -99,8 +99,12 @@ fn start_mock_with(reply_for: fn(&[Value]) -> Value) -> (String, Arc<Mutex<Vec<V
 }
 
 fn run_llm(t: &TestEnv, url: &str, extra_env: &[(&str, &str)]) -> std::process::Output {
+    run_llm_on(t, url, "examples/demo-repo", extra_env)
+}
+
+fn run_llm_on(t: &TestEnv, url: &str, repo: &str, extra_env: &[(&str, &str)]) -> std::process::Output {
     let mut c = t.cmd(&[
-        "run", "--quiet", "--repo", "examples/demo-repo", "--policy", t.policy.to_str().unwrap(),
+        "run", "--quiet", "--repo", repo, "--policy", t.policy.to_str().unwrap(),
         "--agent", "llm", "--task", "Make the failing test in tests/test_stats.py pass",
     ]);
     c.env("NORN_LLM_BASE_URL", url).env("NORN_LLM_MODEL", "mock").env("NORN_LLM_API_KEY", "KEY-CANARY-123");
@@ -397,7 +401,7 @@ fn a_model_fixes_the_demo_with_one_edit_and_is_told_when_its_text_is_not_found()
     // The model is offered the tool and told when to use it.
     let first = &seen.lock().unwrap()[0];
     let names: Vec<&str> = first["tools"].as_array().unwrap().iter().map(|t| t["function"]["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["fs_list", "fs_read", "fs_edit", "fs_write", "exec"]);
+    assert_eq!(names, ["fs_list", "fs_read", "fs_edit", "fs_search", "fs_delete", "fs_write", "exec"]);
     assert!(first["messages"][0]["content"].as_str().unwrap().contains("use fs_edit"));
     // What it was told after each edit.
     let told: Vec<&str> = events.iter().filter(|e| e["type"] == "agent.message" && e["message"]["role"] == "tool").map(|e| e["message"]["content"].as_str().unwrap()).collect();
@@ -468,3 +472,99 @@ fn a_wait_longer_than_norn_waits_ends_the_run_at_once_and_resumably() {
     assert!(started.elapsed() < std::time::Duration::from_secs(5), "no pointless waiting: {:?}", started.elapsed());
     assert_eq!(seen.lock().unwrap().len(), 1, "one request, no retries");
 }
+
+// ---------------------------------------------------------------------------
+// D-145: the stop rule in a project that was already red.
+// ---------------------------------------------------------------------------
+
+/// The demo with one more failing test that belongs to another ticket.
+fn red_repo(t: &TestEnv) -> String {
+    let repo = t.root.join("red");
+    assert!(std::process::Command::new("cp").arg("-a").arg(repo_root().join("examples/demo-repo")).arg(&repo).status().unwrap().success());
+    std::fs::write(repo.join("tests/test_other.py"), "def test_other_ticket():\n    assert 1 == 2\n").unwrap();
+    repo.to_str().unwrap().to_string()
+}
+
+/// Runs the tests, fixes its own ticket, runs them again, and stops while
+/// the other ticket's test still fails.
+fn fixes_mine_in_a_red_project(messages: &[Value]) -> Value {
+    match messages.iter().filter(|m| m["role"] == "tool").count() {
+        0 => tool_call(1, "exec", json!({"argv": ["pytest", "-q"]})),
+        1 => tool_call(2, "fs_write", json!({"path": "src/stats.py", "content": FIXED})),
+        2 => tool_call(3, "exec", json!({"argv": ["pytest", "-q"]})),
+        _ => json!({"role": "assistant", "content": "Fixed mean(); test_other_ticket belongs to another ticket."}),
+    }
+}
+
+/// The same, but its change fixes nothing.
+fn changes_nothing_useful(messages: &[Value]) -> Value {
+    match (messages.iter().filter(|m| m["role"] == "tool").count(), was_told_to_go_on(messages)) {
+        (0, _) => tool_call(1, "exec", json!({"argv": ["pytest", "-q"]})),
+        (1, _) => tool_call(2, "fs_write", json!({"path": "src/notes.py", "content": "# looked at it\n"})),
+        (2, _) => tool_call(3, "exec", json!({"argv": ["pytest", "-q"]})),
+        (_, false) => json!({"role": "assistant", "content": "Done."}),
+        (_, true) => json!({"role": "assistant", "content": "GIVE UP: no idea."}),
+    }
+}
+
+#[test]
+fn in_a_project_that_was_already_red_fewer_failures_and_no_new_ones_is_done() {
+    let t = TestEnv::new("llm-red-progress");
+    let repo = red_repo(&t);
+    let (url, seen) = start_mock_with(fixes_mine_in_a_red_project);
+    let out = run_llm_on(&t, &url, &repo, &[]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let id = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    let events = t.events(&id);
+    let end = events.iter().find(|e| e["type"] == "execution.finished").unwrap();
+    assert_eq!(end["status"], "completed", "{end}");
+    let summary = end["summary"].as_str().unwrap();
+    assert!(summary.contains("already failed 2 test(s). Now 1 fail. New failures since then: none."), "{summary}");
+    let sent = seen.lock().unwrap();
+    assert!(!was_told_to_go_on(sent.last().unwrap()["messages"].as_array().unwrap()), "no reminder was needed");
+    // The model saw the comparison after its second test run.
+    let tool_texts: Vec<String> = sent.last().unwrap()["messages"].as_array().unwrap().iter()
+        .filter(|m| m["role"] == "tool").map(|m| m["content"].as_str().unwrap().to_string()).collect();
+    assert!(!tool_texts[0].contains("[norn] Before the first file change"), "the first run is the baseline itself");
+    assert!(tool_texts[2].contains("Fixed since then: tests/test_stats.py::test_mean"), "{}", tool_texts[2]);
+    assert_eq!(exec_exit_codes(&t, &events), vec![Some(1), Some(1)]);
+}
+
+#[test]
+fn in_a_project_that_was_already_red_no_progress_is_still_not_done() {
+    let t = TestEnv::new("llm-red-none");
+    let repo = red_repo(&t);
+    let (url, _) = start_mock_with(changes_nothing_useful);
+    let out = run_llm_on(&t, &url, &repo, &[]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let id = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    let end = t.events(&id).into_iter().find(|e| e["type"] == "execution.finished").unwrap();
+    assert_eq!(end["status"], "stopped", "the same failures as before is not done (D-107 still applies): {end}");
+}
+
+// ---------------------------------------------------------------------------
+// D-148: a conversation larger than the server accepts ends the run at once.
+// ---------------------------------------------------------------------------
+
+fn too_large_after_one_call(messages: &[Value]) -> Value {
+    if messages.iter().any(|m| m["role"] == "tool") {
+        json!({"_status": 413, "_body": r#"{"error":{"message":"Request too large for model: Limit 8000, Requested 9500"}}"#})
+    } else {
+        tool_call(1, "fs_list", json!({"path": "."}))
+    }
+}
+
+#[test]
+fn a_conversation_too_large_for_the_server_ends_the_run_at_once_as_stopped() {
+    let t = TestEnv::new("llm-413");
+    let (url, seen) = start_mock_with(too_large_after_one_call);
+    let out = run_llm(&t, &url, &[]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let id = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    let end = t.events(&id).into_iter().find(|e| e["type"] == "execution.finished").unwrap();
+    assert_eq!(end["status"], "stopped", "{end}");
+    assert!(end["summary"].as_str().unwrap().contains("larger than the model's server accepts (HTTP 413"), "{end}");
+    assert_eq!(seen.lock().unwrap().len(), 2, "no second attempt after the 413: telling the model would only make it larger");
+    assert!(t.exec_dir(&id).join("result.patch").exists(), "it ends with its patch");
+}
+

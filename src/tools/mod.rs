@@ -51,8 +51,29 @@ pub enum ToolCall {
     /// Replace one piece of text in an existing file (D-120). `old_str` must
     /// occur in the file exactly once; the rest of the file is untouched, so
     /// a model need not send a whole file to change one line.
+    /// `replace_all`: replace every occurrence instead of requiring exactly
+    /// one (D-147).
     #[serde(rename = "fs.edit")]
-    FsEdit { path: String, old_str: String, new_str: String },
+    FsEdit {
+        path: String,
+        old_str: String,
+        new_str: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        replace_all: Option<bool>,
+    },
+    /// Delete one file (D-147). A write whose new state is "no file": the
+    /// same intent, checkpoint and recovery as `fs.write`.
+    #[serde(rename = "fs.delete")]
+    FsDelete { path: String },
+    /// Find lines that contain `pattern` (plain text, not a regular
+    /// expression) in the files under `path` (default: the whole workspace)
+    /// that the policy lets the agent read (D-147).
+    #[serde(rename = "fs.search")]
+    FsSearch {
+        pattern: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
     #[serde(rename = "exec")]
     Exec { argv: Vec<String> },
     /// Ask an outside service, named in the policy, to act on `payload`.
@@ -68,6 +89,8 @@ impl ToolCall {
             ToolCall::FsList { .. } => "fs.list",
             ToolCall::FsWrite { .. } => "fs.write",
             ToolCall::FsEdit { .. } => "fs.edit",
+            ToolCall::FsDelete { .. } => "fs.delete",
+            ToolCall::FsSearch { .. } => "fs.search",
             ToolCall::Exec { .. } => "exec",
             ToolCall::ExtCall { .. } => "ext.call",
         }
@@ -90,7 +113,7 @@ impl ToolCall {
     /// `ext.call` has an effect too, but outside the workspace, where a
     /// checkpoint cannot reach it.
     pub fn is_mutating(&self) -> bool {
-        matches!(self, ToolCall::FsWrite { .. } | ToolCall::FsEdit { .. } | ToolCall::Exec { .. })
+        matches!(self, ToolCall::FsWrite { .. } | ToolCall::FsEdit { .. } | ToolCall::FsDelete { .. } | ToolCall::Exec { .. })
     }
 
     /// The form stored in the log. File contents are replaced by their hash;
@@ -108,13 +131,16 @@ impl ToolCall {
                 let bytes = self.write_bytes().unwrap_or_else(|_| content.as_bytes().to_vec());
                 LoggedCall::FsWrite { path: path.clone(), content_hash: content_hash(&bytes), bytes: bytes.len() as u64, executable: *executable }
             }
-            ToolCall::FsEdit { path, old_str, new_str } => LoggedCall::FsEdit {
+            ToolCall::FsEdit { path, old_str, new_str, replace_all } => LoggedCall::FsEdit {
                 path: path.clone(),
                 old_hash: content_hash(old_str.as_bytes()),
                 new_hash: content_hash(new_str.as_bytes()),
                 old_bytes: old_str.len() as u64,
                 new_bytes: new_str.len() as u64,
+                replace_all: *replace_all,
             },
+            ToolCall::FsDelete { path } => LoggedCall::FsDelete { path: path.clone() },
+            ToolCall::FsSearch { pattern, path } => LoggedCall::FsSearch { pattern: pattern.clone(), path: path.clone() },
             ToolCall::Exec { argv } => LoggedCall::Exec { argv: argv.clone() },
             ToolCall::ExtCall { service, payload } => LoggedCall::ExtCall {
                 service: service.clone(),
@@ -153,7 +179,23 @@ pub enum LoggedCall {
     },
     /// The two texts are in the blob store under their hashes.
     #[serde(rename = "fs.edit")]
-    FsEdit { path: String, old_hash: String, new_hash: String, old_bytes: u64, new_bytes: u64 },
+    FsEdit {
+        path: String,
+        old_hash: String,
+        new_hash: String,
+        old_bytes: u64,
+        new_bytes: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        replace_all: Option<bool>,
+    },
+    #[serde(rename = "fs.delete")]
+    FsDelete { path: String },
+    #[serde(rename = "fs.search")]
+    FsSearch {
+        pattern: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
     #[serde(rename = "exec")]
     Exec { argv: Vec<String> },
     /// The payload is in the blob store under `payload_hash`; recovery
@@ -169,6 +211,8 @@ impl LoggedCall {
             LoggedCall::FsList { .. } => "fs.list",
             LoggedCall::FsWrite { .. } => "fs.write",
             LoggedCall::FsEdit { .. } => "fs.edit",
+            LoggedCall::FsDelete { .. } => "fs.delete",
+            LoggedCall::FsSearch { .. } => "fs.search",
             LoggedCall::Exec { .. } => "exec",
             LoggedCall::ExtCall { .. } => "ext.call",
         }
@@ -188,11 +232,30 @@ impl LoggedCall {
             }
             LoggedCall::FsWrite { path, bytes, executable: Some(true), .. } => format!("{path} ({bytes} bytes, executable)"),
             LoggedCall::FsWrite { path, bytes, .. } => format!("{path} ({bytes} bytes)"),
+            LoggedCall::FsEdit { path, old_bytes, new_bytes, replace_all: Some(true), .. } => format!("{path} ({old_bytes} -> {new_bytes} bytes, all)"),
             LoggedCall::FsEdit { path, old_bytes, new_bytes, .. } => format!("{path} ({old_bytes} bytes -> {new_bytes} bytes)"),
+            LoggedCall::FsDelete { path } => path.clone(),
+            LoggedCall::FsSearch { pattern, path } => format!("{pattern:?} in {}", path.as_deref().unwrap_or(".")),
             LoggedCall::Exec { argv } => argv.join(" "),
             LoggedCall::ExtCall { service, bytes, .. } => format!("{service} ({bytes} bytes)"),
         }
     }
+}
+
+/// One line that `fs.search` found.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SearchMatch {
+    pub path: String,
+    pub line: u64,
+    pub text: String,
+}
+
+fn one() -> u64 {
+    1
+}
+
+fn is_one(n: &u64) -> bool {
+    *n == 1
 }
 
 /// How a call ended, as the agent sees it.
@@ -228,7 +291,21 @@ pub enum ToolOutput {
     Write { bytes: u64 },
     /// An `fs.edit` replaced its one occurrence, which began on `line`; the
     /// file now has `bytes` bytes.
-    Edit { bytes: u64, line: u64 },
+    /// `replaced`: how many occurrences (more than one only with `replace_all`).
+    Edit {
+        bytes: u64,
+        line: u64,
+        #[serde(default = "one", skip_serializing_if = "is_one")]
+        replaced: u64,
+    },
+    /// `bytes`: the size of the file that was deleted.
+    Delete { bytes: u64 },
+    Search {
+        matches: Vec<SearchMatch>,
+        /// More matched than are listed (the limits of `fs.search`).
+        truncated: bool,
+        files_searched: u64,
+    },
     Exec(ExecOutput),
     /// The service's answer to an `ext.call`. `attempts` is how many
     /// requests it took (all with the same idempotency key).
@@ -281,7 +358,12 @@ impl ToolOutput {
             ToolOutput::Read { content, lines: Some(l), .. } => format!("{} bytes, lines {}-{} of {}", content.len(), l.first, l.last, l.total),
             ToolOutput::List { entries } => format!("{} entries", entries.len()),
             ToolOutput::Write { bytes } => format!("wrote {bytes} bytes"),
-            ToolOutput::Edit { bytes, line } => format!("replaced at line {line}; file is {bytes} bytes"),
+            ToolOutput::Edit { bytes, line, replaced: 1 } => format!("replaced at line {line}; file is {bytes} bytes"),
+            ToolOutput::Edit { bytes, line, replaced } => format!("replaced {replaced} occurrences, the first at line {line}; file is {bytes} bytes"),
+            ToolOutput::Delete { bytes } => format!("deleted ({bytes} bytes)"),
+            ToolOutput::Search { matches, truncated, files_searched } => {
+                format!("{} match{} in {files_searched} file(s){}", matches.len(), if matches.len() == 1 { "" } else { "es" }, if *truncated { ", more not shown" } else { "" })
+            }
             ToolOutput::External { status, attempts, .. } => {
                 format!("HTTP {status} after {attempts} request{}", if *attempts == 1 { "" } else { "s" })
             }

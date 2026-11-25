@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 
 use crate::agent::{Action, Agent};
 use crate::log::{Event, EventBody};
-use crate::tools::{ToolCall, ToolOutcome, ToolOutput, ToolResult};
+use crate::tools::{ExecOutput, ToolCall, ToolOutcome, ToolOutput, ToolResult};
 use crate::workspace::ExecDir;
 
 /// Where the model is. Saved in the execution folder (without the key) so a
@@ -93,7 +93,7 @@ impl LlmConfig {
 }
 
 const SYSTEM_PROMPT: &str = "You are a coding agent working on a copy of a code repository. \
-You can only act through the tools: fs_list, fs_read, fs_edit, fs_write and exec. Paths are relative to the repository root.\n\
+You can only act through the tools: fs_list, fs_read, fs_search, fs_edit, fs_write, fs_delete and exec. Paths are relative to the repository root.\n\
 Rules:\n\
 1. Call exactly one tool per reply, and keep any text short.\n\
 2. To change an existing file, use fs_edit: first fs_read the file, then give old_str (the exact text to replace, \
@@ -102,9 +102,11 @@ The rest of the file stays as it is.\n\
 3. fs_write is for a NEW file. It REPLACES THE WHOLE FILE: the content you send becomes the entire file. \
 Never fs_write only the changed function of an existing file: every other function in it would be deleted.\n\
 4. exec runs one allowed command as a list of arguments (no shell). The policy decides which commands are allowed; \
-a refusal names the rule.\n\
+a refusal names the rule and says what is allowed. fs_search finds the lines that contain a piece of text.\n\
 5. After a change, run the tests. If they fail, read the error, fs_read the file you changed to see what it really contains now, and fix it.\n\
-6. When the tests pass, reply with one or two sentences in plain text and no tool call. Do not stop before the tests pass.";
+6. When the tests pass, reply with one or two sentences in plain text and no tool call. Do not stop before the tests pass. \
+If some tests already failed before your first change and belong to other work, it is enough that fewer fail than before and none newly fail; \
+the test results say which ones those are.";
 
 /// Upper bound on one reply from the model.
 const MAX_REPLY_TOKENS: u32 = 4096;
@@ -135,6 +137,10 @@ pub struct LlmAgent {
     last_command_failed: bool,
     /// The model was already told once that it stopped too early.
     nudged_to_go_on: bool,
+    /// What each command failed before the first file change (D-145), and
+    /// the last command run with its result, for the stop rule.
+    baseline: crate::baseline::Baseline,
+    last_exec: Option<(Vec<String>, ExecOutput)>,
 }
 
 /// What one exchange with the model's server gave (see `LlmAgent::complete`).
@@ -145,6 +151,10 @@ enum Reply {
     /// unchanged will not cure. With a local server this is how a reply
     /// that was cut off in the middle of a tool call shows up (HTTP 500).
     Unusable(String),
+    /// HTTP 413: the request (the whole conversation so far) is larger than
+    /// the server accepts. Telling the model only makes the next request
+    /// larger, so the run ends at once (D-148).
+    TooLarge(String),
 }
 
 enum Tried {
@@ -179,7 +189,7 @@ fn command_failed(result: &ToolResult) -> Option<bool> {
 
 impl LlmAgent {
     pub fn new(cfg: LlmConfig) -> LlmAgent {
-        let mut a = LlmAgent { cfg, messages: Vec::new(), unlogged: Vec::new(), pending: None, repeats: Default::default(), last_key: None, last_call: None, seen: Default::default(), last_command_failed: false, nudged_to_go_on: false };
+        let mut a = LlmAgent { cfg, messages: Vec::new(), unlogged: Vec::new(), pending: None, repeats: Default::default(), last_key: None, last_call: None, seen: Default::default(), last_command_failed: false, nudged_to_go_on: false, baseline: Default::default(), last_exec: None };
         let task = a.cfg.task.clone();
         a.push(json!({"role": "system", "content": SYSTEM_PROMPT}));
         a.push(json!({"role": "user", "content": task}));
@@ -192,15 +202,16 @@ impl LlmAgent {
     }
 
     /// One request to `/chat/completions`, sent again a few times if the
-    /// server says "not now". What comes back is sorted into three kinds,
-    /// because they call for three different things (D-111):
+    /// server says "not now". What comes back is sorted by what it calls
+    /// for (D-111, D-148):
     ///
     /// | The server said | Meaning | What happens |
     /// |---|---|---|
     /// | 200 with a message | an answer | `Reply::Message` |
     /// | 429, 502, 503, 504 | busy, restarting, or over a rate limit | wait (as long as the server's `Retry-After` says, if it says; D-124) and send again; if it stays so, an error: the run stops as interrupted and can be resumed later |
     /// | 401, 403, 404 | wrong key, model or address | an error at once, naming the settings |
-    /// | any other status | this request will not get a better answer (the model's reply could not be used, or the conversation is too long) | `Reply::Unusable`: the caller tells the model, and gives up cleanly if it goes on |
+    /// | 413 | the conversation is larger than the server accepts | `Reply::TooLarge`: the run ends at once as stopped, with its patch (D-148) |
+    /// | any other status | this request will not get a better answer (the model's reply could not be used) | `Reply::Unusable`: the caller tells the model, and gives up cleanly if it goes on |
     /// | no connection | the server is gone | an error: interrupted, resumable |
     fn complete(&self) -> Result<Reply> {
         let mut last = String::new();
@@ -277,6 +288,7 @@ impl LlmAgent {
                 Tried::Done(Reply::Message(message))
             }
             429 | 502 | 503 | 504 => Tried::Busy(format!("HTTP {status}: {shown}"), retry_after),
+            413 => Tried::Done(Reply::TooLarge(format!("HTTP 413: {shown}"))),
             401 | 403 | 404 => bail!(
                 "the LLM endpoint at {url} answered HTTP {status}: {shown}\n  \
                  That is a wrong key, model name or address, not something the model did. Check NORN_LLM_API_KEY, \
@@ -325,10 +337,15 @@ impl LlmAgent {
             }
             // Keep the remembered text in step with the file, so a later
             // fs_write of it is compared with what is really there.
-            (ToolCall::FsEdit { path, old_str, new_str }, _) => {
+            (ToolCall::FsEdit { path, old_str, new_str, replace_all }, _) => {
                 if let Some(text) = self.seen.get_mut(&path) {
-                    *text = text.replacen(&old_str, &new_str, 1);
+                    *text = if replace_all == Some(true) { text.replace(&old_str, &new_str) } else { text.replacen(&old_str, &new_str, 1) };
                 }
+                None
+            }
+            // A deleted file is no longer known; writing it again is a new file.
+            (ToolCall::FsDelete { path }, _) => {
+                self.seen.remove(&path);
                 None
             }
             // Base64 content is not lines of text; nothing to compare.
@@ -365,9 +382,20 @@ impl Agent for LlmAgent {
             if let Some(failed) = command_failed(result) {
                 self.last_command_failed = failed;
             }
+            // Taken before `track_file_content`, which consumes it.
+            let answered = self.last_call.clone();
             let mut content = render_result(result);
             if let Some(warning) = self.track_file_content(result) {
                 content.push_str(&warning);
+            }
+            if let Some(call) = answered {
+                if let (ToolCall::Exec { argv }, Some(ToolOutput::Exec(e))) = (&call, &result.output) {
+                    if let Some(c) = self.baseline.compare(argv, e) {
+                        content.push_str(&c.note(argv));
+                    }
+                    self.last_exec = Some((argv.clone(), e.clone()));
+                }
+                self.baseline.observe(&call, result);
             }
             if let Some(n) = self.repeat_count() {
                 if n >= REPEAT_STOP {
@@ -389,6 +417,14 @@ impl Agent for LlmAgent {
         for _ in 0..3 {
             let msg = match self.complete()? {
                 Reply::Message(msg) => msg,
+                Reply::TooLarge(why) => {
+                    return Ok(Action::GiveUp {
+                        reason: format!(
+                            "the conversation has grown larger than the model's server accepts ({why}). \
+                             The run ends here with its patch; a model or plan with a larger request limit is needed to go on"
+                        ),
+                    });
+                }
                 Reply::Unusable(why) => {
                     // Nothing came back that can be stored as the model's
                     // message. Say so in the conversation and ask again;
@@ -414,6 +450,12 @@ impl Agent for LlmAgent {
                 // the last command the model ran failed, it is not done: it
                 // is told so once, and if it stops again the run is recorded
                 // as stopped, not as completed (D-107).
+                // In a project that was already red, fewer failures than
+                // before the first change, and no new ones, is done (D-145).
+                let progressed = self.last_exec.as_ref().and_then(|(argv, e)| self.baseline.compare(argv, e).map(|c| (c.progressed(), c.note(argv))));
+                if let (true, Some((true, note))) = (self.last_command_failed, progressed) {
+                    return Ok(Action::Finish { summary: format!("{summary}{}", note.replace("\n[norn] ", " [norn] ")) });
+                }
                 if self.last_command_failed {
                     if self.nudged_to_go_on {
                         return Ok(Action::GiveUp { reason: format!("the model stopped while the last command it ran was still failing. Its last words: {summary}") });
@@ -497,6 +539,11 @@ impl Agent for LlmAgent {
         self.unlogged.clear();
         self.pending = None;
         self.last_command_failed = history.iter().rev().find_map(command_failed).unwrap_or(false);
+        self.baseline = crate::baseline::Baseline::from_log(events, history);
+        self.last_exec = crate::log::calls(events)?.iter().rev().find_map(|c| match (&c.call, history.iter().find(|r| r.call_id == c.call_id).and_then(|r| r.output.as_ref())) {
+            (crate::tools::LoggedCall::Exec { argv }, Some(ToolOutput::Exec(e))) => Some((argv.clone(), e.clone())),
+            _ => None,
+        });
         self.nudged_to_go_on = self.messages.iter().any(|m| m["role"] == "user" && m["content"].as_str().is_some_and(|c| c.starts_with(GO_ON_MARK) || c.starts_with(GO_ON_MARK_OLD)));
         let made = self.messages.iter().filter(|m| m["tool_calls"].is_array() && is_valid_call(m)).count();
         let last_is_call = self.messages.last().map(|m| m["tool_calls"].is_array()).unwrap_or(false);
@@ -534,10 +581,15 @@ pub(crate) fn tool_schemas() -> Value {
                  "start_line": {"type": "integer", "description": "Optional. First line to return, counting from 1"},
                  "max_lines": {"type": "integer", "description": "Optional. How many lines to return"},
                  "encoding": {"type": "string", "enum": ["base64"], "description": "Optional. Only for a file that is not text: returns its bytes as base64"}}), &["path"]),
-        f("fs_edit", "Change part of an existing text file: replace old_str with new_str. old_str must be in the file exactly once, character for character. Use this, not fs_write, to change a file that exists.",
+        f("fs_edit", "Change part of an existing text file: replace old_str with new_str. old_str must be in the file exactly once, character for character, unless replace_all is true. Use this, not fs_write, to change a file that exists.",
           json!({"path": path,
                  "old_str": {"type": "string", "description": "The exact text to replace, copied from the file; include enough surrounding lines that it occurs only once"},
-                 "new_str": {"type": "string", "description": "The text that takes its place"}}), &["path", "old_str", "new_str"]),
+                 "new_str": {"type": "string", "description": "The text that takes its place"},
+                 "replace_all": {"type": "boolean", "description": "Optional. true replaces every occurrence of old_str (for a rename)"}}), &["path", "old_str", "new_str"]),
+        f("fs_search", "Find the lines that contain a piece of text (plain text, not a regular expression) in the files you may read. Shows file, line number and the line.",
+          json!({"pattern": {"type": "string", "description": "The text to look for; case matters"},
+                 "path": {"type": "string", "description": "Optional. A folder (or file) to search in, relative to the repository root; the whole repository if left out"}}), &["pattern"]),
+        f("fs_delete", "Delete one file.", json!({"path": path}), &["path"]),
         f("fs_write", "Replace a file with new content (the whole file). A new file may be in a folder that does not exist yet; the folder is made.",
           json!({"path": path, "content": {"type": "string", "description": "The complete new content of the file"},
                  "executable": {"type": "boolean", "description": "Optional. true makes the file runnable (a script); leave it out to keep the file as it is"},
@@ -559,6 +611,8 @@ pub(crate) fn parse_call(name: &str, args: &str) -> Result<ToolCall> {
         argv: Option<Vec<String>>,
         start_line: Option<u64>,
         max_lines: Option<u64>,
+        replace_all: Option<bool>,
+        pattern: Option<String>,
     }
     let a: Args = serde_json::from_str(if args.trim().is_empty() { "{}" } else { args }).context("arguments are not a JSON object")?;
     let path = || a.path.clone().context("missing `path`");
@@ -575,9 +629,12 @@ pub(crate) fn parse_call(name: &str, args: &str) -> Result<ToolCall> {
             path: path()?,
             old_str: a.old_str.clone().context("missing `old_str`")?,
             new_str: a.new_str.clone().context("missing `new_str`")?,
+            replace_all: a.replace_all,
         },
+        "fs_delete" => ToolCall::FsDelete { path: path()? },
+        "fs_search" => ToolCall::FsSearch { pattern: a.pattern.clone().context("missing `pattern`")?, path: a.path.clone() },
         "exec" => ToolCall::Exec { argv: a.argv.clone().context("missing `argv`")? },
-        other => bail!("unknown tool `{other}`; the tools are fs_list, fs_read, fs_edit, fs_write, exec"),
+        other => bail!("unknown tool `{other}`; the tools are fs_list, fs_read, fs_search, fs_edit, fs_write, fs_delete, exec"),
     })
 }
 
@@ -600,8 +657,22 @@ pub(crate) fn render_result(r: &ToolResult) -> String {
         (ToolOutcome::Ok, Some(ToolOutput::Write { bytes })) => format!(
             "OK: the file now holds exactly the {bytes} bytes you sent. Everything that was in it before and that you did not send is gone."
         ),
-        (ToolOutcome::Ok, Some(ToolOutput::Edit { bytes, line })) => {
+        (ToolOutcome::Ok, Some(ToolOutput::Edit { bytes, line, replaced: 1 })) => {
             format!("OK: replaced the text that began at line {line}. The rest of the file is unchanged; it is now {bytes} bytes.")
+        }
+        (ToolOutcome::Ok, Some(ToolOutput::Edit { bytes, line, replaced })) => {
+            format!("OK: replaced {replaced} occurrences, the first at line {line}. The rest of the file is unchanged; it is now {bytes} bytes.")
+        }
+        (ToolOutcome::Ok, Some(ToolOutput::Delete { bytes })) => format!("OK: the file is deleted (it had {bytes} bytes)."),
+        (ToolOutcome::Ok, Some(ToolOutput::Search { matches, truncated, files_searched })) => {
+            let mut s = format!("{} match(es) in {files_searched} file(s) searched.\n", matches.len());
+            for m in matches {
+                s.push_str(&format!("{}:{}: {}\n", m.path, m.line, m.text));
+            }
+            if *truncated {
+                s.push_str("[more matches not shown; search a smaller folder or a longer piece of text]\n");
+            }
+            s
         }
         (ToolOutcome::Ok, Some(ToolOutput::Exec(e))) => {
             let mut s = format!("{}\n", ToolOutput::Exec(e.clone()).summary());

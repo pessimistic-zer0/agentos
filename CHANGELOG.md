@@ -8,10 +8,15 @@ What changed for someone who uses Norn, newest first. The reasons are in `docs/d
 
 - **`norn mcp`**: norn as an MCP server over standard input and output, so that an agent such as Claude Code runs its file and command calls through norn's policy, sandbox and log (D-139 to D-143). Both MCP revisions are served (2026-07-28 and 2025-11-25). Tool names on the wire: `fs_read`, `fs_list`, `fs_write`, `fs_edit`, `exec`, `ext_call`.
 - **`norn finish <id>`**: ends an execution nobody is driving (one made by `norn mcp`) and writes its patch (D-141).
+- **`fs.delete`** (delete one file) and **`fs.search`** (find lines containing a piece of text in the files the policy lets the agent read) (D-147).
+- **`replace_all`** for `fs.edit`: replace every occurrence (D-147).
+- **A test baseline** (D-145): a command's result before the agent's first file change is remembered, and later runs say what is new and what is fixed. The LLM agent may finish in a project that was already red when fewer tests fail than before and none newly fail.
 
 ### Changed
 
 - `norn status` shows an unfinished MCP execution as `open` (or `serving` while a server uses it), not `interrupted`.
+- A refused call tells the agent what the policy does allow: the command prefixes, the write or read globs, the services (D-146). The event log records the rule as before.
+- An LLM run whose conversation grows larger than the model's server accepts (HTTP 413) ends at once as `stopped`, with its patch (D-148).
 
 ## 1.0.0 (2026-11-25)
 

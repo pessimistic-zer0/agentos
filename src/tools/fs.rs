@@ -308,7 +308,9 @@ pub fn current_bytes(t: &WriteTarget) -> Result<Option<Vec<u8>>, ToolError> {
 /// twice): if the model's text fits in two places, the edit is ambiguous
 /// and nothing is changed. The messages say what to do next, because the
 /// reader is a model.
-pub fn edited(content: &str, old_str: &str, new_str: &str, rel: &str) -> Result<(String, u64), ToolError> {
+/// With `replace_all`, every occurrence is replaced instead (D-147); the
+/// count comes back as the third value.
+pub fn edited(content: &str, old_str: &str, new_str: &str, rel: &str, replace_all: bool) -> Result<(String, u64, u64), ToolError> {
     if old_str.is_empty() {
         return Err(ToolError::new("old_str is empty; give the exact text to replace (to make a new file use fs.write)".to_string()));
     }
@@ -321,13 +323,19 @@ pub fn edited(content: &str, old_str: &str, new_str: &str, rel: &str) -> Result<
              Read the file again with fs.read and copy the text from there. Nothing was changed."
         )));
     };
+    if replace_all {
+        let line = content[..at].matches('\n').count() as u64 + 1;
+        let count = content.matches(old_str).count() as u64;
+        return Ok((content.replace(old_str, new_str), line, count));
+    }
     // A second occurrence may begin anywhere after the first one begins.
     let next = at + old_str.chars().next().map_or(1, char::len_utf8);
     if let Some(more) = content[next..].find(old_str) {
         let line = |pos: usize| content[..pos].matches('\n').count() + 1;
         return Err(ToolError::new(format!(
             "old_str occurs more than once in `{rel}` (at line {} and at line {}). \
-             Add more of the surrounding lines to old_str so that it matches one place only. Nothing was changed.",
+             Add more of the surrounding lines to old_str so that it matches one place only, \
+             or set replace_all to change every occurrence. Nothing was changed.",
             line(at),
             line(next + more)
         )));
@@ -337,7 +345,96 @@ pub fn edited(content: &str, old_str: &str, new_str: &str, rel: &str) -> Result<
     out.push_str(&content[..at]);
     out.push_str(new_str);
     out.push_str(&content[at + old_str.len()..]);
-    Ok((out, line))
+    Ok((out, line, 1))
+}
+
+/// `fs.delete`: remove the file through its folder's handle. `unlinkat`
+/// removes the name itself and never follows a symlink there; the gateway
+/// has already checked that the name is a regular file.
+pub fn delete(t: &WriteTarget) -> Result<(), ToolError> {
+    unlinkat(&t.parent, t.name.as_str(), UnlinkatFlags::NoRemoveDir).map_err(|e| errno(&t.rel, e))
+}
+
+/// Limits of `fs.search`: matches listed, characters of a matching line
+/// shown, and the largest file searched.
+pub const SEARCH_MAX_MATCHES: usize = 200;
+const SEARCH_MAX_LINE: usize = 200;
+const SEARCH_MAX_FILE: u64 = 1024 * 1024;
+
+/// `fs.search`: lines containing `pattern`, in the files under the folder
+/// `fd` (at `rel`). Every folder and file is opened through the handle of
+/// the folder above with `O_NOFOLLOW`, so the walk never leaves the folder
+/// it started in and never follows a symlink. `include` decides, by
+/// workspace-relative path, what the agent may see: the policy's read rules
+/// minus its deny rules, and caches are skipped (D-147). Files that are not
+/// UTF-8 text or are larger than 1 MiB are skipped too.
+pub fn search(fd: OwnedFd, rel: &str, pattern: &str, include: &dyn Fn(&str, bool) -> bool) -> Result<(Vec<crate::tools::SearchMatch>, bool, u64), ToolError> {
+    if pattern.is_empty() {
+        return Err(ToolError::new("pattern is empty; give the text to look for".to_string()));
+    }
+    let mut matches = Vec::new();
+    let mut truncated = false;
+    let mut files = 0u64;
+    let mut stack: Vec<(OwnedFd, String)> = vec![(fd, rel.to_string())];
+    while let Some((dir_fd, dir_rel)) = stack.pop() {
+        let mut dir = nix::dir::Dir::from_fd(dir_fd).map_err(|e| errno(&dir_rel, e))?;
+        let mut names: Vec<String> = Vec::new();
+        for entry in dir.iter() {
+            let entry = entry.map_err(|e| errno(&dir_rel, e))?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name != "." && name != ".." {
+                names.push(name);
+            }
+        }
+        names.sort();
+        // Folders are pushed in reverse, so they are visited in name order.
+        let mut subdirs = Vec::new();
+        for name in names {
+            let child_rel = if dir_rel.is_empty() { name.clone() } else { format!("{dir_rel}/{name}") };
+            let Ok(st) = fstatat(&dir, name.as_str(), nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW) else { continue };
+            match SFlag::from_bits_truncate(st.st_mode) & SFlag::S_IFMT {
+                SFlag::S_IFDIR if include(&child_rel, true) => {
+                    let flags = OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
+                    if let Ok(sub) = openat(&dir, name.as_str(), flags, Mode::empty()) {
+                        subdirs.push((sub, child_rel));
+                    }
+                }
+                SFlag::S_IFREG if st.st_size as u64 <= SEARCH_MAX_FILE && include(&child_rel, false) => {
+                    // O_NONBLOCK: a FIFO swapped in after the fstatat must not block the walk.
+                    let flags = OFlag::O_RDONLY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC | OFlag::O_NONBLOCK;
+                    let Ok(file_fd) = openat(&dir, name.as_str(), flags, Mode::empty()) else { continue };
+                    if fstat(&file_fd).map(|s| SFlag::from_bits_truncate(s.st_mode) & SFlag::S_IFMT != SFlag::S_IFREG).unwrap_or(true) {
+                        continue;
+                    }
+                    let mut bytes = Vec::new();
+                    if File::from(file_fd).take(SEARCH_MAX_FILE).read_to_end(&mut bytes).is_err() {
+                        continue;
+                    }
+                    let Ok(text) = String::from_utf8(bytes) else { continue };
+                    files += 1;
+                    for (i, line) in text.lines().enumerate() {
+                        if line.contains(pattern) {
+                            if matches.len() == SEARCH_MAX_MATCHES {
+                                truncated = true;
+                                break;
+                            }
+                            let shown: String = line.chars().take(SEARCH_MAX_LINE).collect();
+                            matches.push(crate::tools::SearchMatch { path: child_rel.clone(), line: i as u64 + 1, text: shown });
+                        }
+                    }
+                }
+                _ => {}
+            }
+            if truncated {
+                break;
+            }
+        }
+        if truncated {
+            break;
+        }
+        stack.extend(subdirs.into_iter().rev());
+    }
+    Ok((matches, truncated, files))
 }
 
 /// Temporary file name used while writing `call_id`'s new content.
@@ -444,26 +541,36 @@ mod edit_tests {
 
     #[test]
     fn replaces_the_one_occurrence_and_reports_its_line() {
-        let (out, line) = edited("a\nb = 1\nc\n", "b = 1", "b = 2", "f").unwrap();
+        let (out, line, _) = edited("a\nb = 1\nc\n", "b = 1", "b = 2", "f", false).unwrap();
         assert_eq!((out.as_str(), line), ("a\nb = 2\nc\n", 2));
         // At the very start and the very end, and with text of another length.
-        assert_eq!(edited("abc", "a", "xyz", "f").unwrap(), ("xyzbc".to_string(), 1));
-        assert_eq!(edited("a\nb", "b", "", "f").unwrap(), ("a\n".to_string(), 2));
+        assert_eq!(edited("abc", "a", "xyz", "f", false).unwrap(), ("xyzbc".to_string(), 1, 1));
+        assert_eq!(edited("a\nb", "b", "", "f", false).unwrap(), ("a\n".to_string(), 2, 1));
         // Non-ASCII text: positions are bytes, cut only at character borders.
-        assert_eq!(edited("é = 1\nü = 2\n", "ü = 2", "ü = 3 ✓", "f").unwrap(), ("é = 1\nü = 3 ✓\n".to_string(), 2));
+        assert_eq!(edited("é = 1\nü = 2\n", "ü = 2", "ü = 3 ✓", "f", false).unwrap(), ("é = 1\nü = 3 ✓\n".to_string(), 2, 1));
     }
 
     #[test]
     fn refuses_when_the_text_fits_no_place_or_more_than_one() {
-        let msg = |r: Result<(String, u64), crate::tools::ToolError>| r.unwrap_err().0;
-        assert!(msg(edited("abc", "x", "y", "f")).contains("was not found in `f`"));
-        assert!(msg(edited("x\ny\nx\n", "x", "z", "f")).contains("at line 1 and at line 3"));
+        let msg = |r: Result<(String, u64, u64), crate::tools::ToolError>| r.unwrap_err().0;
+        assert!(msg(edited("abc", "x", "y", "f", false)).contains("was not found in `f`"));
+        assert!(msg(edited("x\ny\nx\n", "x", "z", "f", false)).contains("at line 1 and at line 3"));
         // Overlapping occurrences count: `aa` fits `aaa` in two places.
-        assert!(msg(edited("aaa", "aa", "b", "f")).contains("more than once"));
-        assert!(msg(edited("ééé", "éé", "b", "f")).contains("more than once"));
-        assert!(msg(edited("abc", "", "y", "f")).contains("empty"));
-        assert!(msg(edited("abc", "b", "b", "f")).contains("the same"));
+        assert!(msg(edited("aaa", "aa", "b", "f", false)).contains("more than once"));
+        assert!(msg(edited("ééé", "éé", "b", "f", false)).contains("more than once"));
+        assert!(msg(edited("abc", "", "y", "f", false)).contains("empty"));
+        assert!(msg(edited("abc", "b", "b", "f", false)).contains("the same"));
         // Whitespace is part of the match: a tab is not four spaces.
-        assert!(msg(edited("\tx = 1\n", "    x = 1", "y", "f")).contains("was not found"));
+        assert!(msg(edited("\tx = 1\n", "    x = 1", "y", "f", false)).contains("was not found"));
+    }
+
+    #[test]
+    fn replace_all_changes_every_occurrence_and_says_how_many() {
+        assert_eq!(edited("x = 1\ny = x\nx\n", "x", "z", "f", true).unwrap(), ("z = 1\ny = z\nz\n".to_string(), 1, 3));
+        // The other rules still hold.
+        assert!(edited("abc", "q", "y", "f", true).unwrap_err().0.contains("was not found"));
+        assert!(edited("abc", "b", "b", "f", true).unwrap_err().0.contains("the same"));
+        // Without it, two occurrences are refused and the message offers it.
+        assert!(edited("x\nx\n", "x", "z", "f", false).unwrap_err().0.contains("replace_all"));
     }
 }

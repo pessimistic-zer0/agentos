@@ -152,7 +152,26 @@ fn reconcile(dir: &ExecDir, c: &CallRecord, last: &str, named: &[String]) -> Res
         Ok(Outcome { applied: false, reason: format!("{why}; workspace rolled back to {last}"), checkpoint: None, restored: Some(last.to_string()) })
     };
     match &c.call {
-        LoggedCall::FsRead { .. } | LoggedCall::FsList { .. } => Ok(not_applied("read-only call; nothing to undo")),
+        LoggedCall::FsRead { .. } | LoggedCall::FsList { .. } | LoggedCall::FsSearch { .. } => Ok(not_applied("read-only call; nothing to undo")),
+        // A delete's intent is a write's intent with "no file" as the new
+        // state (D-147): absent means it happened.
+        LoggedCall::FsDelete { .. } => {
+            let field = |k: &str| plan.get(k).and_then(Value::as_str).map(str::to_string);
+            let path = field("path").context("fs.delete intent has no path")?;
+            let pre_hash = field("pre_hash").context("fs.delete intent has no pre_hash")?;
+            let temp = field("temp").context("fs.delete intent has no temp name")?;
+            match inspect_write(&dir.work(), &path, &temp)? {
+                Some(None) => {
+                    let name = checkpoint::name(named.iter().filter_map(|n| checkpoint::number(n)).max().unwrap_or(0) + 1);
+                    let (policy, _) = crate::policy::Policy::load(&dir.policy()).context("reading the execution's saved policy")?;
+                    checkpoint::create(&dir.work(), &dir.checkpoints(), &name, |rel| policy.scratch(rel))?;
+                    Ok(Outcome { applied: true, reason: format!("the file is gone; checkpoint {name} taken"), checkpoint: Some(name), restored: None })
+                }
+                Some(Some((h, _))) if h == pre_hash => Ok(not_applied("the file is still there; the delete did not happen")),
+                Some(Some(_)) => rollback("the file is there with other content"),
+                None => rollback("the file's folder could not be inspected safely"),
+            }
+        }
         LoggedCall::Exec { .. } => rollback("a command's effects cannot be known after a crash"),
         LoggedCall::ExtCall { service, payload_hash, .. } => reconcile_external(dir, c.call_id, service, payload_hash, plan),
         // An edit's intent is a write's intent (D-120): same fields, same check.

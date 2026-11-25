@@ -134,6 +134,7 @@ Run everything inside the dev shell (`flake.nix`): `nix develop -c <command>`, o
 - Another distribution: `ci/debian-vm.sh` runs `make test` on Debian 12 in a QEMU/KVM virtual machine (needs `qemu-system-x86_64` and `qemu-img` on `PATH`; D-128). CI job `debian` does the same.
 - Release archive: `nix develop -c packaging/release.sh --check` (builds, packs into `target/dist/`, runs the demo task from the unpacked archive; D-127). CI job `release` does the same on Ubuntu and then runs the benchmarks.
 - The compatibility promise (`docs/compatibility.md`, D-126): `tests/compat.rs`, with frozen v0.1 files in `tests/fixtures/compat/` (never regenerate them). User-facing changes go in `CHANGELOG.md`.
+- `fs.delete`, `fs.search`, `replace_all` (D-147): `tests/agent_tools.rs`; delete kill cells: `a_delete_is_recovered_like_a_write` in `tests/recovery/main.rs`. Test baseline (D-145): `src/baseline.rs`. Refusal hints (D-146): `Policy::allowed_hint`.
 - Binary files (base64) and the executable bit through the file tools (D-123): `tests/binary.rs`.
 - A repository folder shown read-only at its place (`filesystem.ro_dirs`, D-122): `tests/rodirs.rs`.
 - `fs.edit` (D-120): `tests/edit.rs`; its kill cells are the test `an_edit_is_recovered_like_a_write` in `tests/recovery/main.rs`.
@@ -176,11 +177,11 @@ M14 (tag `v1.0` locally, on `d83aba5`; `docs/milestones/M14-release.md`), done 2
 
 M13 (tag `m13` locally, on `5e17acb`; `docs/milestones/M13-hosted-model.md`), 2026-11-17: the six inventory tickets with Claude as the model, through a relay that looks like a model server and is answered by a fresh subagent per ticket (D-130; Prince's choice after the Groq key's limit stopped the hosted run after one ticket). Six of six solved, each checked on a clone against the solution notes (`docs/results/relay-model-trial-nix.md`). The friction it found (the stop rule in a project with other failing tests, denials that do not say what is allowed) is parked in the spec §22. No code change; CI run 44093789877 on `5e17acb` is green on all four jobs (D-132). Scheduling is parked as a v2 sketch (D-131).
 
-v2 (D-139, `docs/v2-scope.md`), in progress. M15 (`docs/milestones/M15-mcp-server.md`), 2026-11-26: `norn mcp` (D-140 to D-143) and `norn finish`. The experiments with Claude Code changed two plan items (D-141). Claude Code fixed the demo through it (`docs/results/mcp-claude-code-demo-nix.md`). M16 (`docs/milestones/M16-mcp-recovery.md`): the kill cells and the security suite through MCP, hostile protocol messages (D-144); no change in `src/`. On `nix`: `make test` 210 passed (177 + the 33 security tests through MCP). M15 and M16 not yet verified on `fhs`.
+v2 (D-139, `docs/v2-scope.md`), in progress. M15 (`docs/milestones/M15-mcp-server.md`), 2026-11-26: `norn mcp` (D-140 to D-143) and `norn finish`. The experiments with Claude Code changed two plan items (D-141). Claude Code fixed the demo through it (`docs/results/mcp-claude-code-demo-nix.md`). M16 (`docs/milestones/M16-mcp-recovery.md`): the kill cells and the security suite through MCP, hostile protocol messages (D-144); no change in `src/`. M17 (`docs/milestones/M17-agent-friction.md`): the test baseline (D-145), refusals that say what is allowed (D-146), `fs.delete`, `fs.search`, `replace_all` (D-147), ending at once on HTTP 413 (D-148). On `nix`: `make test` 223 passed; delete cells at 200 per point in `docs/results/recovery-delete-200-nix.md`. M15 to M17 not yet verified on `fhs`.
 
 Open, and only Prince can close them:
 
 - The tags `v1.0` and `m14` are on GitHub, pushed by Prince on 2026-11-25.
-- Push, so CI can verify M15 and M16 on `fhs` (then tag `m15`, `m16`, D-113). v2 is approved (D-139) and in progress; later versions are ordered (D-137) but not yet scoped.
+- Push, so CI can verify M15 to M17 on `fhs` (then tag `m15` to `m17`, D-113). v2 is approved (D-139) and in progress; later versions are ordered (D-137) but not yet scoped.
 
 Update this section when any of these changes.

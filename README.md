@@ -4,7 +4,7 @@ A small Rust runtime that runs a coding agent's tool calls inside a rootless Lin
 
 The agent (a script, or an LLM) never touches anything itself. It asks; a gateway checks a policy, writes down what is about to happen, does it, and writes down that it is done. If the runtime dies in between, recovery can say for every call whether it happened, and it never silently runs an uncertain call again.
 
-It is a learning and portfolio project, not a product. It does one thing: one agent, one copy of a repository, five tools (plus one bonus tool, off by default), a command line.
+It is a learning and portfolio project, not a product. It does one thing: one agent, one copy of a repository, seven tools (plus one bonus tool, off by default), a command line, and an MCP server so that other agents can use it.
 
 ## Status
 
@@ -300,7 +300,7 @@ claude --mcp-config norn.json --strict-mcp-config --tools "" --allowedTools mcp_
 - **The client starts norn with the client's environment.** The programs the policy allows (`pytest`, …) must be on that `PATH`; if one is missing, every tool answers with the reason.
 - **A session's end is only a stop.** The client stops the server when it is done, and starts it again by itself if it died; the next `norn mcp` on the same repository continues the same execution. `norn status` shows it as `open`.
 - **You take the result:** `norn finish <id>` (writes the patch), read the patch, then `norn apply <id>`, as after a run.
-- Tools on the wire: `fs_list`, `fs_read`, `fs_edit`, `fs_write`, `exec` if the policy allows commands, `ext_call` if it names a service. Both MCP revisions are served: 2026-07-28 (what Claude Code uses) and 2025-11-25 (`initialize`). Tests: `tests/mcp.rs`.
+- Tools on the wire: `fs_list`, `fs_read`, `fs_search`, `fs_edit`, `fs_write`, `fs_delete`, `exec` if the policy allows commands, `ext_call` if it names a service. Both MCP revisions are served: 2026-07-28 (what Claude Code uses) and 2025-11-25 (`initialize`). Tests: `tests/mcp.rs`.
 
 ## What it does not do
 

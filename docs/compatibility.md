@@ -26,7 +26,7 @@ Norn writes two kinds of file that outlive the program that wrote them: the **po
 - **The words on the screen.** The text of `trace`, `status` and error messages may change. Programs should read the event log, not the screen.
 - **The Rust library.** `norn` is built as a program; the functions inside it are not a public interface.
 - **The inside of a checkpoint or blob** beyond what the commands above need, and the name or layout of temporary files.
-- **Tool calls offered to a model.** The names and arguments of the tools in a script (`fs.read`, `fs.write`, `fs.edit`, `fs.list`, `exec`, `ext.call`) follow rule 1 (new optional arguments only). The exact wording of the tool descriptions and of the system prompt sent to a model may change.
+- **Tool calls offered to a model.** The names and arguments of the tools in a script (`fs.read`, `fs.write`, `fs.edit`, `fs.list`, `fs.search`, `fs.delete`, `exec`, `ext.call`; over MCP with `_` in place of `.`) follow rule 1 (new optional arguments only). The exact wording of the tool descriptions and of the system prompt sent to a model may change.
 
 ## How it is kept
 

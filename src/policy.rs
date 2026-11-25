@@ -441,6 +441,39 @@ impl Policy {
         }
     }
 
+    /// For a refused call: what the policy *does* allow, in a sentence the
+    /// agent can act on (D-146). `None` when the refusal is on purpose and
+    /// there is nothing to offer (a deny rule, a read-only folder).
+    pub fn allowed_hint(&self, call: &crate::tools::ToolCall, rule: &str) -> Option<String> {
+        use crate::tools::ToolCall;
+        let list = |globs: &[String]| if globs.is_empty() { "none".to_string() } else { globs.join(", ") };
+        if rule.starts_with("filesystem.deny") {
+            return Some("This path is denied on purpose; no rule can allow it.".into());
+        }
+        if rule.starts_with("filesystem.ro_dirs") {
+            return Some("That folder is read-only for this run.".into());
+        }
+        if rule != "no matching rule" {
+            return None;
+        }
+        Some(match call {
+            ToolCall::Exec { .. } => {
+                let rules: Vec<String> = self.exec.allow.iter().map(|r| format!("`{}`", r.join(" "))).collect();
+                if rules.is_empty() {
+                    "This policy allows no commands.".into()
+                } else {
+                    format!("A command must start with one of: {} (extra arguments may follow)", rules.join(", "))
+                }
+            }
+            ToolCall::FsWrite { .. } | ToolCall::FsEdit { .. } | ToolCall::FsDelete { .. } => format!("Paths that may be changed: {}", list(&self.filesystem.write)),
+            ToolCall::FsRead { .. } | ToolCall::FsList { .. } | ToolCall::FsSearch { .. } => format!("Paths that may be read: {}", list(&self.filesystem.read)),
+            ToolCall::ExtCall { .. } => {
+                let names: Vec<&str> = self.external.services.iter().map(|s| s.name.as_str()).collect();
+                format!("Services: {}", if names.is_empty() { "none".into() } else { names.join(", ") })
+            }
+        })
+    }
+
     /// The distinct program names that exec rules allow (`argv[0]` of each rule).
     pub fn programs(&self) -> Vec<String> {
         let mut out: Vec<String> = self.exec.allow.iter().map(|r| r[0].clone()).collect();

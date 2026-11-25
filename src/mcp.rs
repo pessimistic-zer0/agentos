@@ -76,6 +76,8 @@ struct Open {
     _lock: File,
     /// Calls in this execution so far, for `limits.max_tool_calls`.
     calls: u64,
+    /// What each command failed before the first file change (D-145).
+    baseline: crate::baseline::Baseline,
 }
 
 pub struct Server {
@@ -322,10 +324,17 @@ impl Server {
                 true,
             )));
         }
-        let result = open.gw.handle(call).context("the gateway failed")?;
+        let result = open.gw.handle(call.clone()).context("the gateway failed")?;
         open.calls += 1;
         let is_error = !matches!(result.outcome, ToolOutcome::Ok);
-        Ok(Ok(tool_result(&crate::agent::llm::render_result(&result), is_error)))
+        let mut text = crate::agent::llm::render_result(&result);
+        if let (ToolCall::Exec { argv }, Some(crate::tools::ToolOutput::Exec(e))) = (&call, &result.output) {
+            if let Some(c) = open.baseline.compare(argv, e) {
+                text.push_str(&c.note(argv));
+            }
+        }
+        open.baseline.observe(&call, &result);
+        Ok(Ok(tool_result(&text, is_error)))
     }
 
     /// The execution this session works on: opened at the first tool call,
@@ -362,7 +371,10 @@ impl Server {
                             eprintln!("norn mcp: call {} ({}) was cut off by the last stop: {verdict}, {}", v.call_id, v.tool, v.reason);
                         }
                     }
-                    return Ok(Open { gw, _lock: lock, calls });
+                    let events = gw.log.events()?;
+                    let history = crate::recovery::history(&events, &crate::blob::BlobStore::new(&gw.dir.blobs()))?;
+                    let baseline = crate::baseline::Baseline::from_log(&events, &history);
+                    return Ok(Open { gw, _lock: lock, calls, baseline });
                 }
                 // Another server holds it (a second client on the same
                 // repository): leave it to that one.
@@ -374,7 +386,7 @@ impl Server {
         let (gw, lock) = runtime::create(&opts, &client)?;
         crate::interrupt::serving(&gw.dir.id);
         eprintln!("norn mcp: new execution {} on {}. `norn finish {}` ends it.", gw.dir.id, self.cfg.repo.display(), gw.dir.id);
-        Ok(Open { gw, _lock: lock, calls: 0 })
+        Ok(Open { gw, _lock: lock, calls: 0, baseline: Default::default() })
     }
 }
 
