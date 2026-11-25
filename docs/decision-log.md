@@ -3484,6 +3484,78 @@ Open questions for Prince, in the draft (§8): approval of the items; whether th
 
 **Concepts to learn.** None new.
 
+### D-140 — `norn mcp` speaks both MCP revisions: 2026-07-28 (what Claude Code uses) and 2025-11-25
+- **Date:** 2026-11-26
+- **Status:** Taken
+- **Area:** tooling
+- **ADR:** none
+
+**In plain words.** MCP changed shape this year. In the current revision (2026-07-28) there is no opening handshake: every request carries its protocol version, and the server must answer a `server/discover` request. In the revision before (2025-11-25) a session starts with `initialize`. Claude Code 2.1.332 uses the new one. norn answers both, because other clients may still use the older one, and the specification allows a server to support both.
+
+**The problem.** The v2 draft assumed the `initialize` handshake. Experiment E1 found that the current revision removes it, and that the one client to be tested does not send it.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Both revisions: `server/discover` and per-request versions (2026-07-28), and `initialize` (2025-11-25) | Taken | The second costs one more method and a flag saying which era the session is in; it keeps norn usable by clients that have not moved |
+| Only 2026-07-28 | Discarded | Smallest, but every older client would fail at the first message |
+| Only 2025-11-25 | Discarded | Claude Code does not send `initialize` |
+
+**What this means for the code.** In the new era a request without the required `_meta` fields is refused with `-32602`, and an unknown version with `-32022` and the list of supported versions, as the specification requires. Results carry `resultType: "complete"`; the tool list carries `ttlMs` and `cacheScope: "private"` (E1: any other value makes Claude Code drop every tool without telling the model). No `ping` in the new era (removed by the revision).
+
+**Evidence.** `experiments/m15-mcp/NOTES.md`, E1: the specification pages read on 2026-11-26 (listed there); the probe's log shows Claude Code sending `server/discover` with `protocolVersion` `2026-07-28` and never `initialize`; the debug log shows the rejected `cacheScope`.
+
+**Concepts to learn.** Protocol revision; handshake; why a server should be strict in what it sends and clear in what it refuses.
+
+### D-141 — The end of an MCP session only stops the server; a restart continues the same execution; `norn finish` takes the result
+- **Date:** 2026-11-26
+- **Status:** Taken (replaces items A3 and B1 of the v2 draft, D-138/D-139)
+- **Area:** durability
+- **ADR:** none
+
+**In plain words.** The plan said: when the client disconnects, the execution is finished and its patch written; and a killed session is continued with `norn mcp --resume <id>`. Both were wrong for a real client. Claude Code ends a session by sending SIGINT and kills the server half a second later, which can be too soon to write a patch. And when the server dies, Claude Code starts it again with the same command line, which has no execution id in it. So now: **stopping the server stops it, nothing more** (as with Ctrl-C today, D-106); **`norn mcp` continues the unfinished MCP execution of the same repository** if there is one, settling any cut-off call first; and **`norn finish <id>`**, run by the person, finishes it and writes the patch. `norn apply` is unchanged.
+
+**The problem.** E3: the client restarts a dead server by itself, with the same arguments. E3b: SIGINT, SIGTERM 100 ms later, SIGKILL 400 ms after that, and standard input is never closed. A "finish on disconnect" would be a second, untested way of stopping, racing a kill; D-106 refused that kind of handler for the same reason.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| A stop is a stop; `norn mcp` continues the unfinished MCP execution of the same repository; `norn finish <id>` writes the patch | Taken | Uses only paths the kill suite already tests (every stop is recovered like a crash). The person decides when the work is done, as with `apply` |
+| Finish on SIGINT (write the patch in the handler) | Discarded | 100 ms before SIGTERM, 500 ms before SIGKILL; a patch can take longer, and a half-written finish would be new territory for recovery |
+| Write the patch after every change, so that nothing is left at the end | Discarded | A diff of the whole workspace after every write; slow on real projects, and still a stop to recover |
+| A tool the model calls when it is done (`finish`) | Discarded | A ninth tool, outside the approved list; a model may never call it; the person, not the model, should decide that the result is final |
+| `norn mcp --resume <id>` (the draft) | Discarded | The client's configuration is written before the id exists, and a restart by the client reuses the original command line (E3) |
+| Always a new execution per server start | Discarded | A restart after a crash would copy the repository again and lose the agent's work from the agent's view |
+
+**What this means for the code.** `norn mcp --repo R --policy P` looks for executions made by `norn mcp` for the canonical path R that have not finished. None: a new execution. One or more: the newest is continued (recovery first, design rule 5), and standard error says which, and how to finish it. A call the client sends after a restart is a new call. `norn finish <id>`: recovery, then the same `finish` as `norn run` (patch, `execution.finished`). `norn apply` on an unfinished MCP execution says to run `norn finish` first.
+
+**Evidence.** `experiments/m15-mcp/NOTES.md`, E3 and E3b (probe log and Claude Code's debug log, quoted there).
+
+**Concepts to learn.** Signal escalation (SIGINT, SIGTERM, SIGKILL); why "clean shutdown" code is a risk in a crash-safe program.
+
+### D-142 — On the wire the tools are called `fs_read`, `fs_list`, `fs_write`, `fs_edit`, `exec`, `ext_call`
+- **Date:** 2026-11-26
+- **Status:** Taken
+- **Area:** tooling
+- **ADR:** none
+
+**In plain words.** norn's tools have dots in their names (`fs.read`). MCP allows dots, and Claude Code accepted them, but it renamed them to underscores for the model and for its permission rules. Another client may refuse them or rename them differently. So over MCP the names use underscores from the start. Inside norn, in the event log and in scripts, the names stay as they are (the compatibility promise names them).
+
+**The problem.** E1: `text.upper` became `mcp__probe__text_upper` in Claude Code. A person writing an allow rule for the client would have to guess the spelling.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Underscores on the wire, the usual names everywhere else | Taken | The same spelling in every client; one table maps between them |
+| Dots on the wire | Discarded | Allowed, but renamed by Claude Code, and "SHOULD", not "MUST", in the specification |
+| Rename the tools everywhere | Discarded | Breaks scripts and event logs that the compatibility promise covers (D-126) |
+
+**What this means for the code.** A fixed table in the MCP module; an unknown name is a JSON-RPC error `-32602`.
+
+**Evidence.** `experiments/m15-mcp/NOTES.md`, E1.
+
+**Concepts to learn.** Wire name against internal name.
+
 ---
 
 ## Still open
@@ -3578,6 +3650,8 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-18 | Recording the CI run a second time showed that the scheduling commit (`c13f224`) had overwritten the first record of it (D-131 in `f9fb2d6`); how the entry got lost in that edit is not known. A "correction" written in the same hour then claimed `m13` was tagged before CI, read from the date of a lightweight tag, which is the commit's date. Both are undone in D-132 | Read `git log` and the file from disk before adding an entry; check `git diff --stat` for removed lines before committing a log change; a lightweight tag carries no time of its own |
 | 2026-11-25 | The first test run after the mechanical rename (every `agentos` to `norn`, with the key's text protected in `src/` and two documents) failed three tests in `tests/external.rs`: the rename had also changed the expected keys in the tests, and the code still sent `agentos-…` | The tests that pin the exact idempotency key did their job: a renamed key would have resent old uncertain calls as new orders. A search-and-replace across a code base needs a list of the strings that are formats, not words, and must reach the tests too |
 | 2026-11-25 | `gh run list --commit d83aba5` returned no run although the run existed: the filter wants the full commit hash | A wait loop that finds nothing should say why, not only time out; give tools the full hash (`git rev-parse`) |
+| 2026-11-26 | A tool list with `cacheScope: "session"` (not one of the two allowed values) made Claude Code drop every tool of the server and start the model with none, without any error the model or the user could see; only its debug log said why (`experiments/m15-mcp/NOTES.md`) | Test a protocol server against the real client early, with its debug log on. A client that hides a broken server is common; the server must be exact |
+| 2026-11-26 | Two items of the approved v2 plan did not survive the first contact with a real client: "finish the execution when the session ends" and "resume by id". Claude Code kills the server within half a second and restarts a dead one with the same command line (D-141) | The experiments-first rule paid off again: both would have been built and then rebuilt. A plan written from a protocol's text is a guess about its clients |
 
 ---
 
@@ -3674,3 +3748,4 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | JSON-RPC 2.0 | A message format: a request names a method, carries parameters and an id; the answer carries the same id. MCP uses it |
 | stdio transport | Two programs talking through the standard input and output of a child process, one message per line; no network |
 | Semantic versioning | Version numbers major.minor.patch: a new major number may break what worked, a new minor number only adds, a new patch number only fixes |
+| Signal escalation | Asking a program to stop more and more firmly: SIGINT (like Ctrl-C), then SIGTERM, then SIGKILL, which cannot be caught. Claude Code waits 100 ms and 400 ms between them (D-141) |

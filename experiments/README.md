@@ -13,3 +13,4 @@ showed. None of this code is used by the runtime.
 | `m2-landlock/` | M2 | The `landlock` crate: allow a few folders, refuse the rest |
 | `m3-rename-kill/` | M3 | Direct write vs temp-file + rename under `kill -9` |
 | `m3-sqlite-kill/` | M3 | SQLite inserts killed mid-transaction |
+| `m15-mcp/` | M15 | What Claude Code does as an MCP client: protocol revision, tool names, refusals, tools switched off, a server that dies mid-call, how a session is stopped |

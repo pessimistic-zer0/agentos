@@ -28,8 +28,8 @@ This is the first part of Phase 4 of the spec. The order of the later phases is 
 | # | Item | Notes |
 |---|---|---|
 | A1 | `norn mcp --repo <folder> --policy <file>`: an MCP server over stdio | Creates an execution exactly like `norn run` (the copy of the repository, the first checkpoint), then answers MCP messages. Standard output carries only protocol messages; everything meant for a person goes to standard error |
-| A2 | The tools offered are the ones the policy allows: `fs.read`, `fs.list`, `fs.write`, `fs.edit`, `exec`, and `ext.call` when the policy has an `[external]` section | Each `tools/call` goes through the gateway unchanged: policy check, intent written and fsynced, effect, checkpoint, completion record. A denial is returned as a tool error that says why. Tool names may need another spelling if MCP clients refuse dots (experiment E1) |
-| A3 | The end of a session finishes the execution | When the client closes the connection, the execution ends as `completed` and `result.patch` is written. Its id is printed on standard error and recorded; the person then reads the patch and runs `norn apply`, as today |
+| A2 | The tools offered are the ones the policy allows: `fs.read`, `fs.list`, `fs.write`, `fs.edit`, `exec`, and `ext.call` when the policy has an `[external]` section | Each `tools/call` goes through the gateway unchanged: policy check, intent written and fsynced, effect, checkpoint, completion record. A denial is returned as a tool error that says why. On the wire the tools are called `fs_read`, `fs_list`, … (D-142) |
+| A3 | ~~The end of a session finishes the execution~~ Replaced by D-141: **`norn finish <id>`** finishes an MCP execution (settles a cut-off call, writes `result.patch`); the end of a session only stops the server | E3b: a client stops the server with SIGINT and kills it half a second later, too soon to write a patch. The person then reads the patch and runs `norn apply`, as today |
 | A4 | The tool list and the description of each tool, as sent to the client, are recorded in the event log at the start of a session | Spec §9.10: tool descriptions are part of what the model sees; the log should show what it was told |
 | A5 | Setup instructions for one client (Claude Code), with its own file and shell tools switched off | norn can only govern calls that go through it. If the client keeps its own Bash or file tools, the agent can go around norn. The README and the threat model say so, and experiment E2 checks what switching them off really leaves |
 
@@ -37,7 +37,7 @@ This is the first part of Phase 4 of the spec. The order of the later phases is 
 
 | # | Item | Notes |
 |---|---|---|
-| B1 | `norn mcp --resume <id>`: a session that continues a killed execution | Recovery first settles the call that was cut off (design rule 5), then the server answers again. A call the client sends again after the restart is a *new* call with a new id; norn never treats it as the old one |
+| B1 | ~~`norn mcp --resume <id>`~~ Replaced by D-141: **`norn mcp` continues the unfinished MCP execution of the same repository** by itself, so a server the client restarts carries on where it stopped | Recovery first settles the call that was cut off (design rule 5), then the server answers again. A call the client sends again after the restart is a *new* call with a new id; norn never treats it as the old one |
 | B2 | Kill cells through MCP | The fault-injection harness drives the existing crash points through a small scripted MCP client in the tests, and checks the same invariants as `tests/recovery/` |
 | B3 | Security cases through MCP | The 32 adversarial cases sent as `tools/call` messages, plus protocol cases: broken JSON, a message too large, an unknown method, a call before the start of the session, a repeated request id. Expected: an error answer, never a crash that loses the log, never an effect outside the policy |
 
