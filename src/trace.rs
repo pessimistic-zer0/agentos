@@ -16,10 +16,13 @@ pub fn execution_state(dir: &ExecDir, events: &[Event]) -> String {
     {
         return status.clone();
     }
-    if is_locked(dir) {
-        "running".into()
-    } else {
-        "interrupted (run `norn recover`)".into()
+    // An MCP execution is unfinished between sessions by design (D-141).
+    let mcp = events.iter().any(|e| matches!(&e.body, EventBody::ExecutionCreated { agent, .. } if agent == "mcp"));
+    match (is_locked(dir), mcp) {
+        (true, true) => "serving (norn mcp)".into(),
+        (true, false) => "running".into(),
+        (false, true) => "open (`norn mcp` continues it, `norn finish` ends it)".into(),
+        (false, false) => "interrupted (run `norn recover`)".into(),
     }
 }
 

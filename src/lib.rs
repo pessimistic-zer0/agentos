@@ -11,6 +11,7 @@ pub mod faults;
 pub mod gateway;
 pub mod interrupt;
 pub mod log;
+pub mod mcp;
 pub mod policy;
 pub mod recovery;
 pub mod runtime;

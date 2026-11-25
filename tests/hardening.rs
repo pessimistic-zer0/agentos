@@ -608,7 +608,7 @@ fn rm_deletes_what_is_safe_to_delete_and_says_why_not_otherwise() {
     let shown = t.norn(&["rm", &done1]);
     assert!(shown.contains(&format!("removed {done1}")) && !dir(&done1).exists(), "{shown}");
     // An unknown id, a path, an unfinished execution: kept, with the reason, and an error.
-    for (id, why) in [("nope", "no execution"), ("../executions", "no execution"), (cut.as_str(), "can still be resumed")] {
+    for (id, why) in [("nope", "no execution"), ("../executions", "no execution"), (cut.as_str(), "can still be continued")] {
         let out = t.output(&["rm", id]);
         assert!(!out.status.success(), "{id}");
         assert!(String::from_utf8_lossy(&out.stdout).contains(why), "{id}: {}", String::from_utf8_lossy(&out.stdout));

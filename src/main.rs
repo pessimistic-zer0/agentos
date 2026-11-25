@@ -49,6 +49,20 @@ enum Cmd {
         #[arg(long, short)]
         quiet: bool,
     },
+    /// Serve the tools to an MCP client (Claude Code, Cursor, …) over standard
+    /// input and output. Continues the unfinished MCP execution of this
+    /// repository if there is one; `norn finish` ends it
+    Mcp {
+        /// The repository to work on (it is copied, never changed)
+        #[arg(long)]
+        repo: PathBuf,
+        /// Policy file (see policies/)
+        #[arg(long)]
+        policy: PathBuf,
+    },
+    /// End an execution nobody is driving (one made by `norn mcp`): settle a
+    /// cut-off call, then write its patch. Then read the patch and `norn apply`
+    Finish { id: String },
     /// After a crash: settle the call that was cut off and repair the workspace
     Recover {
         id: String,
@@ -122,10 +136,10 @@ fn main() -> Result<()> {
         norn::sandbox::ns::helper_main(&args[2]);
     }
     let cli = Cli::parse();
-    if matches!(cli.cmd, Cmd::Run { .. } | Cmd::Check { .. }) {
+    if matches!(cli.cmd, Cmd::Run { .. } | Cmd::Check { .. } | Cmd::Mcp { .. }) {
         enter_delegated_scope();
     }
-    if matches!(cli.cmd, Cmd::Run { .. } | Cmd::Recover { .. }) {
+    if matches!(cli.cmd, Cmd::Run { .. } | Cmd::Recover { .. } | Cmd::Mcp { .. } | Cmd::Finish { .. }) {
         norn::interrupt::install();
     }
     // Made absolute once, here: later steps run helper programs (`diff`,
@@ -173,6 +187,17 @@ fn main() -> Result<()> {
                 println!("{}", summary.id);
             }
         }
+        Cmd::Mcp { repo, policy } => {
+            // Before anything can print: standard output belongs to the
+            // protocol from here on.
+            let mut out = norn::mcp::take_stdout()?;
+            let cfg = norn::mcp::Config { state_dir, repo: norn::mcp::canonical_repo(&repo)?, policy };
+            let mut server = norn::mcp::Server::new(cfg)?;
+            server.serve(&mut std::io::stdin().lock(), &mut out)?;
+        }
+        Cmd::Finish { id } => {
+            runtime::finish_execution(&state_dir, &id, true)?;
+        }
         Cmd::Recover { id, quiet } => {
             runtime::recover(&state_dir, &id, !quiet)?;
         }
@@ -203,9 +228,9 @@ fn main() -> Result<()> {
                 let result = runtime::remove_execution(&state_dir, id, force, dry_run)?;
                 match result {
                     runtime::Removal::Removed => println!("{verb} {id}"),
-                    runtime::Removal::InUse => println!("kept {id}: an norn process is working on it"),
+                    runtime::Removal::InUse => println!("kept {id}: a norn process is working on it"),
                     runtime::Removal::Unfinished => println!(
-                        "kept {id}: it never finished and can still be resumed (`norn run --resume {id}`); --force deletes it anyway"
+                        "kept {id}: it never finished and can still be continued (`norn run --resume {id}`, or `norn mcp` for an MCP execution); --force deletes it anyway"
                     ),
                     runtime::Removal::NotFound => println!("no execution {id} in {}", state_dir.display()),
                 }

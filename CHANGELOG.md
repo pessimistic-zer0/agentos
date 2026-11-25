@@ -2,6 +2,17 @@
 
 What changed for someone who uses Norn, newest first. The reasons are in `docs/decision-log.md` (the `D-` numbers); the bugs in `docs/bugs.md` (the `B-` numbers).
 
+## Unreleased (will be 1.1.0, plan "v2": `docs/v2-scope.md`)
+
+### Added
+
+- **`norn mcp`**: norn as an MCP server over standard input and output, so that an agent such as Claude Code runs its file and command calls through norn's policy, sandbox and log (D-139 to D-143). Both MCP revisions are served (2026-07-28 and 2025-11-25). Tool names on the wire: `fs_read`, `fs_list`, `fs_write`, `fs_edit`, `exec`, `ext_call`.
+- **`norn finish <id>`**: ends an execution nobody is driving (one made by `norn mcp`) and writes its patch (D-141).
+
+### Changed
+
+- `norn status` shows an unfinished MCP execution as `open` (or `serving` while a server uses it), not `interrupted`.
+
 ## 1.0.0 (2026-11-25)
 
 Tag `v1.0`, on the commit that CI run 45489487156 passed on Ubuntu 24.04, Ubuntu with AppArmor's restriction on, and Debian 12 (D-136).

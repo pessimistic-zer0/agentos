@@ -129,6 +129,7 @@ Run everything inside the dev shell (`flake.nix`): `nix develop -c <command>`, o
 - Lint: `nix develop -c cargo clippy --all-targets`.
 - Demo: `nix develop -c make demo` (the fix, then a deliberate kill, recover and resume). By hand: `systemd-run --user --scope -p Delegate=yes cargo run -- run --repo examples/demo-repo --policy policies/nix.toml --agent scripted --script examples/scripts/fix-demo.toml`, then `cargo run -- trace`.
 - M0 practice program: `cd experiments/m0-ramp && cargo test`. Other experiments: see each `experiments/*/NOTES.md`.
+- MCP server (v2, M15): `norn mcp --repo <folder> --policy <file>` over stdio; with Claude Code: `claude --mcp-config <file> --strict-mcp-config --tools "" --allowedTools mcp__norn` (inside the dev shell, so the policy's programs are on `PATH`). `norn finish <id>`, then `norn apply <id>`. Tests: `tests/mcp.rs`; client in `tests/common/mcp_client.rs`; experiments: `experiments/m15-mcp/NOTES.md`.
 - Bonus tool by hand: `cargo run --example fake_service` (port 8099; `FAKE_SERVICE_FAULTS='order-1=drop_after'` loses an answer), add the `[external]` section it prints to a copy of a policy, and use a script step `tool = "ext.call"`. Tests: `tests/external.rs`; the external fault cells are the second test in `tests/recovery/main.rs` (report: `target/recovery-ext-report.json`).
 - Another distribution: `ci/debian-vm.sh` runs `make test` on Debian 12 in a QEMU/KVM virtual machine (needs `qemu-system-x86_64` and `qemu-img` on `PATH`; D-128). CI job `debian` does the same.
 - Release archive: `nix develop -c packaging/release.sh --check` (builds, packs into `target/dist/`, runs the demo task from the unpacked archive; D-127). CI job `release` does the same on Ubuntu and then runs the benchmarks.
@@ -175,9 +176,11 @@ M14 (tag `v1.0` locally, on `d83aba5`; `docs/milestones/M14-release.md`), done 2
 
 M13 (tag `m13` locally, on `5e17acb`; `docs/milestones/M13-hosted-model.md`), 2026-11-17: the six inventory tickets with Claude as the model, through a relay that looks like a model server and is answered by a fresh subagent per ticket (D-130; Prince's choice after the Groq key's limit stopped the hosted run after one ticket). Six of six solved, each checked on a clone against the solution notes (`docs/results/relay-model-trial-nix.md`). The friction it found (the stop rule in a project with other failing tests, denials that do not say what is allowed) is parked in the spec §22. No code change; CI run 44093789877 on `5e17acb` is green on all four jobs (D-132). Scheduling is parked as a v2 sketch (D-131).
 
+v2 (D-139, `docs/v2-scope.md`), in progress. M15 (`docs/milestones/M15-mcp-server.md`), 2026-11-26: `norn mcp` (D-140 to D-143) and `norn finish`. The experiments with Claude Code changed two plan items (D-141). Claude Code fixed the demo through it (`docs/results/mcp-claude-code-demo-nix.md`). On `nix`: `make test` 175 passed. Not yet verified on `fhs`.
+
 Open, and only Prince can close them:
 
 - The tags `v1.0` and `m14` are on GitHub, pushed by Prince on 2026-11-25.
-- Nothing else is open. v2 is approved (D-139) and in progress, starting with M15; later versions are ordered (D-137) but not yet scoped.
+- Push, so CI can verify M15 on `fhs` (then tag `m15`, D-113). v2 is approved (D-139) and in progress; later versions are ordered (D-137) but not yet scoped.
 
 Update this section when any of these changes.

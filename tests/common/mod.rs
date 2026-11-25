@@ -3,6 +3,7 @@
 #![allow(dead_code)] // each test file uses a different subset
 
 pub mod fake_service;
+pub mod mcp_client;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

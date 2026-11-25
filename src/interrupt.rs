@@ -35,6 +35,16 @@ pub fn running(id: &str) {
     ));
 }
 
+/// `norn mcp` is serving this execution (D-141). Being stopped is how a
+/// client ends a session, so this is the normal last message.
+pub fn serving(id: &str) {
+    set(format!(
+        "\nnorn mcp: stopped. Execution {id} is unfinished; nothing is lost.\n  \
+         The next `norn mcp` on this repository continues it.\n  \
+         Take the result:  norn finish {id}   then read its patch, and  norn apply {id}\n"
+    ));
+}
+
 /// Recovery of this execution is under way.
 pub fn recovering(id: &str) {
     set(format!("\nnorn: stopped during recovery of {id}. Recovery is safe to repeat:  norn recover {id}\n"));

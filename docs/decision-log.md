@@ -3556,6 +3556,39 @@ Open questions for Prince, in the draft (§8): approval of the items; whether th
 
 **Concepts to learn.** Wire name against internal name.
 
+### D-143 — How `norn mcp` is built: the client is the agent, the execution opens at the first call, standard output is the protocol's alone
+- **Date:** 2026-11-26
+- **Status:** Taken
+- **Area:** tooling
+- **ADR:** none
+
+**In plain words.** `norn mcp` is a translator in front of the existing gateway. Each `tools/call` becomes one `ToolCall`, handled exactly like a call from `norn run`. Five smaller choices were made while building it: the execution is created (or continued) at the first tool call, not when the server starts; the server's standard output is moved to a private descriptor so nothing but protocol messages can reach it; a wrong argument is a tool error the model can read, while an unknown tool or method is a protocol error; what the client was offered is written to the log as an `agent.message`; and `norn finish` works on any unfinished execution, not only MCP ones.
+
+**The problem.** The protocol and the experiments (D-140 to D-142) fixed what the server must say. These choices are about how it fits the runtime.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| A serve loop of its own in `src/mcp.rs`, calling `runtime::create` / `runtime::reopen` and `Gateway::handle` | Taken | The client decides what to call and when; there is no agent loop to drive. The durable part (gateway, recovery) is reused unchanged |
+| An `Agent` whose `next_action` blocks on standard input, driven by `runtime::drive` | Discarded | Reuses more, but the budget and the end of the loop would finish the execution (D-141 says a stop is only a stop), and protocol requests (`tools/list`) do not fit an action loop |
+| Create the execution at the first tool call | Taken | Claude Code starts every configured server when it starts, and lists tools; copying the repository for each start would be waste |
+| Create it when the server starts | Discarded | As above; it also makes a failure to start (no `pytest` on `PATH`) a dead server instead of a message the model and the person can read |
+| Move standard output to a descriptor of its own (`F_DUPFD_CLOEXEC`) and point descriptor 1 at standard error | Taken | The stdio transport allows only MCP messages on standard output. One stray `println!` anywhere, or a helper program that inherits it, would break the session; this makes that impossible rather than unlikely |
+| Rely on the code not printing | Discarded | Several functions print when `verbose`; a future change could break the protocol silently |
+| Wrong arguments (a missing `path`) as a tool result with `isError: true`; an unknown tool or method as a JSON-RPC error | Taken | The specification's split: "invalid input values" are tool execution errors the model should see; unknown tools are protocol errors |
+| Record the session (client, protocol revision, tool list) as an `agent.message` | Taken | Spec §9.10 asks for the tool descriptions to be recorded. No new event kind is needed; the compatibility promise allows new fields in an existing kind |
+| A new `mcp.session` event kind | Discarded | Allowed by the promise, but every reader of the log would need a new case for no gain |
+| `norn finish` accepts any unfinished execution | Taken | Ending a scripted or LLM run that will not be resumed is the same operation; refusing would be code to forbid something harmless |
+| A message limit of 32 MiB; a longer line is skipped and answered with `-32600` | Taken | Reading an unbounded line into memory would let a client exhaust it. 32 MiB is far above any file the policies allow |
+| Calls handled one at a time; `notifications/cancelled` ignored | Taken | A cancellation can only arrive after the call it names was answered. The specification allows ignoring it then |
+| The call budget (`limits.max_tool_calls`) refuses further calls with a tool error | Taken | Ending the execution would make the client's next call start a new one (D-141) |
+
+**What this means for the code.** `src/mcp.rs` (new), `runtime::reopen`, `runtime::finish_execution`, `runtime::unfinished_mcp_executions`, `interrupt::serving`; `norn status` shows an unfinished MCP execution as `open` or `serving`; `norn apply` on one says to run `norn finish`. Tests: `tests/mcp.rs` (7), with the client in `tests/common/mcp_client.rs`.
+
+**Evidence.** `nix develop -c make test`: 175 passed, 0 failed (168 plus 7). Claude Code fixed the demo through `norn mcp`, then `norn finish` and `norn apply` brought the fix into the repository copy, where `pytest` passed 4 of 4 (`docs/results/mcp-claude-code-demo-nix.md`).
+
+**Concepts to learn.** File descriptor and `dup2`; close-on-exec; tool error against protocol error.
+
 ---
 
 ## Still open
@@ -3652,6 +3685,7 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-25 | `gh run list --commit d83aba5` returned no run although the run existed: the filter wants the full commit hash | A wait loop that finds nothing should say why, not only time out; give tools the full hash (`git rev-parse`) |
 | 2026-11-26 | A tool list with `cacheScope: "session"` (not one of the two allowed values) made Claude Code drop every tool of the server and start the model with none, without any error the model or the user could see; only its debug log said why (`experiments/m15-mcp/NOTES.md`) | Test a protocol server against the real client early, with its debug log on. A client that hides a broken server is common; the server must be exact |
 | 2026-11-26 | Two items of the approved v2 plan did not survive the first contact with a real client: "finish the execution when the session ends" and "resume by id". Claude Code kills the server within half a second and restarts a dead one with the same command line (D-141) | The experiments-first rule paid off again: both would have been built and then rebuilt. A plan written from a protocol's text is a guess about its clients |
+| 2026-11-26 | The first Claude Code session through `norn mcp` failed at every call with `allowed program pytest was not found on PATH`: Claude Code had been started outside the dev shell and passes its own environment to the server. The model reported the message and changed nothing (`docs/results/mcp-claude-code-demo-nix.md`) | A client starts the server in the client's environment, not the user's shell. Putting the reason in every tool result made the failure readable from both sides; the README now says so |
 
 ---
 
@@ -3749,3 +3783,4 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | stdio transport | Two programs talking through the standard input and output of a child process, one message per line; no network |
 | Semantic versioning | Version numbers major.minor.patch: a new major number may break what worked, a new minor number only adds, a new patch number only fixes |
 | Signal escalation | Asking a program to stop more and more firmly: SIGINT (like Ctrl-C), then SIGTERM, then SIGKILL, which cannot be caught. Claude Code waits 100 ms and 400 ms between them (D-141) |
+| File descriptor | A small number a process uses to refer to an open file or pipe: 0 is standard input, 1 standard output, 2 standard error. `dup2(2, 1)` makes 1 point where 2 points. Close-on-exec: a descriptor that programs started later do not inherit (D-143) |

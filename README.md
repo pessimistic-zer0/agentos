@@ -283,6 +283,25 @@ Things to know before the first run:
 - **If the model gives up**, the run ends as `STOPPED`, not `COMPLETED`: a model that answers with words while its last command is still failing is reminded once, then the run is closed with its last words.
 - **Nothing is deleted for you.** Each execution keeps its workspace and one checkpoint per change. `norn rm --older-than 14` removes old ones; it keeps executions that are running or can still be resumed.
 
+### From an MCP client (Claude Code and others)
+
+`norn mcp` offers the tools to any agent that speaks MCP (the Model Context Protocol), over standard input and output. The agent then reads, writes and runs commands through norn's gateway, policy, sandbox and log, on a copy of the repository. For Claude Code, a configuration file:
+
+```json
+{"mcpServers": {"norn": {"command": "/usr/local/bin/norn",
+  "args": ["mcp", "--repo", "/path/to/project", "--policy", "/path/to/policy.toml"]}}}
+```
+
+```sh
+claude --mcp-config norn.json --strict-mcp-config --tools "" --allowedTools mcp__norn
+```
+
+- **Switch the client's own tools off** (`--tools ""` for Claude Code). norn governs only the calls that reach it; a client that keeps its own shell and file tools can go around it. With Claude Code and these flags, norn's tools were the only ones the model had (`experiments/m15-mcp/NOTES.md`, E2).
+- **The client starts norn with the client's environment.** The programs the policy allows (`pytest`, …) must be on that `PATH`; if one is missing, every tool answers with the reason.
+- **A session's end is only a stop.** The client stops the server when it is done, and starts it again by itself if it died; the next `norn mcp` on the same repository continues the same execution. `norn status` shows it as `open`.
+- **You take the result:** `norn finish <id>` (writes the patch), read the patch, then `norn apply <id>`, as after a run.
+- Tools on the wire: `fs_list`, `fs_read`, `fs_edit`, `fs_write`, `exec` if the policy allows commands, `ext_call` if it names a service. Both MCP revisions are served: 2026-07-28 (what Claude Code uses) and 2025-11-25 (`initialize`). Tests: `tests/mcp.rs`.
+
 ## What it does not do
 
 - **It is not hardened like a production container runtime.** The seccomp filter is a short deny list, not an allow list; kernel bugs are out of scope; tested on three systems (NixOS, Ubuntu 24.04, and Debian 12 in a virtual machine) and no others.
@@ -293,7 +312,7 @@ Things to know before the first run:
 - **The sandbox can see** the read-only system folders in full (on NixOS, all of `/nix/store`) and some facts about the host (host name, kernel version, the workspace's path).
 - **Prompt injection is contained, not prevented.** A file can talk the model into asking for something bad; the policy and sandbox then refuse or confine it.
 - **Containment ends at the patch.** A patch can change test hooks or CI files that later run unsandboxed on your machine. Read it before applying. The same goes for `norn apply`: it copies what the agent made, executable bits and symlinks included, and lists each one.
-- One agent, one workspace. No dashboard, no replay, no MCP, no SDK, no multi-agent, no approvals. Those were cut on purpose (see the plan).
+- One agent, one workspace. MCP over standard input and output only (no network transport). No dashboard, no replay, no SDK, no multi-agent, no approvals: those are later versions (`docs/v2-scope.md`, D-137), not this one.
 
 ## Repository
 

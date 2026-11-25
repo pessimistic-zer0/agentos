@@ -219,6 +219,19 @@ pub fn resume(state_dir: &Path, id: &str, agent: &mut dyn Agent, verbose: bool) 
         let calls = crate::log::calls(&events)?.len() as u64;
         return Ok(RunSummary { id: id.into(), status: "completed".into(), calls, patch: dir.patch() });
     }
+    let history = crate::recovery::history(&events, &crate::blob::BlobStore::new(&dir.blobs()))?;
+    agent.restore(&history, &events)?;
+    let mut gw = reopen_gateway(&dir, log, &events)?;
+    if verbose {
+        println!("{id}  RESUMING after {} calls", history.len());
+    }
+    drive(&mut gw, agent, history.last().cloned(), history.len() as u64, verbose)
+}
+
+/// The gateway of an execution that was stopped and has just been
+/// recovered: its own policy, the next call id and the last checkpoint, all
+/// taken from the log.
+fn reopen_gateway(dir: &ExecDir, log: EventLog, events: &[crate::log::Event]) -> Result<Gateway> {
     // The policy this execution started with, not whatever the file says now.
     let (policy, _) = Policy::load(&dir.policy())?;
     let host_path = std::env::var("PATH").unwrap_or_default();
@@ -227,22 +240,82 @@ pub fn resume(state_dir: &Path, id: &str, agent: &mut dyn Agent, verbose: bool) 
         eprintln!("note: {note}");
     }
     let sandbox = prepare_sandbox()?;
-    let calls = crate::log::calls(&events)?;
+    let calls = crate::log::calls(events)?;
     let next_call_id = calls.iter().map(|c| c.call_id).max().unwrap_or(0) + 1;
-    let last_cp = crate::log::named_checkpoints(&events).pop().context("no checkpoint in the log")?;
-    let history = crate::recovery::history(&events, &crate::blob::BlobStore::new(&dir.blobs()))?;
-    agent.restore(&history, &events)?;
+    let last_cp = crate::log::named_checkpoints(events).pop().context("no checkpoint in the log")?;
     // Where the repository was when the execution started; only used for
     // the policy's read-only folders (D-122).
-    let repo = events
-        .iter()
-        .find_map(|e| if let EventBody::ExecutionCreated { repo, .. } = &e.body { Some(PathBuf::from(repo)) } else { None })
-        .context("no execution.created event in the log")?;
-    let mut gw = Gateway::new(dir.clone(), log, policy, programs, sandbox, next_call_id, last_cp, repo);
-    if verbose {
-        println!("{id}  RESUMING after {} calls", history.len());
+    let repo = created(events).map(|(repo, _)| PathBuf::from(repo)).context("no execution.created event in the log")?;
+    Ok(Gateway::new(dir.clone(), log, policy, programs, sandbox, next_call_id, last_cp, repo))
+}
+
+/// The repository and agent kind of the `execution.created` event.
+fn created(events: &[crate::log::Event]) -> Option<(&str, &str)> {
+    events.iter().find_map(|e| match &e.body {
+        EventBody::ExecutionCreated { repo, agent, .. } => Some((repo.as_str(), agent.as_str())),
+        _ => None,
+    })
+}
+
+/// Executions started by `norn mcp` on `repo` (a canonical path) that have
+/// not finished, newest first. `norn mcp` continues the first one it can
+/// lock (D-141).
+pub fn unfinished_mcp_executions(state_dir: &Path, repo: &Path) -> Result<Vec<String>> {
+    let mut found = Vec::new();
+    for id in workspace::list_executions(state_dir)? {
+        let dir = ExecDir::new(state_dir, &id);
+        let Ok(events) = EventLog::open(&dir.log()).and_then(|l| l.events()) else { continue };
+        let finished = events.iter().any(|e| matches!(e.body, EventBody::ExecutionFinished { .. }));
+        if !finished && created(&events) == Some((&repo.display().to_string(), "mcp")) {
+            found.push(id);
+        }
     }
-    drive(&mut gw, agent, history.last().cloned(), history.len() as u64, verbose)
+    // Ids begin with the time they were made, so the order of names is the
+    // order of age.
+    found.sort();
+    found.reverse();
+    Ok(found)
+}
+
+/// Open an unfinished execution again for `norn mcp`: lock it, recover the
+/// call that was cut off (design rule 5), and return its gateway.
+pub fn reopen(state_dir: &Path, id: &str) -> Result<(Gateway, File, crate::recovery::RecoveryReport)> {
+    let dir = ExecDir::new(state_dir, id);
+    let mut log = EventLog::open(&dir.log())?;
+    let lock = lock_execution(&dir)?;
+    crate::interrupt::recovering(id);
+    let report = crate::recovery::recover(&dir, &mut log)?;
+    if report.finished {
+        bail!("execution {id} finished while it was being opened");
+    }
+    let events = log.events()?;
+    let gw = reopen_gateway(&dir, log, &events)?;
+    Ok((gw, lock, report))
+}
+
+/// `norn finish`: end an execution that nobody is driving any more (one made
+/// by `norn mcp`, D-141): settle a call that was cut off, then write the
+/// patch and the `execution.finished` record, exactly as the end of a run
+/// does.
+pub fn finish_execution(state_dir: &Path, id: &str, verbose: bool) -> Result<()> {
+    let dir = ExecDir::new(state_dir, id);
+    if !dir.log().exists() {
+        bail!("no execution {id} in {}", state_dir.display());
+    }
+    let mut log = EventLog::open(&dir.log())?;
+    let _lock = lock_execution(&dir)?;
+    crate::interrupt::recovering(id);
+    let report = crate::recovery::recover(&dir, &mut log)?;
+    crate::interrupt::finished();
+    if report.finished {
+        println!("{id}  already finished; its patch: {}", dir.patch().display());
+        return Ok(());
+    }
+    if verbose && !report.clean {
+        print_recovery(id, &report);
+    }
+    let (policy, _) = Policy::load(&dir.policy())?;
+    finish_parts(&dir, &mut log, &policy, "completed", "finished with `norn finish`", verbose)
 }
 
 /// The agent loop. `last` is the result to hand the agent first, and
@@ -279,18 +352,17 @@ pub fn drive(gw: &mut Gateway, agent: &mut dyn Agent, mut last: Option<ToolResul
 }
 
 fn finish(gw: &mut Gateway, status: &str, summary: &str, verbose: bool) -> Result<()> {
-    let base = gw.dir.checkpoints().join(checkpoint::name(0));
-    let policy = &gw.policy;
-    let report = checkpoint::write_patch(&base, &gw.dir.work(), &gw.dir.patch(), |rel| policy.scratch(rel))?;
-    gw.log.append(EventBody::ExecutionFinished {
-        status: status.into(),
-        summary: summary.into(),
-        patch: Some(gw.dir.patch().display().to_string()),
-    })?;
+    finish_parts(&gw.dir, &mut gw.log, &gw.policy, status, summary, verbose)
+}
+
+fn finish_parts(dir: &ExecDir, log: &mut EventLog, policy: &Policy, status: &str, summary: &str, verbose: bool) -> Result<()> {
+    let base = dir.checkpoints().join(checkpoint::name(0));
+    let report = checkpoint::write_patch(&base, &dir.work(), &dir.patch(), |rel| policy.scratch(rel))?;
+    log.append(EventBody::ExecutionFinished { status: status.into(), summary: summary.into(), patch: Some(dir.patch().display().to_string()) })?;
     crate::interrupt::finished();
     if verbose {
         let what = if report.changed { "patch" } else { "no changes; empty patch" };
-        println!("{}  {}  {}\n  {what}: {}", gw.dir.id, status.to_uppercase(), truncate(summary, 200), gw.dir.patch().display());
+        println!("{}  {}  {}\n  {what}: {}", dir.id, status.to_uppercase(), truncate(summary, 200), dir.patch().display());
         if !report.left_out.is_empty() {
             println!("  NOT in the patch: {}. They are listed at the top of the patch, to apply by hand.", report.left_out.describe());
         }
@@ -488,7 +560,9 @@ pub fn apply(state_dir: &Path, id: &str, to: Option<&Path>, dry_run: bool) -> Re
     let _lock = lock_execution(&dir)?;
     let events = log.events()?;
     if !events.iter().any(|e| matches!(e.body, EventBody::ExecutionFinished { .. })) {
-        bail!("execution {id} has not finished, so its result is not final. Finish it first (`norn run --resume {id}`)");
+        // An MCP execution has nobody to finish it but the person (D-141).
+        let how = if created(&events).map(|(_, agent)| agent) == Some("mcp") { "norn finish" } else { "norn run --resume" };
+        bail!("execution {id} has not finished, so its result is not final. Finish it first (`{how} {id}`)");
     }
     let origin = events
         .iter()

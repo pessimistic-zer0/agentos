@@ -521,7 +521,7 @@ fn is_valid_call(m: &Value) -> bool {
 
 /// The four tools, described for the model. Names use `_` because the API
 /// does not allow `.` in function names.
-fn tool_schemas() -> Value {
+pub(crate) fn tool_schemas() -> Value {
     let f = |name: &str, description: &str, props: Value, required: &[&str]| {
         json!({"type": "function", "function": {"name": name, "description": description,
             "parameters": {"type": "object", "properties": props, "required": required}}})
@@ -547,7 +547,7 @@ fn tool_schemas() -> Value {
     ])
 }
 
-fn parse_call(name: &str, args: &str) -> Result<ToolCall> {
+pub(crate) fn parse_call(name: &str, args: &str) -> Result<ToolCall> {
     #[derive(Deserialize)]
     struct Args {
         path: Option<String>,
@@ -582,7 +582,7 @@ fn parse_call(name: &str, args: &str) -> Result<ToolCall> {
 }
 
 /// A tool result as the text the model sees.
-fn render_result(r: &ToolResult) -> String {
+pub(crate) fn render_result(r: &ToolResult) -> String {
     let text = match (&r.outcome, &r.output) {
         (ToolOutcome::Denied { rule }, _) => format!("DENIED by policy: {rule}. Nothing was done."),
         (ToolOutcome::Failed { error }, _) => format!("FAILED: {error}. Nothing was changed."),
