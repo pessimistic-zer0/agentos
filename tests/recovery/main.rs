@@ -1121,3 +1121,222 @@ fn an_edit_is_recovered_like_a_write() {
     }
     assert_eq!(total_viol, 0, "violations");
 }
+
+// ---------------------------------------------------------------------------
+// The same kills with an MCP client as the agent (v2, M16, D-141).
+//
+// The seven workload steps are sent as `tools/call` messages to `norn mcp`,
+// which kills itself at the chosen point. The client then does what Claude
+// Code does (experiments/m15-mcp/NOTES.md, E3): it starts the server again
+// with the same command line, and its next call makes the server continue
+// the execution, recovering the cut-off call first. The checks are those of
+// `run_trial`; the person ends the execution with `norn finish`.
+// ---------------------------------------------------------------------------
+
+use common::mcp_client::McpClient;
+
+/// The workload of `script_text`, as MCP calls (wire names, D-142).
+fn mcp_steps() -> Vec<(&'static str, Value)> {
+    let exec = json!({"argv": ["python3", "-c", format!("{APPEND}\n")]});
+    vec![
+        ("fs_list", json!({"path": "src"})),
+        ("fs_write", json!({"path": "src/a.txt", "content": big("A1")})),
+        ("exec", exec.clone()),
+        ("fs_read", json!({"path": "src/small.txt"})),
+        ("fs_write", json!({"path": "src/a.txt", "content": big("A2")})),
+        ("exec", exec),
+        ("fs_write", json!({"path": "src/new.txt", "content": "new\n"})),
+    ]
+}
+
+/// How many workload steps the log shows as done (completed, or reconciled
+/// as applied). Calls are made in order, so the client goes on from there,
+/// as `norn run --resume` does for a script.
+fn steps_done(events: &[Value]) -> usize {
+    events
+        .iter()
+        .filter(|e| e["type"] == "tool.completed" || (e["type"] == "tool.reconciled" && e["applied"] == true))
+        .filter(|e| call_of(events, e["call_id"].as_u64().unwrap())["path"] != "probe")
+        .count()
+}
+
+fn run_mcp_trial(job: &Job, seed: u64) -> Outcome {
+    let mut rng = Rng::new(seed);
+    let mut out = Outcome::default();
+    let name = format!("rec-mcp-{}-{}-{}", job.point, job.tool.replace('.', ""), job.n);
+    let t = TestEnv::new(&name).with_policy_text(&policy_text());
+    let repo = t.root.join("repo");
+    make_repo(&repo);
+    std::fs::create_dir_all(repo.join("probe")).unwrap();
+    let steps = TOOL_STEPS.iter().find(|(tool, _)| *tool == job.tool).unwrap().1;
+    let call = steps[rng.below(steps.len() as u64) as usize] as u64 + 1;
+    let first_point = if job.point == "P8" { ["P2", "P3", "P4", "P5", "P6"][rng.below(5) as usize] } else { job.point };
+    let delay_us = match (first_point, job.tool) {
+        ("P3", "exec") => 120_000,
+        ("P3", "fs.write") => 4_000,
+        ("P5", _) => 4_000,
+        _ => 1_500,
+    };
+    let crash = [("NORN_CRASH_AT", first_point.to_string()), ("NORN_CRASH_CALL", call.to_string()), ("NORN_CRASH_DELAY_US", delay_us.to_string())];
+
+    // --- The first session, killed at the crash point. ---
+    let mut c = McpClient::start_with(&t, &repo, &crash);
+    for (tool, args) in mcp_steps() {
+        if c.try_call(tool, args).is_none() {
+            break;
+        }
+    }
+    let status = c.wait();
+    out.crashed = status.signal() == Some(9);
+    if !out.crashed {
+        // Not killed (P3 can come too late): the session simply ended.
+        out.violations.extend(status.code().filter(|c| *c != 0).map(|c| format!("server exited with {c} without being killed")));
+    }
+    let id = std::fs::read_dir(t.state.join("executions")).unwrap().next().unwrap().unwrap().file_name().to_string_lossy().into_owned();
+    let dir = t.exec_dir(&id);
+    let work = dir.join("work");
+
+    // --- What the kill left, before anything touches it (as in run_trial). ---
+    let before = events_of(&t, &id);
+    let (with_intent, all_open) = pending(&before);
+    if with_intent.is_empty() {
+        let last = dir.join("checkpoints").join(named_checkpoints(&before).last().unwrap());
+        if tree_digest(&work) != tree_digest(&last) {
+            out.violations.push("I1: workspace changed although no call has an open intent".into());
+        }
+    }
+    let expect_applied: Option<(u64, bool)> = all_open.first().map(|cid| {
+        let c = call_of(&before, *cid);
+        let applied = c["tool"] == "fs.write"
+            && intent_of(&before, *cid).is_some()
+            && file_hash(&work.join(c["path"].as_str().unwrap())).as_deref() == c["content_hash"].as_str();
+        (*cid, applied)
+    });
+
+    // --- The client starts the server again. For P8 the recovery inside
+    // that start is killed first, and the client starts it once more. ---
+    if job.point == "P8" {
+        let env = [("NORN_CRASH_AT", "P8".to_string()), ("NORN_CRASH_HIT", (1 + rng.below(5)).to_string())];
+        let mut c = McpClient::start_with(&t, &repo, &env);
+        let _ = c.try_call("fs_list", json!({"path": "probe"}));
+        out.recovery_crashed = c.wait().signal() == Some(9);
+    }
+    let started = Instant::now();
+    let mut c = McpClient::start(&t, &repo);
+    // A call that changes nothing, so the state right after recovery can be
+    // checked before the client goes on.
+    match c.try_call("fs_list", json!({"path": "probe"})) {
+        Some((false, _)) => {}
+        other => {
+            out.violations.push(format!("the restarted server did not answer: {other:?}"));
+            return out;
+        }
+    }
+    out.recover_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
+    let after = events_of(&t, &id);
+    check_invariants(&t, &id, &after, &mut out.violations, "after recovery through mcp");
+    if let Some((cid, want)) = expect_applied {
+        let got = after.iter().find(|e| e["type"] == "tool.reconciled" && e["call_id"] == cid).map(|e| e["applied"] == true);
+        out.classified = Some(got == Some(want));
+        if got != Some(want) {
+            out.violations.push(format!("call {cid}: files say applied={want}, recovery said {got:?}"));
+        }
+    }
+
+    // --- The client goes on from the first step that is not done. ---
+    for (tool, args) in mcp_steps().into_iter().skip(steps_done(&after)) {
+        match c.try_call(tool, args) {
+            Some((false, _)) => {}
+            other => out.violations.push(format!("{tool} after the restart: {other:?}")),
+        }
+    }
+    c.stop();
+    let st = t.output(&["finish", &id]);
+    if !st.status.success() {
+        out.violations.push(format!("finish failed: {}", String::from_utf8_lossy(&st.stderr)));
+        return out;
+    }
+    let end = events_of(&t, &id);
+    check_invariants(&t, &id, &end, &mut out.violations, "after finish");
+    let (counter, side) = (lines(&work.join("src/counter.txt")), lines(&work.join("src/side.txt")));
+    out.duplicates = counter.saturating_sub(2) + side.saturating_sub(2);
+    let want = [("src/a.txt", content_hash(big("A2").as_bytes())), ("src/new.txt", content_hash(b"new\n"))];
+    for (p, h) in want {
+        if file_hash(&work.join(p)).as_deref() != Some(h.as_str()) {
+            out.violations.push(format!("final: {p} is not what an uninterrupted session writes"));
+        }
+    }
+    if counter != 2 || side != 2 {
+        out.violations.push(format!("final: counter={counter} side={side}, expected 2 and 2"));
+    }
+    if out.violations.is_empty() {
+        let _ = std::fs::remove_dir_all(&t.root);
+    }
+    out
+}
+
+#[test]
+fn recovery_holds_through_mcp() {
+    let runs: usize = std::env::var("NORN_RECOVERY_RUNS").ok().and_then(|v| v.parse().ok()).unwrap_or(3);
+    let workers: usize = std::env::var("NORN_RECOVERY_JOBS").ok().and_then(|v| v.parse().ok()).unwrap_or(8);
+    let all = ["fs.read", "fs.list", "fs.write", "exec"];
+    let mutating = ["fs.write", "exec"];
+    let matrix: Vec<(&'static str, &[&'static str])> = vec![
+        ("P1", &all), ("P2", &all), ("P3", &all), ("P4", &mutating), ("P5", &mutating), ("P6", &mutating), ("P7", &all), ("P8", &mutating),
+    ];
+    let jobs: Vec<Job> = matrix.iter().flat_map(|(point, tools)| tools.iter().flat_map(move |tool| (0..runs).map(move |n| Job { point, tool, n }))).collect();
+    let seed0 = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() as u64;
+    let next = AtomicUsize::new(0);
+    let results: Mutex<Vec<(Job, Outcome)>> = Mutex::new(Vec::new());
+    let started = Instant::now();
+    std::thread::scope(|s| {
+        for _ in 0..workers {
+            s.spawn(|| loop {
+                let i = next.fetch_add(1, Ordering::SeqCst);
+                let Some(job) = jobs.get(i) else { break };
+                let outcome = run_mcp_trial(job, seed0.wrapping_add(i as u64 * 7919));
+                results.lock().unwrap().push((job.clone(), outcome));
+            });
+        }
+    });
+    let results = results.into_inner().unwrap();
+    let mut rows = Vec::new();
+    let (mut viol, mut dup, mut killed, mut cls, mut cls_ok) = (0, 0, 0, 0, 0);
+    let mut times: Vec<f64> = Vec::new();
+    println!("\n| point | tool | runs | killed | recovery killed (P8) | violations | duplicated effects | cut-off calls classified correctly |");
+    println!("|---|---|---|---|---|---|---|---|");
+    for (point, tools) in &matrix {
+        for tool in tools.iter() {
+            let rs: Vec<&Outcome> = results.iter().filter(|(j, _)| j.point == *point && j.tool == *tool).map(|(_, o)| o).collect();
+            let rk = rs.iter().filter(|o| o.recovery_crashed).count();
+            let k = rs.iter().filter(|o| o.crashed).count();
+            let v: usize = rs.iter().map(|o| o.violations.len()).sum();
+            let d: u64 = rs.iter().map(|o| o.duplicates).sum();
+            let c = rs.iter().filter(|o| o.classified.is_some()).count();
+            let c_ok = rs.iter().filter(|o| o.classified == Some(true)).count();
+            times.extend(rs.iter().filter_map(|o| o.recover_ms));
+            println!("| {point} | {tool} | {} | {k} | {} | {v} | {d} | {c_ok}/{c} |", rs.len(), if *point == "P8" { rk.to_string() } else { "-".into() });
+            rows.push(json!({"point": point, "tool": tool, "runs": rs.len(), "killed": k, "recovery_killed": rk, "violations": v, "duplicated_effects": d, "classified": c, "classified_correctly": c_ok}));
+            (viol, dup, killed, cls, cls_ok) = (viol + v, dup + d, killed + k, cls + c, cls_ok + c_ok);
+        }
+    }
+    times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let (p50, p99) = (percentile(&times, 0.50), percentile(&times, 0.99));
+    println!(
+        "\nmcp total: {} runs, {killed} killed, {viol} invariant violations, {dup} duplicated effects, {cls_ok}/{cls} cut-off calls classified correctly; \
+         restart to first answer p50 {p50:.1} ms, p99 {p99:.1} ms; harness took {:.0} s with {workers} workers",
+        results.len(),
+        started.elapsed().as_secs_f64()
+    );
+    for (job, o) in results.iter().filter(|(_, o)| !o.violations.is_empty()).take(20) {
+        println!("VIOLATION {} {} #{}: {:?}", job.point, job.tool, job.n, o.violations);
+    }
+    let report = json!({"runs_per_cell": runs, "preset": preset(), "rows": rows,
+        "total": {"runs": results.len(), "killed": killed, "violations": viol, "duplicated_effects": dup, "classified": cls, "classified_correctly": cls_ok},
+        "restart_to_first_answer_ms": {"p50": p50, "p99": p99, "samples": times.len()}});
+    std::fs::write(repo_root().join("target/recovery-mcp-report.json"), serde_json::to_string_pretty(&report).unwrap()).unwrap();
+    assert_eq!(viol, 0, "invariant violations");
+    assert_eq!(dup, 0, "duplicated side effects");
+    assert_eq!(cls_ok, cls, "misclassified cut-off calls");
+    assert!(killed * 2 > results.len(), "only {killed} of {} runs were killed", results.len());
+}

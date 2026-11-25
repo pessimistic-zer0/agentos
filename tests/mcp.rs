@@ -277,3 +277,42 @@ fn standard_output_carries_only_protocol_messages() {
     assert!(stderr.contains("new execution"), "{stderr}");
     assert!(stderr.contains("norn finish"), "the stop message says how to finish: {stderr}");
 }
+
+#[test]
+fn hostile_messages_never_crash_the_server_or_reach_the_gateway() {
+    // M16 (B3): what a broken or hostile client can send. Each one gets an
+    // error answer (or, for something that is not a request, silence), the
+    // server goes on, and nothing reaches the gateway, so no execution is
+    // even created.
+    let t = TestEnv::new("mcp-hostile");
+    let mut c = McpClient::start(&t, &demo());
+    // Nesting far deeper than the JSON parser allows: an error, not a stack overflow.
+    c.send_raw(&format!("{}{}", "[".repeat(100_000), "]".repeat(100_000)));
+    assert_eq!(c.read()["error"]["code"], -32700);
+    // Bytes that are not UTF-8.
+    c.send_bytes(b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"\xff\xfe\"}\n");
+    assert_eq!(c.read()["error"]["code"], -32700);
+    // A method that is not a string: not a request, so not answered.
+    c.send_raw(r#"{"jsonrpc":"2.0","id":4,"method":7}"#);
+    // `_meta` that is not an object.
+    let a = c.request_plain("tools/call", json!({"name": "fs_read", "arguments": {"path": "src/stats.py"}, "_meta": "x"}));
+    assert_eq!(a["id"], 1, "the next answer is for the next request: {a}");
+    assert_eq!(a["error"]["code"], -32602, "{a}");
+    // A tools/call before `initialize` and without `_meta`: not served.
+    let a = c.request_plain("tools/call", json!({"name": "exec", "arguments": {"argv": ["pytest"]}}));
+    assert_eq!(a["error"]["code"], -32602, "{a}");
+    // Arguments that are not an object.
+    let a = c.request("tools/call", json!({"name": "fs_read", "arguments": "src/stats.py"}));
+    assert_eq!(a["result"]["isError"], true, "{a}");
+    // The same id twice: both are answered, in order.
+    let req = json!({"jsonrpc": "2.0", "id": "same", "method": "tools/list", "params": {"_meta": meta()}}).to_string();
+    c.send_raw(&req);
+    c.send_raw(&req);
+    assert_eq!(c.read()["id"], "same");
+    assert_eq!(c.read()["id"], "same");
+    // Still serving.
+    let list = c.request("tools/list", json!({}));
+    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 5);
+    assert_eq!(c.close().code(), Some(0));
+    assert!(status_lines(&t).is_empty(), "nothing reached the gateway: {:?}", status_lines(&t));
+}

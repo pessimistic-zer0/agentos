@@ -10,8 +10,9 @@ RUNS  ?= 200
 demo:            ## fix the demo repo in the sandbox, then crash, recover and resume
 	./demo.sh
 
-test:            ## everything, with 3 kills per recovery cell (about 30 s)
+test:            ## everything, with 3 kills per recovery cell; the security cases a second time through `norn mcp`
 	$(SCOPE) cargo test
+	NORN_SECURITY_FRONT=mcp $(SCOPE) cargo test --test security
 
 lint:
 	cargo clippy --all-targets
@@ -23,6 +24,7 @@ eval-recovery:   ## suite 1: fault injection, RUNS kills per crash point and too
 
 eval-security:   ## suite 2: adversarial cases (0 escapes) and benign cases (0 false denials)
 	$(SCOPE) cargo test --test security --test benign -- --nocapture
+	NORN_SECURITY_FRONT=mcp $(SCOPE) cargo test --test security -- --nocapture
 
 bench:           ## suite 3: the three overhead numbers, raw data in docs/results/bench-<preset>/
 	bench/run.sh

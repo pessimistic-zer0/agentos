@@ -93,10 +93,45 @@ impl Run {
 }
 
 fn run_steps(t: &TestEnv, repo: &Path, steps: &str) -> Run {
+    run_steps_with_env(t, repo, steps, &[])
+}
+
+/// `run_steps` with extra variables in the runtime's own environment.
+fn run_steps_with_env(t: &TestEnv, repo: &Path, steps: &str, env: &[(&str, String)]) -> Run {
     let script = t.write_script("attack.toml", &format!("task = \"attack\"\n{steps}"));
-    let id = t.run_script_on(script.to_str().unwrap(), repo);
+    let id = if std::env::var("NORN_SECURITY_FRONT").as_deref() == Ok("mcp") {
+        run_through_mcp(t, repo, &script, env)
+    } else {
+        let out = t
+            .cmd(&["run", "--quiet", "--repo", repo.to_str().unwrap(), "--policy", t.policy.to_str().unwrap(), "--script", script.to_str().unwrap()])
+            .envs(env.iter().map(|(k, v)| (*k, v.as_str())))
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    };
     let events = t.events(&id);
     Run { id, events }
+}
+
+/// The same attack sent by an MCP client instead of the scripted agent
+/// (v2, M16): each step becomes a `tools/call` to `norn mcp` (wire names,
+/// D-142), then the client stops the server and the person runs
+/// `norn finish`. Every assertion of the suite then applies unchanged.
+/// `make test` runs the suite both ways (`NORN_SECURITY_FRONT=mcp`).
+fn run_through_mcp(t: &TestEnv, repo: &Path, script: &Path, env: &[(&str, String)]) -> String {
+    let parsed: toml::Value = toml::from_str(&std::fs::read_to_string(script).unwrap()).unwrap();
+    let mut c = common::mcp_client::McpClient::start_with(t, repo, env);
+    for step in parsed["step"].as_array().unwrap() {
+        let mut args = serde_json::to_value(step).unwrap();
+        let tool = args.as_object_mut().unwrap().remove("tool").unwrap();
+        let wire = tool.as_str().unwrap().replace('.', "_");
+        c.try_call(&wire, args).unwrap_or_else(|| panic!("norn mcp died during {wire}"));
+    }
+    c.stop();
+    let id = std::fs::read_dir(t.state.join("executions")).unwrap().next().unwrap().unwrap().file_name().to_string_lossy().into_owned();
+    t.norn(&["finish", &id]);
+    id
 }
 
 /// Run Python attack code as one `exec` call and return its output.
@@ -322,16 +357,10 @@ fn exec_sees_no_host_secrets_in_environment_or_proc() {
          probe('host processes visible', lambda: [p for p in os.listdir('/proc') if p.isdigit() and int(p) > 2] or (_ for _ in ()).throw(LookupError()))\n\
          print('env keys:', sorted(os.environ))",
     );
-    // Run the runtime with a secret in its own environment.
-    let script = t.write_script("env.toml", &format!("task = \"t\"\n[[step]]\ntool = \"exec\"\nargv = [\"python3\", \"-c\", '''\n{code}\n''']\n"));
-    let out = t
-        .cmd(&["run", "--quiet", "--repo", repo.to_str().unwrap(), "--policy", t.policy.to_str().unwrap(), "--script", script.to_str().unwrap()])
-        .env("NORN_TEST_SECRET", "SECRET-CANARY-42")
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    let id = String::from_utf8(out.stdout).unwrap().trim().to_string();
-    let events = t.events(&id);
+    // Run the runtime with a secret in its own environment. Through MCP this
+    // is the client's environment, which for Claude Code can hold an API key.
+    let steps = format!("[[step]]\ntool = \"exec\"\nargv = [\"python3\", \"-c\", '''\n{code}\n''']\n");
+    let Run { id, events } = run_steps_with_env(&t, &repo, &steps, &[("NORN_TEST_SECRET", "SECRET-CANARY-42".to_string())]);
     let o = t.output_of(&id, &events, 1).unwrap();
     assert_blocked(&o, &["env canary", "canary in /proc/*/environ", "host processes visible"]);
     let stdout = o["stdout"].as_str().unwrap();

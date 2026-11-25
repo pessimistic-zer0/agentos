@@ -3589,6 +3589,35 @@ Open questions for Prince, in the draft (§8): approval of the items; whether th
 
 **Concepts to learn.** File descriptor and `dup2`; close-on-exec; tool error against protocol error.
 
+### D-144 — How a killed MCP session is tested: the same cells and invariants, a client that restarts the server, and the security suite sent a second time through MCP
+- **Date:** 2026-11-26
+- **Status:** Taken
+- **Area:** durability
+- **ADR:** none
+
+**In plain words.** M16 checks that MCP changes nothing about safety. The kill harness runs its 24 cells a third time, with an MCP client in place of the scripted agent: the server kills itself at the chosen point, the client starts it again the way Claude Code does, and the same five invariants and the same "nothing lost, nothing doubled" check apply. The 33 security tests run a second time with every attack sent as `tools/call` messages; `make test` does both passes. One more test sends hostile protocol messages.
+
+**The problem.** The v2 plan (B2, B3) asks for kill cells and security cases "through MCP". The question was how to get them without writing a second harness and a second suite that could drift from the first.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Kill cells: a new test in `tests/recovery/main.rs` that reuses the workload, the crash points, `check_invariants` and the final check; only the driver differs | Taken | The oracle is the one already trusted at 4,800 runs; a bug in a new oracle could hide a bug in the server |
+| After the restart the client goes on from the first step the log does not show as done | Taken | What `norn run --resume` does for a script. A real model would re-read and decide; a fixed rule keeps the final state checkable |
+| The client always repeats the cut-off call | Discarded | For `exec` that is a second effect the client asked for, not one norn made; it would make "duplicated effects" measure the client |
+| A probe call (`fs_list` of an empty folder) right after the restart | Taken | Recovery runs inside the restarted server at its first call; a call that changes nothing lets the state "after recovery" be checked before the client goes on, as `run_trial` does after `norn recover` |
+| Security: one switch in the suite's `run_steps` (`NORN_SECURITY_FRONT=mcp`) and a second pass in `make test` and `make eval-security` | Taken | 30 of the 33 tests go through `run_steps`; every assertion applies unchanged. CI and the Debian job run `make test`, so both presets and both front doors are covered |
+| A copy of the suite for MCP | Discarded | Two suites drift apart |
+| Route the environment test (`exec_sees_no_host_secrets…`) through the switch too | Taken | Through MCP the runtime's environment is the client's, which can hold an API key: the case that matters most here |
+| Route the TOCTOU symlink swap and the FIFO test through MCP | Not done | Both test the file tools' own code, which is the same whichever door the call came in by; they need their own process handling (a concurrent swapper, a timeout). Stated in the M16 document |
+| Require every P8 trial to kill recovery inside the restarted server | Discarded after it failed | A P8 trial kills recovery at its n-th pass of the crash point, n from 1 to 5; recovery with less work never gets there. `run_trial` counts these and never required all; the MCP test now does the same (Findings) |
+
+**What this means for the code.** No change to `src/`. Tests: `recovery_holds_through_mcp` (report `target/recovery-mcp-report.json`), `hostile_messages_never_crash_the_server_or_reach_the_gateway` in `tests/mcp.rs`, `run_through_mcp` in `tests/security/main.rs`; `McpClient::start_with`, `try_call`, `wait`, `send_bytes`.
+
+**Evidence.** `make test` on `nix`: 210 passed, 0 failed (177 in the main pass, 33 in the MCP security pass). `recovery_holds_through_mcp` at 3 runs per cell: 72 runs, 72 killed, 0 violations, 0 duplicated effects, 59/59 cut-off calls classified correctly. The second security pass was checked to really use `norn mcp`: the test's execution says `agent mcp`, and its stderr holds the server's stop message. At 200 per cell (`docs/results/recovery-mcp-200-nix.md`): 4,800 runs, 4,782 killed, 0 invariant violations, 0 duplicated effects, 3,897/3,897 cut-off calls classified correctly; 298 of the 400 P8 trials killed recovery inside the restarted server.
+
+**Concepts to learn.** Test oracle; why one oracle shared by two drivers is stronger than two.
+
 ---
 
 ## Still open
@@ -3686,6 +3715,8 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-26 | A tool list with `cacheScope: "session"` (not one of the two allowed values) made Claude Code drop every tool of the server and start the model with none, without any error the model or the user could see; only its debug log said why (`experiments/m15-mcp/NOTES.md`) | Test a protocol server against the real client early, with its debug log on. A client that hides a broken server is common; the server must be exact |
 | 2026-11-26 | Two items of the approved v2 plan did not survive the first contact with a real client: "finish the execution when the session ends" and "resume by id". Claude Code kills the server within half a second and restarts a dead one with the same command line (D-141) | The experiments-first rule paid off again: both would have been built and then rebuilt. A plan written from a protocol's text is a guess about its clients |
 | 2026-11-26 | The first Claude Code session through `norn mcp` failed at every call with `allowed program pytest was not found on PATH`: Claude Code had been started outside the dev shell and passes its own environment to the server. The model reported the message and changed nothing (`docs/results/mcp-claude-code-demo-nix.md`) | A client starts the server in the client's environment, not the user's shell. Putting the reason in every tool result made the failure readable from both sides; the README now says so |
+| 2026-11-26 | A new assertion that every P8 trial through MCP kills recovery failed (2 of 3 in one cell). The trial picks the n-th pass of the crash point at random, and a recovery with little to do never reaches it; the original harness counts these and never asserted them | An assertion written from what a test is meant to do, not from how it picks its cases, fails for the wrong reason. Read the existing harness's rules before adding a stricter one |
+| 2026-11-26 | The security suite through MCP finished in the same 4.2 s as the scripted pass, which looked like the switch had not taken effect. Checked: the execution says `agent mcp` and the server's stop message is in the test's stderr | A result that looks too similar deserves one look at where it came from before it is written down |
 
 ---
 
@@ -3784,3 +3815,4 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | Semantic versioning | Version numbers major.minor.patch: a new major number may break what worked, a new minor number only adds, a new patch number only fixes |
 | Signal escalation | Asking a program to stop more and more firmly: SIGINT (like Ctrl-C), then SIGTERM, then SIGKILL, which cannot be caught. Claude Code waits 100 ms and 400 ms between them (D-141) |
 | File descriptor | A small number a process uses to refer to an open file or pipe: 0 is standard input, 1 standard output, 2 standard error. `dup2(2, 1)` makes 1 point where 2 points. Close-on-exec: a descriptor that programs started later do not inherit (D-143) |
+| Test oracle | The part of a test that decides whether a result is right. The kill harness's oracle is its five invariants and the final-state check; M16 reuses it for MCP (D-144) |
