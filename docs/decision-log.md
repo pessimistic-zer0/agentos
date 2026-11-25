@@ -3763,6 +3763,33 @@ Open questions for Prince, in the draft (§8): approval of the items; whether th
 
 **Concepts to learn.** None new.
 
+### D-152 — The v3 scope, drafted: a network allow-list, approvals, secrets used by the runtime
+- **Date:** 2026-11-26
+- **Status:** Open (waiting for Prince's approval)
+- **Area:** scope
+- **ADR:** none
+
+**In plain words.** The draft is `docs/v3-scope.md`, Phase 2 of the spec as ordered by D-137. Four milestones: M19 a network allow-list for commands, through a proxy in the runtime that sees host names but not content; M20 approvals, where a risky call waits until a person runs `norn approve` for that exact call; M21 secrets, held by the runtime and used for `ext.call` to real HTTPS services so they never enter the sandbox; M22 security cases, a trial and the release. Five experiments come first. Everything is off by default.
+
+**The problem.** D-137 makes hardening the next version; its contents need Prince's approval before anything is built.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Secrets used only by the runtime, through `ext.call` extended to HTTPS | Proposed | Without TLS interception a proxy cannot add a header to HTTPS; the runtime making the request itself keeps the secret out of the sandbox (spec §9.9) |
+| The proxy injects auth headers for some hosts | Discarded | Needs TLS interception, which the spec leans against (§9.8) and which would put a CA the agent's commands trust into the sandbox |
+| An approval as a non-blocking answer ("waiting; ask again") | Proposed | No new waiting state in the gateway or in recovery; experiment E4 checks how clients take it |
+| The gateway blocks until a person answers | Discarded unless E4 shows otherwise | Clients time out a call; a blocked call held across a crash is new ground for recovery |
+| A forwarder inside the empty network namespace, to a Unix socket | Proposed | The sandbox keeps no route out; the only way out is a socket norn owns |
+| A user-mode network stack (slirp4netns, pasta) | Discarded | A new outside program, and a whole network where a single proxy port is enough |
+| Package mirror, TLS interception, webhooks for approvals, keyrings | Left out | Spec marks them later, or against |
+
+**What this means for the code.** None until approved.
+
+**Evidence.** none; reasoning only. Read: spec §9.8, §9.9, §9.11, §9.12, §14 Phase 2, Appendix A; D-073 to D-081 (`ext.call`), D-137.
+
+**Concepts to learn.** HTTP `CONNECT`; SNI; TLS interception; credential brokering; Landlock network rules (ABI 4).
+
 ---
 
 ## Still open
@@ -3771,6 +3798,7 @@ Open questions for Prince, in the draft (§8): approval of the items; whether th
 |---|---|
 | ~~A key for the hosted-model trial (M13)~~ | Not needed: Claude through a relay, at Prince's request (D-130) |
 | ~~Project name~~ | Answered by D-133: norn (Prince, 2026-11-25) |
+| The v3 scope (`docs/v3-scope.md`) | D-152: drafted 2026-11-26; Prince to approve, and to answer its four questions |
 | ~~The v2 scope (`docs/v2-scope.md`)~~ | Answered by D-139: approved as drafted; trial with Prince's account; version 1.1.0 |
 | ~~License~~ | Answered by D-069: dual MIT OR Apache-2.0 |
 | ~~Public repo from day one, or after v0.1?~~ | Answered by events: Prince pushed `main` to GitHub on 2026-11-12, after v0.1 was tagged locally |
