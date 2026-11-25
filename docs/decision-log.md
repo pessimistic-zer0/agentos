@@ -3405,6 +3405,59 @@ A first attempt to wait for the run found nothing: `gh run list --commit` was gi
 
 **Concepts to learn.** None new.
 
+### D-137 — The road map after v1.0: Phases 2 to 5 of the spec, in the order v2 MCP, v3 hardening, v4 TraceWeaver, v5 scale
+- **Date:** 2026-11-26
+- **Status:** Taken (the order; each version's contents still need their own approval)
+- **Area:** scope
+- **ADR:** none
+
+**In plain words.** After v1.0 Prince said he wants Phases 2 to 5 of the spec built eventually: hardening, TraceWeaver, integrations and scale. Not all in the next version, but over several. Claude proposed an order and Prince agreed: **v2** is the first part of Phase 4 (norn as an MCP server, plus the trial fixes); **v3** is Phase 2 (approvals, secrets, a network policy); **v4** is Phase 3 (TraceWeaver: timeline, causal graph, replay, run diff); **v5 and later** is Phase 5 (queue, fair share, pause, then a long-running service with an API, the SDKs of Phase 4 on top of it, then remote workers). This entry fixes only the order. Each version is scoped and approved on its own, like v1.0 (D-114); a later version may still be dropped.
+
+**The problem.** The four phases depend on each other, and the spec's dependency sketch (§14) puts Phase 4 as one block after Phases 2 and 3. That block mixes something that needs nothing new (an MCP server over stdio) with something that needs a long-running service (SDKs over an API).
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| v2 MCP, v3 hardening, v4 TraceWeaver, v5 scale and SDKs | Taken | MCP needs no service and no change to the threat model, and brings real agents, which shows what later phases need. Network access and keys are what real agents will ask for next, and both change the threat model, so they come before scale. TraceWeaver depends only on the log and can move earlier without harm. SDKs need the API that Phase 5's service brings, so Phase 4 is split |
+| The spec's order: Phase 2, then 3, then 4, then 5 | Discarded | Puts months of hardening before anyone else can use norn; the network policy would be designed without a real client to design for |
+| TraceWeaver first | Discarded as the default | Cheapest and safe, but adds the least use; kept as the one that may move earlier if Prince wants something visual sooner |
+| Phase 4 whole, SDKs included, in v2 | Discarded | SDKs need a stable API, and the API needs the service of Phase 5 |
+| Scale first (the D-131 sketch) | Discarded | The deepest systems work, but more agents of one kind before any outside agent can connect |
+
+**What this means for the code.** None yet. Design rules that later versions will have to change, each with its own decision when the time comes: "no network in the sandbox" (v3); "one crate, synchronous, no long-running service" (v5); "survives `kill -9`" extended to a whole machine going away (v5, remote workers).
+
+**Evidence.** none; reasoning only. Read: spec §4.2, §9.10 to §9.14, §14 and §22; D-114; D-131. Prince's words: "i was thinking of all these … not all in v2 but eventually yes", then "yes, record it and draft the v2 scope".
+
+**Concepts to learn.** Road map by dependency; why an API needs a long-running process (a daemon).
+
+### D-138 — The v2 scope, drafted: norn as an MCP server, a killed session, the trial fixes, a trial with Claude Code
+- **Date:** 2026-11-26
+- **Status:** Open (waiting for Prince's approval)
+- **Area:** scope
+- **ADR:** none
+
+**In plain words.** The draft is `docs/v2-scope.md`. Four milestones: M15 `norn mcp`, an MCP server over standard input and output whose tools go through the unchanged gateway, one session being one execution; M16 resuming a killed session, with kill cells and security cases sent through MCP; M17 the friction the trials found (a test baseline, denials that say what is allowed, `fs.search`, `fs.delete`, `replace_all` for `fs.edit`, ending a run at once on `413`); M18 a trial with Claude Code as the client on the six inventory tickets, the documents, and the release. Three experiments come first: what the MCP specification and clients need, whether a client can be kept from going around norn, and what a client does when the server dies mid-call.
+
+**The problem.** D-137 makes MCP the next version. What exactly goes in, and what stays out, has to be agreed before anything is built (CLAUDE.md: scope is fixed until Prince opens it).
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| M15 to M18 as in the draft | Proposed | MCP alone gives a front door; the fixes are what agents meet first through it; the trial is the evidence |
+| M15 and M16 only | Offered as the smaller v2 | Leaves the friction for later |
+| MCP over HTTP as well as stdio | Left out | A listening socket needs authentication and network thinking that belongs with v3 |
+| norn as an MCP client (proxying other MCP servers) | Left out | Needs network and a sandbox for those servers |
+| The resources, prompts and sampling parts of MCP | Left out | Only tools are needed for a coding agent's effects |
+| Shortening long conversations for the model | Left out (still parked) | Large and specific to the built-in LLM agent; MCP clients manage their own conversation |
+
+Open questions for Prince, in the draft (§8): approval of the items; whether the M18 trial may use his Claude Code account; the version number (1.1.0 by semantic versioning, recommended, or 2.0.0).
+
+**What this means for the code.** None until approved. If approved: a new command `norn mcp`, two new tools (`fs.search`, `fs.delete`), and no new dependency expected.
+
+**Evidence.** none; reasoning only. Read: spec §9.10 (MCP is an integration, never a dependency of the core; tool descriptions are untrusted; record the schemas), §22 (the parked trial findings); `docs/results/relay-model-trial-nix.md`; `src/tools/mod.rs` (the current tool list). The MCP details in the draft (stdio, JSON-RPC 2.0, `tools/list`, `tools/call`) are from general knowledge of the protocol, not yet checked against the current specification: that is experiment E1.
+
+**Concepts to learn.** MCP; JSON-RPC 2.0; stdio transport; semantic versioning (major.minor.patch, and what each number promises).
+
 ---
 
 ## Still open
@@ -3413,6 +3466,7 @@ A first attempt to wait for the run found nothing: `gh run list --commit` was gi
 |---|---|
 | ~~A key for the hosted-model trial (M13)~~ | Not needed: Claude through a relay, at Prince's request (D-130) |
 | ~~Project name~~ | Answered by D-133: norn (Prince, 2026-11-25) |
+| The v2 scope (`docs/v2-scope.md`) | D-138: drafted 2026-11-26; Prince to approve, and to answer its three questions |
 | ~~License~~ | Answered by D-069: dual MIT OR Apache-2.0 |
 | ~~Public repo from day one, or after v0.1?~~ | Answered by events: Prince pushed `main` to GitHub on 2026-11-12, after v0.1 was tagged locally |
 | ~~Does the `fhs` preset pass on Ubuntu?~~ | Answered by D-072: yes on Ubuntu 24.04, CI run 43385661105 (third run; the first two found B-007 and B-008) |
@@ -3590,3 +3644,7 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | Virtual machine (VM) | A whole computer simulated in software, with its own kernel; unlike a container, which shares the host's kernel |
 | cloud-init | The first-boot setup that cloud images run: it creates the user and installs the SSH key it is told about |
 | Fallback | A second place to look when the first is empty. Since D-134 a setting is read as `NORN_<name>`, and if that is not set, as `AGENTOS_<name>` |
+| MCP (Model Context Protocol) | A standard for an AI application (the client, such as Claude Code) to list and call tools offered by another program (the server). v2 makes norn such a server (D-138) |
+| JSON-RPC 2.0 | A message format: a request names a method, carries parameters and an id; the answer carries the same id. MCP uses it |
+| stdio transport | Two programs talking through the standard input and output of a child process, one message per line; no network |
+| Semantic versioning | Version numbers major.minor.patch: a new major number may break what worked, a new minor number only adds, a new patch number only fixes |

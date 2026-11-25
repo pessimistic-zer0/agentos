@@ -7,6 +7,7 @@ A Rust runtime that runs a coding agent's tool calls inside a rootless Linux san
 - `AgentOS v1 — Scoped Design.md` is **the plan**. Read it before any design or code work.
 - `AgentOS_Project_Spec.md` is a "maybe someday" list. It never adds work to v1. If the two disagree, the v1 document wins.
 - `docs/decision-log.md` records every decision taken or discarded, with reasons. Prince will study from it later, so it must stay complete.
+- `docs/v2-scope.md` is the **draft** scope of v2 (D-138). It adds no work until Prince approves it. The order of the versions after it is D-137.
 - `docs/decisions/` holds the ADRs. `docs/threat-model.md`, `docs/recovery-semantics.md`, `docs/bugs.md` and `docs/results/` are the other documents of record.
 
 ## Keep the decision log up to date
@@ -172,6 +173,7 @@ M13 (tag `m13` locally, on `5e17acb`; `docs/milestones/M13-hosted-model.md`), 20
 
 Open, and only Prince can close them:
 
-- Nothing is open. The tags `v1.0` and `m14` are on GitHub, pushed by Prince on 2026-11-25.
+- The tags `v1.0` and `m14` are on GitHub, pushed by Prince on 2026-11-25.
+- Approve the v2 scope (`docs/v2-scope.md`, D-138) and answer its three questions: which items, whether the trial may use his Claude Code account, and the version number. The order of later versions is agreed (D-137): v2 MCP, v3 hardening, v4 TraceWeaver, v5 scale.
 
 Update this section when any of these changes.

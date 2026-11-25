@@ -896,6 +896,8 @@ Phase 0 ─→ Phase 1 ─┬─→ Phase 2 ─┬─→ Phase 4 ─→ Phase 5
 
 Phases 2 and 3 can interleave; TraceWeaver mainly needs a stable event schema from Phase 1.
 
+**Order agreed after v1.0 (2026-11-26, D-137).** v2: the MCP server of Phase 4, with the trial fixes from §22 (draft scope: `docs/v2-scope.md`, D-138). v3: Phase 2 (approvals, secrets, network policy). v4: Phase 3 (TraceWeaver). v5 and later: Phase 5, then the daemon, API and SDKs of Phase 4 on top of it, then remote workers. Each version is scoped and approved on its own; this fixes only the order.
+
 ---
 
 ## 15. Technology stack
