@@ -3717,6 +3717,52 @@ Open questions for Prince, in the draft (§8): approval of the items; whether th
 
 **Concepts to learn.** HTTP status codes 413 and 429.
 
+### D-149 — The six inventory tickets through `norn mcp`: Claude Code solved six of six with norn's tools as its only tools
+- **Date:** 2026-11-26
+- **Status:** Taken
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** The evidence for v2 (item D1): the same six tickets as M13, this time with Claude Code itself as the agent, connected through `norn mcp` with its own tools switched off. All six were solved and checked on a fresh clone against the solution notes, with the same numbers as the notes give. The new tools were used at once: `fs.search` in five tickets, `fs.delete` to remove a throwaway test file, and a refused command was followed by the allowed one.
+
+**The problem.** v2 plan item D1; Prince's account approved for it (D-139).
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| The same project, task texts and policy as M13; one Claude Code session per ticket, all six at once; checks as in M13 | Taken | Comparable with M13; only the agent and the front door differ |
+| Let the agents keep their own tools | Discarded | They could go around norn; the trial would not show the front door |
+| Several runs per ticket | Discarded | A record, not a benchmark; the costs are Prince's |
+
+**What this means for the code.** None.
+
+**Evidence.** `docs/results/mcp-claude-code-trial-nix.md`: six of six right against `SOLUTIONS.md` (INV-101 one-character fix; INV-102 `WEB-104240 (EUR)`; INV-103 8/14/15 alerts with the notes' first rows; INV-104 taxes 40.77, 183.75, 278.08; INV-105 0 skipped and 2,613 of 2,613 rows equal to the truth file; INV-106 version 2, the four reorder points, an executable script with stable output). 126 calls, 4 refused, 1.97 USD, model `claude-opus-5-5`. The scripts and state folders are in `~/Temp/AgentOS_temp/run5/`.
+
+**Concepts to learn.** None new.
+
+### D-150 — Version 1.1.0, set with the trial's record; the tag `v1.1` waits for CI
+- **Date:** 2026-11-26
+- **Status:** Taken
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** All four v2 milestones are built and tested on `nix`. The version in `Cargo.toml` is now 1.1.0 (D-139: minor number, nothing breaks), and the CHANGELOG's section is "1.1.0". The milestones M15 to M18 and the release are tagged only after a green CI run on this commit (D-113), which needs a push by Prince.
+
+**The problem.** M18's last step; the same order as D-135 and D-136 for 1.0.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Set 1.1.0 in the same commit as the trial and the documents; tag after CI | Taken | One CI run then covers M15 to M18 and the release |
+| Tag `m15` to `m18` and `v1.1` together on this commit, after its CI run | Taken | D-113 tags only commits CI has run, and CI runs on what is pushed: this commit. The milestone commits stay in the history, each named in its milestone document |
+| Tag `m15` to `m17` on their own commits | Discarded | None of them will have a CI run of its own |
+
+**What this means for the code.** `Cargo.toml` `version = "1.1.0"`.
+
+**Evidence.** On `nix` after the change: `make test` 223 passed, 0 failed; `make demo` finished `completed`; `packaging/release.sh --check` packed `norn-1.1.0-x86_64-linux.tar.gz (3.8M)`, the unpacked program printed `norn 1.1.0` and ran the demo task. Not yet run on `fhs`.
+
+**Concepts to learn.** None new.
+
 ---
 
 ## Still open

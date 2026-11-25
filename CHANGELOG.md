@@ -2,7 +2,9 @@
 
 What changed for someone who uses Norn, newest first. The reasons are in `docs/decision-log.md` (the `D-` numbers); the bugs in `docs/bugs.md` (the `B-` numbers).
 
-## Unreleased (will be 1.1.0, plan "v2": `docs/v2-scope.md`)
+## 1.1.0 (2026-11-26; the plan "v2": `docs/v2-scope.md`)
+
+Tag `v1.1` once CI has passed on this commit (D-113, D-150). Policy files and execution folders of 1.0 work unchanged.
 
 ### Added
 

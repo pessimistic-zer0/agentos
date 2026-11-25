@@ -2,7 +2,7 @@
 
 *Drafted 2026-11-26 (D-138); approved by Prince the same day, as drafted (D-139). Road map it belongs to: D-137.*
 
-**Status: approved; this is the plan for v2.** All four milestones are in. The M18 trial uses Prince's Claude Code account. The release is numbered 1.1.0. Anything not listed here stays parked (spec §22), and the rule in CLAUDE.md holds: no feature that this plan does not list.
+**Status: built (M15 to M18, 2026-11-26), verified on `nix`; `fhs` waits for CI. Approved; this is the plan for v2.** All four milestones are in. The M18 trial uses Prince's Claude Code account. The release is numbered 1.1.0. Anything not listed here stays parked (spec §22), and the rule in CLAUDE.md holds: no feature that this plan does not list.
 
 ## 1. In one paragraph
 

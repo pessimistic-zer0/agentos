@@ -225,3 +225,13 @@ The harness was shown able to fail here too: with recovery answering "not applie
 - **The answer of a reconciled call.** The agent is told the call was applied; the service's answer is kept only as the first 200 characters in the verdict's reason.
 - **Order between the workspace and the service.** If a later `exec` is rolled back, an earlier `ext.call` stays done. The two are not one transaction.
 
+## 10. A killed MCP session (added for v2)
+
+With `norn mcp` the agent is a client such as Claude Code (D-139). Nothing in sections 1 to 6 changes: every `tools/call` goes through the same gateway, with the same intent, checkpoint and completion record. What changes is who restarts, and who finishes:
+
+- **A stop is only a stop.** A client ends a session with SIGINT and kills the server half a second later (`experiments/m15-mcp/NOTES.md`, E3b). norn handles it like any stop (D-106): it exits at once, and the execution is left unfinished, exactly as after `kill -9`.
+- **The client restarts the server; the server continues the execution.** A client starts a dead server again with the same command line (E3). `norn mcp` then continues the newest unfinished MCP execution of that repository, and runs recovery before its first answer (design rule 5). A call the client sends again is a new call with a new id (D-141).
+- **The person finishes it.** `norn finish <id>` settles a cut-off call and writes the patch; `norn apply` is as before.
+
+Checked: the kill cells of section 6 driven by an MCP client that restarts the server after each kill, 200 per cell: 4,800 runs, 4,782 killed, 0 invariant violations, 0 duplicated effects, 3,897 of 3,897 cut-off calls classified correctly (`docs/results/recovery-mcp-200-nix.md`, D-144). `fs.delete` is recovered like a write: absent means applied (1,600 runs, 0 violations, `docs/results/recovery-delete-200-nix.md`, D-147).
+
