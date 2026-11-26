@@ -14,6 +14,11 @@
 //! the connection open. See what was applied with:
 //!
 //!   curl http://127.0.0.1:8099/state
+//!
+//! Since v3 (M21): `FAKE_SERVICE_TLS=1` serves HTTPS with the test
+//! certificate of `tests/fixtures/tls/` (trust `tests/fixtures/tls/ca.pem`
+//! with `ca_file`), and `FAKE_SERVICE_AUTH='Bearer xyz'` answers 401 to any
+//! request without exactly that `Authorization` header.
 
 #[path = "../tests/common/fake_service.rs"]
 mod fake_service;
@@ -40,7 +45,13 @@ fn main() -> Result<()> {
         None => 8099,
     };
     let hold = std::env::var("FAKE_SERVICE_HOLD_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(5000);
-    let service = FakeService::start(port, Duration::from_millis(hold)).with_context(|| format!("listening on 127.0.0.1:{port}"))?;
+    let tls = std::env::var("FAKE_SERVICE_TLS").as_deref() == Ok("1");
+    let start = if tls { FakeService::start_tls } else { FakeService::start };
+    let service = start(port, Duration::from_millis(hold)).with_context(|| format!("listening on 127.0.0.1:{port}"))?;
+    if let Ok(auth) = std::env::var("FAKE_SERVICE_AUTH") {
+        service.require_auth(&auth);
+        println!("requests need the Authorization header given in FAKE_SERVICE_AUTH");
+    }
     if let Ok(spec) = std::env::var("FAKE_SERVICE_FAULTS") {
         for part in spec.split(';').filter(|p| !p.is_empty()) {
             let (payload, list) = part.split_once('=').with_context(|| format!("`{part}` is not payload=fault,fault"))?;
@@ -49,13 +60,15 @@ fn main() -> Result<()> {
             println!("faults for payload {payload:?}: {faults:?}");
         }
     }
-    println!("fake service listening; put this in the policy:\n\n[[external.service]]\nname = \"ledger\"\nurl = \"{}\"\n", service.url());
+    let ca = if tls { format!("ca_file = \"{}/tests/fixtures/tls/ca.pem\"\n", env!("CARGO_MANIFEST_DIR")) } else { String::new() };
+    println!("fake service listening; put this in the policy:\n\n[[external.service]]\nname = \"ledger\"\nurl = \"{}\"\n{ca}", service.url());
     let mut printed = 0;
     loop {
         std::thread::sleep(Duration::from_millis(200));
         let seen = service.seen();
         for s in &seen[printed..] {
-            println!("{:<22} key {}  payload {:?}", s.outcome, s.key, s.payload);
+            let auth = if s.authorization.is_some() { "  (with Authorization)" } else { "" };
+            println!("{:<22} key {}  payload {:?}{auth}", s.outcome, s.key, s.payload);
         }
         printed = seen.len();
     }
