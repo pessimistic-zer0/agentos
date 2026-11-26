@@ -757,13 +757,20 @@ fn toctou_attempt(n: usize) -> (u64, usize, usize) {
     let id = std::fs::read_dir(t.state.join("executions")).unwrap().next().unwrap().unwrap().file_name().to_string_lossy().into_owned();
     let mut finished = first.status.success();
     let mut restarts = 0;
+    // Why the first run and the last resume stopped, for the failure message.
+    let mut why = format!("first run: {}", String::from_utf8_lossy(&first.stderr).trim());
     while !finished && restarts < 400 {
         restarts += 1;
-        finished = t.output(&["run", "--quiet", "--resume", &id]).status.success();
+        let out = t.output(&["run", "--quiet", "--resume", &id]);
+        finished = out.status.success();
+        if !finished {
+            why = format!("{why}\nlast resume ({}): {}", out.status, String::from_utf8_lossy(&out.stderr).trim());
+            why = why.lines().take(1).chain(why.lines().rev().take(1)).collect::<Vec<_>>().join("\n");
+        }
     }
     stop.store(true, Ordering::SeqCst);
     let swaps = swapper.join().unwrap();
-    assert!(finished, "the run did not finish even after {restarts} restarts");
+    assert!(finished, "the run did not finish even after {restarts} restarts\n{why}");
 
     let leaked: Vec<_> = std::fs::read_dir(&outside).unwrap().map(|e| e.unwrap().file_name()).filter(|n| n != "secret.txt").collect();
     assert!(leaked.is_empty(), "files were written outside the workspace: {leaked:?}");

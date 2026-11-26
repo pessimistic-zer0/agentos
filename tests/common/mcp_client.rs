@@ -109,6 +109,13 @@ impl McpClient {
         if self.stdout.read_line(&mut line).ok()? == 0 {
             return None;
         }
+        // A server killed while it wrote its answer leaves part of a line
+        // and then the end of its output. A client can only take that as
+        // "connection closed" (found in CI run 45723220958). A complete
+        // line must still be exactly one JSON message.
+        if !line.ends_with('\n') {
+            return None;
+        }
         let a: Value = serde_json::from_str(&line).unwrap_or_else(|e| panic!("not a JSON message on stdout ({e}): {line:?}"));
         let r = &a["result"];
         Some((r["isError"].as_bool()?, r["content"][0]["text"].as_str()?.to_string()))
