@@ -1754,7 +1754,7 @@ Which nixpkgs commit to pin was a second, smaller choice:
 
 ### D-074 — External services are named in the policy and must be on `127.0.0.1`
 - **Date:** 2026-11-13
-- **Status:** Taken
+- **Status:** Taken; replaced in part by D-162 (an `https://` service may be elsewhere; plain `http://` is still `127.0.0.1` only)
 - **Area:** policy
 - **ADR:** none
 
@@ -4029,6 +4029,38 @@ Earlier runs on the way: 45723220958 on `2312511` (failed: MCP test client, TOCT
 
 **Concepts to learn.** Human in the loop; single-use token; time-of-check to time-of-use for approvals.
 
+### D-162 — How secrets and HTTPS services are built (M21)
+- **Date:** 2026-11-26
+- **Status:** Taken
+- **Area:** policy
+- **ADR:** none
+
+**In plain words.** A policy can now name secrets (`[secrets]`) and where each comes from: an environment variable or a file. The runtime reads them when it starts and uses them in one place only: the headers of an `ext.call` to an `https://` service, which the runtime sends itself, outside the sandbox. The log and the intent hold the header's template (`Bearer {secret:TRACKER_TOKEN}`), never the value. Whatever comes back is searched for the values, which are replaced by `[secret:NAME]` before anything is stored or shown, and so is the patch. A remote service waits for a person's approval unless it says otherwise.
+
+**The problem.** Building M21 (S1 to S4 of `docs/v3-scope.md`); D-074 allowed only `http://127.0.0.1`.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| `[secrets] NAME = { from = "env" [, var = "X"] }` or `{ from = "file", path = "/abs" }` | Taken | The plan (S1); keyrings and vaults are left out (v3 scope §5) |
+| Refuse a value shorter than 8 characters, or one with a line break | Taken | Redaction replaces every occurrence of the value; a 3-letter value would mangle ordinary text. A line break could split a header |
+| Allow `https://host[:port][/path]` for a service; plain `http://` stays `127.0.0.1` by number | Taken | S2; this replaces D-074 in part. A secret header is allowed only on `https://`, so a token never crosses the network in clear text |
+| `ca_file` per service, trusting that CA only | Taken | D-157; how the local fake HTTPS service is trusted |
+| Header templates with `{secret:NAME}`; names checked against `[secrets]` when the policy loads | Taken | A typing mistake is found before a run, not at the first call |
+| Intent records the templates and the CA path; recovery reads the secrets again from the execution's own policy | Taken | Recovery must send exactly the same request (D-077), and the log must never hold a value. Without the secret in its environment, recovery fails and says which variable it needs; the call stays uncertain |
+| Redaction of tool outputs and error texts in the gateway, of the reason recovery writes, and of the patch | Taken | S3 backstop. Inputs from the agent are not redacted: the agent never sees a value, so it cannot send one |
+| Redaction inside `EventLog::append` for every event | Discarded | The log would need to know the secrets; the gateway already sees everything that comes from outside before it is logged |
+| A remote (`https://`) service waits for approval unless `approval = false` | Taken | S4 |
+| A failed TLS handshake (an untrusted certificate) counts as "no answer", like any error (D-077) | Taken, for now | Nothing was sent, but telling that apart needs matching on the error's text. The run stops uncertain and recovery fails the same way until the policy is fixed; the secret is never sent (test) |
+| `norn check` reads the secrets and reports a missing one as a problem, by name | Taken | A first user finds out before a run |
+| `rustls` as a development dependency for the fake service's TLS | Taken | D-157 |
+
+**What this means for the code.** `src/secrets.rs` (new), `src/policy.rs` (`secrets`, `SecretSource`, `ExternalService::{ca_file, headers, approval}`, `is_https_url`), `src/tools/ext.rs` (`Target`), `src/gateway.rs` (the secrets, S4, redaction), `src/recovery.rs`, `src/runtime.rs` (loading at start and resume, `check`, the patch). `tests/common/fake_service.rs` serves HTTPS with the test certificate, records the `Authorization` header, can require it, and echoes headers for a payload starting with `echo`. Tests: `tests/secrets.rs` (6), unit tests in `secrets.rs` and `policy.rs`.
+
+**Evidence.** On `nix`: `cargo test --test secrets` 6 passed: the service got `Bearer tok-…` once; its echo reached the agent as `Bearer [secret:TRACKER_TOKEN]`; no file in the execution folder (log, blobs, workspace, checkpoints, patch, saved policy) holds the value; a command's environment does not; a remote service waited for approval and got nothing; a missing variable stopped the run before an execution was made and `norn check` failed; an untrusted certificate got no request; recovery without the variable failed naming it, and with it sent the same request with the header (`applied-then-dropped`, then `replayed`, applied once). `cargo test --test external` 14 passed unchanged. `cargo test --lib` 58 passed, with `external_urls_must_be_loopback_by_number` changed for the new rule (D-074's `https://127.0.0.1` case is now accepted; six HTTPS forms are refused).
+
+**Concepts to learn.** Credential brokering; redaction; bearer token.
+
 ---
 
 ## Still open
@@ -4250,3 +4282,6 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | Link-local address | An address valid only on one network link, such as `169.254.x.x`. Cloud machines serve their metadata (sometimes with credentials) at `169.254.169.254` (D-160) |
 | Approval (here) | A person's yes to one exact call, given with `norn approve`, used once, with an expiry (D-161) |
 | Single-use token | Something that allows one action and is spent by it, so a repeated request needs a new one (D-161) |
+| Bearer token | A secret string that grants access to whoever presents it, sent in the `Authorization` header (D-162) |
+| Redaction | Replacing a secret's value with a placeholder before text is stored or shown (D-162) |
+| Credential brokering | The runtime holds a secret and uses it for the agent, which only names what it wants done (D-152, D-162) |

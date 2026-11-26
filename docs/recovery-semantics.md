@@ -246,3 +246,7 @@ Checked: the kill cells of section 6 with `[network]` on, each `exec` asking the
 ## 12. Approvals (added for v3)
 
 A call that waits for approval is not run, so there is nothing to recover: it ends with `approval.requested` (or `approval.refused`), with no intent. A call that uses a yes logs `approval.used` before its intent; from there on it is an ordinary call. If a crash comes between the two, the call is reconciled as NOT APPLIED like any call cut off before its intent, and the yes is spent: the agent asks again, and the person approves again. Spending it is the safe side: a yes is for one run, and recovery cannot tell whether the agent will ask again.
+
+## 13. `ext.call` with a secret (added for v3)
+
+The intent of an `ext.call` records the request as it will be sent, except for secret values: it holds the header templates (`Bearer {secret:NAME}`) and the CA file (D-162). Recovery sends the same request again with the same idempotency key, as in §9, and fills the templates in from the secrets of the execution's own policy, read again from the environment or files at that moment. If a secret cannot be read then, recovery stops with the variable or file it needs named, and the call stays uncertain: guessing, or sending without the header, would break design rule 5. Checked: `recovery_sends_the_same_request_with_the_secret_again` (`tests/secrets.rs`).

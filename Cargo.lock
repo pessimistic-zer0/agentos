@@ -732,6 +732,7 @@ dependencies = [
  "libc",
  "nix",
  "rusqlite",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",

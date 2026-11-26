@@ -143,6 +143,8 @@ The service is a small fake (`tests/common/fake_service.rs`; run it with `cargo 
 
 Raw data: [`docs/results/recovery-ext-200-nix.md`](docs/results/recovery-ext-200-nix.md), [`recovery-ext-200-fhs.md`](docs/results/recovery-ext-200-fhs.md) (one CI run, [43436681321](https://github.com/pessimistic-zer0/agentos/actions/runs/43436681321)), [`recovery-ext-mutations.md`](docs/results/recovery-ext-mutations.md).
 
+Since v3 a service may also be `https://` anywhere, with secrets the runtime adds itself (see [Secrets](#secrets-for-a-real-service)).
+
 It is off by default: the shipped policies have no `[external]` section, and the LLM agent is not offered the tool. Allowing it gives the agent a way to send data out; read [`docs/threat-model.md`](docs/threat-model.md) §7 first. Details: [`docs/recovery-semantics.md`](docs/recovery-semantics.md) §9.
 
 ## How it works
@@ -298,6 +300,28 @@ allow = ["pypi.org", "files.pythonhosted.org"]
 - Every connection is logged with its host, port and bytes, and `norn trace` shows them under the call. `norn check` says which hosts a policy opens.
 - A name that resolves to this machine (`localhost`, or a name pointed at `127.0.0.1`) is refused; write the address to mean it.
 - What a command sends to an allowed host cannot be undone. Read [the threat model](docs/threat-model.md), §9, before listing a host.
+
+### Secrets for a real service
+
+To let the agent act on a real service (open an issue, say) without ever seeing the token, the runtime holds the token and adds it to the request itself:
+
+```toml
+[secrets]
+TRACKER_TOKEN = { from = "env" }          # or { from = "env", var = "OTHER_NAME" }, or { from = "file", path = "/home/me/.config/token" }
+
+[[external.service]]
+name = "tracker"
+url  = "https://tracker.example.com/api/issues"
+# ca_file = "/path/to/ca.pem"             # only for a private certificate authority
+[external.service.headers]
+Authorization = "Bearer {secret:TRACKER_TOKEN}"
+```
+
+- The secret is read when norn starts (`norn check` says whether it can be read, never what it is). It never enters the sandbox, the event log, the workspace or the patch; if a service echoes it back, the agent sees `[secret:TRACKER_TOKEN]`.
+- A header with a secret is sent only over `https://`. Certificates are checked against Mozilla's list built into norn, or against `ca_file` alone.
+- A call to an `https://` service waits for your approval (below) unless the service says `approval = false`.
+- After a crash, `norn recover` sends the same request again; it needs the same secret in its environment and says so if it is missing.
+- Read [the threat model](docs/threat-model.md), §11.
 
 ### Calls that wait for a person
 

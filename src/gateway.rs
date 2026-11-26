@@ -64,6 +64,9 @@ pub struct Gateway {
     /// and `fs.read` / `fs.list` of paths in them are answered from here
     /// (D-122).
     repo: PathBuf,
+    /// The policy's secrets, read at start (M21). Used for `ext.call`
+    /// headers, and to take their values out of anything stored or shown.
+    secrets: crate::secrets::Secrets,
 }
 
 /// The proxy variables for a command when the policy allows hosts (M19).
@@ -98,8 +101,10 @@ enum Approved {
     Delete { target: WriteTarget, bytes: u64 },
     Search { fd: OwnedFd, rel: String, pattern: String },
     Exec { argv: Vec<String> },
-    /// `url` comes from the policy rule that allowed the call, never from the agent.
-    Ext { service: String, url: String, payload: String },
+    /// `url`, `headers` (templates, with `{secret:NAME}` unfilled) and
+    /// `ca_file` come from the policy rule that allowed the call, never from
+    /// the agent.
+    Ext { service: String, url: String, payload: String, headers: std::collections::BTreeMap<String, String>, ca_file: Option<String> },
 }
 
 /// The outcome of the policy step.
@@ -125,11 +130,12 @@ impl Gateway {
         next_call_id: u64,
         last_checkpoint: String,
         repo: PathBuf,
+        secrets: crate::secrets::Secrets,
     ) -> Gateway {
         let blobs = BlobStore::new(&dir.blobs());
         // LANG is one of the three variables passed through (with PATH and HOME).
         let lang = std::env::var("LANG").unwrap_or_else(|_| "C.UTF-8".into());
-        Gateway { dir, log, policy, blobs, programs, sandbox, lang, next_call_id, last_checkpoint, repo }
+        Gateway { dir, log, policy, blobs, programs, sandbox, lang, next_call_id, last_checkpoint, repo, secrets }
     }
 
     /// Handle one tool call from start to end. An `Err` here means the runtime
@@ -227,6 +233,8 @@ impl Gateway {
                 } else {
                     None
                 };
+                // S3: no secret's value is stored or shown, whatever came back.
+                let output = self.redact_output(output)?;
                 let blob = self.blobs.put(&serde_json::to_vec(&output)?)?;
                 self.log.append(EventBody::ToolCompleted {
                     call_id,
@@ -241,10 +249,22 @@ impl Gateway {
                 Ok(ToolResult { call_id, outcome: ToolOutcome::Ok, output: Some(output) })
             }
             Err(e) => {
-                self.log.append(EventBody::ToolFailed { call_id, error: e.0.clone() })?;
-                Ok(ToolResult { call_id, outcome: ToolOutcome::Failed { error: e.0 }, output: None })
+                let error = self.secrets.redact(&e.0);
+                self.log.append(EventBody::ToolFailed { call_id, error: error.clone() })?;
+                Ok(ToolResult { call_id, outcome: ToolOutcome::Failed { error }, output: None })
             }
         }
+    }
+
+    /// The output with every secret's value replaced by `[secret:NAME]`
+    /// (S3). Without secrets it is returned as it is.
+    fn redact_output(&self, output: ToolOutput) -> Result<ToolOutput> {
+        if self.secrets.is_empty() {
+            return Ok(output);
+        }
+        let mut v = serde_json::to_value(&output)?;
+        self.secrets.redact_json(&mut v);
+        Ok(serde_json::from_value(v)?)
     }
 
     /// The `approvals.require` entry this allowed call falls under, judged
@@ -258,7 +278,19 @@ impl Gateway {
             Approved::Ext { service, .. } => ApprovalSubject::Service(service),
             Approved::Read { .. } | Approved::List { .. } | Approved::Search { .. } => return None,
         };
-        self.policy.approval_rule(call.name(), &subject)
+        if let Some(rule) = self.policy.approval_rule(call.name(), &subject) {
+            return Some(rule);
+        }
+        // S4: a call to a remote (HTTPS) service acts on someone else's
+        // system and cannot be rolled back; it waits for a person unless the
+        // service says `approval = false`.
+        if let Approved::Ext { service, .. } = a {
+            let (d, s) = self.policy.check_external(service);
+            if s.is_some_and(|s| s.is_remote() && s.approval != Some(false)) {
+                return Some(format!("{} (a remote service: its calls wait for approval unless it says approval = false)", d.rule));
+            }
+        }
+        None
     }
 
     /// Look for a person's answer to this exact call. `None`: there is a
@@ -500,9 +532,10 @@ impl Gateway {
                 if d.allowed { Decided::Allow(d, Approved::Exec { argv: argv.clone() }) } else { Decided::Deny(d) }
             }
             ToolCall::ExtCall { service, payload } => match policy.check_external(service) {
-                (d, Some(s)) if d.allowed => {
-                    Decided::Allow(d, Approved::Ext { service: service.clone(), url: s.url.clone(), payload: payload.clone() })
-                }
+                (d, Some(s)) if d.allowed => Decided::Allow(
+                    d,
+                    Approved::Ext { service: service.clone(), url: s.url.clone(), payload: payload.clone(), headers: s.headers.clone(), ca_file: s.ca_file.clone() },
+                ),
                 (d, _) => Decided::Deny(d),
             },
         }
@@ -558,9 +591,13 @@ impl Gateway {
             }
             // Everything needed to send the request again after a crash,
             // exactly as it would have been sent the first time (D-077).
-            Approved::Ext { service, url, payload } => json!({
+            // Header templates, not their values: the log never holds a
+            // secret, and recovery fills them in again (M21).
+            Approved::Ext { service, url, payload, headers, ca_file } => json!({
                 "service": service,
                 "url": url,
+                "headers": headers,
+                "ca_file": ca_file,
                 "key": ext::idempotency_key(&self.dir.id, call_id),
                 "payload_hash": crate::blob::content_hash(payload.as_bytes()),
                 "timeout_ms": self.policy.external.timeout_ms,
@@ -609,10 +646,15 @@ impl Gateway {
                 };
                 Ok(out)
             }
-            Approved::Ext { service, url, payload } => {
+            Approved::Ext { service, url, payload, headers, ca_file } => {
                 let key = ext::idempotency_key(&self.dir.id, call_id);
                 let timeout = std::time::Duration::from_millis(self.policy.external.timeout_ms);
-                let (answer, sent) = ext::send_until_answered(&url, &key, &payload, timeout, self.policy.external.attempts, max as usize);
+                let target = match ext::Target::build(&url, &headers, ca_file.as_deref(), &self.secrets) {
+                    Ok(t) => t,
+                    // Nothing was sent: an ordinary failure, not an uncertain call.
+                    Err(e) => return Ok(Err(ToolError::new(format!("service `{service}`: {e:#}; nothing was sent")))),
+                };
+                let (answer, sent) = ext::send_until_answered(&target, &key, &payload, timeout, self.policy.external.attempts, max as usize);
                 match answer {
                     Answer::Applied { status, body } => Ok(ToolOutput::External { status, body, attempts: sent }),
                     Answer::Refused { status, body } => Err(ToolError::new(format!(

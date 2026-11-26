@@ -243,13 +243,25 @@ fn reconcile_external(dir: &ExecDir, call_id: u64, service: &str, payload_hash: 
         .get(payload_hash)
         .with_context(|| format!("the payload of call {call_id} is not in the blob store"))?;
     let payload = String::from_utf8(payload).context("the stored payload is not text")?;
-    let (answer, sent) = ext::send_until_answered(url, key, &payload, timeout, attempts, 64 * 1024);
+    // The same request as the first time: the same URL, the same header
+    // templates and CA from the intent (absent in intents written before
+    // v3), with the secrets read again from this execution's own policy.
+    let headers: std::collections::BTreeMap<String, String> = plan.get("headers").cloned().map(serde_json::from_value).transpose()?.unwrap_or_default();
+    let ca_file = plan.get("ca_file").and_then(Value::as_str);
+    let secrets = if headers.is_empty() {
+        crate::secrets::Secrets::default()
+    } else {
+        let (policy, _) = crate::policy::Policy::load(&dir.policy())?;
+        crate::secrets::Secrets::load(&policy).context("the call to send again needs a secret")?
+    };
+    let target = ext::Target::build(url, &headers, ca_file, &secrets)?;
+    let (answer, sent) = ext::send_until_answered(&target, key, &payload, timeout, attempts, 64 * 1024);
     match answer {
         Answer::Applied { status, body } => Ok(Outcome {
             applied: true,
             reason: format!(
                 "service `{service}` answered HTTP {status} to the same request sent again with idempotency key {key}; answer: {}",
-                body.chars().take(200).collect::<String>()
+                secrets.redact(&body.chars().take(200).collect::<String>())
             ),
             checkpoint: None,
             restored: None,

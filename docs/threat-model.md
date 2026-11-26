@@ -190,3 +190,20 @@ What this does not stop: anything sent *to an allowed host* (a package registry 
 | A7 | A mistyped id approves something else | `norn approve` accepts only an id that is waiting | `approve_refuses_an_id_that_is_not_waiting` |
 
 What this does not stop: a person who approves without reading. `norn approve <execution>` shows each waiting call, and a diff for writes; for `exec` it shows the command line only, not what the command will do.
+
+## 11. Secrets and HTTPS services (added for v3)
+
+A policy may name secrets (`[secrets]`) that the runtime reads at start and puts into the headers of `ext.call` requests to `https://` services (M21, D-162). The design goal is that the agent can *use* a token without ever *having* it.
+
+**What is new in the trust picture.** Trusted: the runtime's own environment or the secret's file, and the service the policy names (it receives the token; that is the point). Not trusted, as before: the agent, the payload, the service's answer.
+
+| # | Attack | Defence | Test (`tests/secrets.rs` unless named) |
+|---|---|---|---|
+| S1 | Read the secret from a command: its environment, `/proc` | The value is never put in the sandbox; the sandbox's environment is built from the policy's fixed text | `the_service_gets_the_secret_and_nothing_else_does` (prints `os.environ` and `/proc/self/environ`) |
+| S2 | Find it in the files of the execution: log, intent, blobs, workspace, checkpoints, patch, saved policy | The intent holds the header template; values are never written | same (searches every file of the execution folder) |
+| S3 | A service that echoes the header back, so the agent reads it | Every secret's value in an output or error is replaced by `[secret:NAME]`; the patch too | same (`echo` payload) |
+| S4 | Send the token to an impostor (a service with a certificate nobody trusted) | TLS verification against the compiled-in list or the service's `ca_file`; the header is sent only after the handshake | `a_service_with_an_untrusted_certificate_never_gets_the_secret` |
+| S5 | Send the token in clear text | A header with a secret is allowed only for `https://` services | `policies_that_would_leak_a_secret_are_refused`; `policy::tests` |
+| S6 | Make the agent's call act on the real service without anyone looking | Remote services wait for approval unless the policy says `approval = false` (§10) | `a_remote_service_waits_for_approval_by_default` |
+
+What this does not stop: the service doing whatever the token allows with whatever payload the agent wrote, once a person approved the call (or the policy switched approval off). The payload is the agent's text. A secret's value that also appears in ordinary text (a token equal to a word in a file) is replaced there too; values shorter than 8 characters are refused for this reason. A process on the same machine, under the same user, can read the runtime's environment; that is outside norn's scope as it was for the model's API key.

@@ -9,7 +9,7 @@ Norn writes two kinds of file that outlive the program that wrote them: the **po
 **1. A policy file that 1.0 accepts is accepted by every 1.x, and means the same.**
 
 - The file says `policy_version = 1`. Every 1.x reads version 1.
-- New settings are only ever added as optional, with a default that changes nothing for a file that does not use them. (That is how every setting since v0.1 was added: `skip`, `scratch`, `deny_except`, `ro_dirs`, `helpers`, `[sandbox.env]`, `[external]`, `limits.workspace_mb`, and in 1.2 `[network]` and `[approvals]`.)
+- New settings are only ever added as optional, with a default that changes nothing for a file that does not use them. (That is how every setting since v0.1 was added: `skip`, `scratch`, `deny_except`, `ro_dirs`, `helpers`, `[sandbox.env]`, `[external]`, `limits.workspace_mb`, and in 1.2 `[network]`, `[approvals]`, `[secrets]` and the service settings `ca_file`, `headers`, `approval`.)
 - No setting is removed or given another meaning within version 1. If that ever has to happen, the file format becomes `policy_version = 2`, and a 1.x program refuses a version 2 file by name instead of guessing.
 
 **2. An execution folder written by 1.0 or a later 1.x can be used by every later 1.x**, with every command: `status`, `trace`, `recover`, `run --resume`, `apply`, `rm`.

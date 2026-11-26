@@ -22,6 +22,9 @@ libc = "0.2"
 ureq = { version = "3", features = ["json"] }
 
 [dev-dependencies]
+# The server side of TLS for the fake HTTPS service in the tests (D-157).
+# Already built as part of ureq; this only lets the tests use it directly.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 
 [[bench]]

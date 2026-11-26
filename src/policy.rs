@@ -46,6 +46,8 @@ pub enum PolicyError {
     Network { entry: String, reason: &'static str },
     #[error("approvals.require entry `{entry}`: {reason}")]
     Approval { entry: String, reason: &'static str },
+    #[error("secrets.{name}: {reason}")]
+    Secret { name: String, reason: &'static str },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -70,6 +72,25 @@ pub struct Policy {
     /// Absent: no call waits, as before.
     #[serde(default)]
     pub approvals: ApprovalRules,
+    /// Secrets the runtime reads at start and uses for `ext.call` headers
+    /// (M21, D-153). Only where each one comes from is written here, never
+    /// its value.
+    #[serde(default)]
+    pub secrets: std::collections::BTreeMap<String, SecretSource>,
+}
+
+/// Where one secret comes from.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SecretSource {
+    /// `env`: the runtime's environment variable `var` (by default the
+    /// secret's own name). `file`: the whole file at `path`, without its
+    /// final newline.
+    pub from: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub var: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }
 
 /// The `[approvals]` section.
@@ -312,9 +333,65 @@ pub struct ExternalRules {
 #[serde(deny_unknown_fields)]
 pub struct ExternalService {
     pub name: String,
-    /// Must be `http://127.0.0.1:<port>[/path]`: the same machine, by number
-    /// (D-074). Anything else is refused when the policy is loaded.
+    /// `http://127.0.0.1:<port>[/path]`: the same machine, by number
+    /// (D-074); or, since v3, `https://host[:port][/path]`, a service
+    /// elsewhere (M21). Anything else is refused when the policy is loaded.
     pub url: String,
+    /// HTTPS only: a PEM file with the one certificate authority to trust
+    /// for this service, instead of the usual list (D-157). For a private or
+    /// test service.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ca_file: Option<String>,
+    /// Extra request headers. A value may name secrets as
+    /// `{secret:NAME}`; the runtime fills them in when it sends, and only
+    /// over HTTPS. Example: `Authorization = "Bearer {secret:TOKEN}"`.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub headers: std::collections::BTreeMap<String, String>,
+    /// Whether calls wait for a person's yes (M20). A remote (HTTPS)
+    /// service waits unless this is `false` (S4); a local one waits only if
+    /// `[approvals]` says so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<bool>,
+}
+
+impl ExternalService {
+    /// An `https://` service: outside this machine, or at least outside
+    /// the v1 rule of one local service by number.
+    pub fn is_remote(&self) -> bool {
+        self.url.starts_with("https://")
+    }
+
+    /// The names of the secrets the headers use, in order of appearance.
+    pub fn secret_names(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for v in self.headers.values() {
+            let mut rest = v.as_str();
+            while let Some(at) = rest.find("{secret:") {
+                let after = &rest[at + "{secret:".len()..];
+                let Some(end) = after.find('}') else { break };
+                out.push(after[..end].to_string());
+                rest = &after[end + 1..];
+            }
+        }
+        out
+    }
+}
+
+/// Headers the runtime sets itself, or that HTTP needs to be right.
+const RESERVED_HEADERS: [&str; 5] = ["host", "content-length", "content-type", "idempotency-key", "transfer-encoding"];
+
+/// Is `url` `https://host[:port][/path]` with a plain host name or address?
+fn is_https_url(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://") else { return false };
+    let authority = rest.split(['/', '?']).next().unwrap_or("");
+    let (host, port_ok) = match authority.rsplit_once(':') {
+        Some((h, p)) => (h, p.parse::<u16>().map(|p| p != 0).unwrap_or(false)),
+        None => (authority, true),
+    };
+    port_ok
+        && !host.is_empty()
+        && host.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+        && !url.bytes().any(|b| b.is_ascii_whitespace() || b.is_ascii_control() || b == b'@' || b == b'#')
 }
 
 fn default_ext_timeout_ms() -> u64 {
@@ -484,8 +561,44 @@ impl Policy {
             if self.external.services[..i].iter().any(|o| o.name == s.name) {
                 return Err(err("the name is used twice"));
             }
-            if !is_loopback_url(&s.url) {
-                return Err(err("the url must be http://127.0.0.1:<port>[/path]"));
+            if !is_loopback_url(&s.url) && !is_https_url(&s.url) {
+                return Err(err("the url must be http://127.0.0.1:<port>[/path] or https://host[:port][/path]"));
+            }
+            if s.ca_file.is_some() && !s.is_remote() {
+                return Err(err("ca_file is for https:// services"));
+            }
+            if s.ca_file.as_deref().is_some_and(|f| !f.starts_with('/')) {
+                return Err(err("ca_file must be an absolute path"));
+            }
+            for (name, value) in &s.headers {
+                if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+                    return Err(err("a header name has letters, digits, `-` and `_` only"));
+                }
+                if RESERVED_HEADERS.contains(&name.to_ascii_lowercase().as_str()) {
+                    return Err(err("Host, Content-Length, Content-Type, Idempotency-Key and Transfer-Encoding are set by the runtime"));
+                }
+                if value.bytes().any(|b| b == b'\r' || b == b'\n' || b == 0) {
+                    return Err(err("a header value must be one line"));
+                }
+            }
+            let names = s.secret_names();
+            if !names.is_empty() && !s.is_remote() {
+                return Err(err("a header with a secret is sent only over https://, never in clear text"));
+            }
+            if names.iter().any(|n| !self.secrets.contains_key(n)) {
+                return Err(err("a header names a secret that [secrets] does not define"));
+            }
+        }
+        for (name, src) in &self.secrets {
+            let err = |reason| PolicyError::Secret { name: name.clone(), reason };
+            if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+                return Err(err("a secret's name has letters, digits and `_` only"));
+            }
+            match (src.from.as_str(), &src.var, &src.path) {
+                ("env", _, None) => {}
+                ("file", None, Some(p)) if p.starts_with('/') => {}
+                ("file", None, Some(_)) => return Err(err("path must be absolute")),
+                _ => return Err(err(r#"write { from = "env" } (optionally with var = "NAME") or { from = "file", path = "/absolute/path" }"#)),
             }
         }
         for entry in &self.network.allow {
@@ -927,8 +1040,20 @@ max_tool_calls = 20
         for ok in ["http://127.0.0.1:1", "http://127.0.0.1:8099", "http://127.0.0.1:8099/", "http://127.0.0.1:65535/a/b?x=1"] {
             assert!(is_loopback_url(ok), "{ok}");
         }
+        // Plain http stays on this machine, by number (D-074). Since v3 an
+        // https:// service may be anywhere (D-162); it is not a loopback URL.
+        assert!(!is_loopback_url("https://127.0.0.1:8099/"));
+        for ok in ["https://127.0.0.1:8099/", "https://api.example.com/v1/issues", "https://localhost:8443"] {
+            assert!(is_https_url(ok), "{ok}");
+            assert!(with_external(&format!("[[external.service]]\nname = \"s\"\nurl = \"{ok}\"\n")).is_ok(), "{ok}");
+        }
         for bad in [
-            "https://127.0.0.1:8099/",          // not plain http
+            "https://",                          // no host
+            "https://user@example.com/",         // user-info
+            "https://example.com:0/",            // port 0
+            "https://exa mple.com/",
+            "https://example.com/#frag",
+            "ftp://example.com/",
             "http://localhost:8099/",           // a name, not the number
             "http://127.0.0.1/",                // no port
             "http://127.0.0.1:0/",              // port 0

@@ -8,6 +8,11 @@ What changed for someone who uses Norn, newest first. The reasons are in `docs/d
 
 - **`[network] allow`**: hosts that commands may reach, through a proxy in the runtime; nothing else is reachable, and every connection is logged as `exec.network` and shown by `norn trace` (M19, D-153 to D-155, D-160). Without the section, commands have no network, as before. `norn check` says which hosts a policy opens.
 - **`[approvals] require`**, **`norn approve`**, **`norn deny`**: chosen calls (`exec:npm publish`, `fs.delete`, `fs.write:ci/**`, `ext.call:github`) wait for a person's yes instead of running. The agent is told "waiting for approval" with the command to run; the same call asked again runs once approved. A yes is used once and expires (60 minutes by default); a no is final for that call. `norn approve <execution>` lists what waits, with a diff for writes (M20, D-159, D-161).
+- **`[secrets]`** and **`ext.call` to `https://` services**: a service may be `https://host[:port][/path]`, with `ca_file` for a private CA and `headers` that use secrets (`Authorization = "Bearer {secret:TOKEN}"`). Secrets come from the runtime's environment or a file; they never enter the sandbox, the log, the workspace or the patch, and any value that comes back is shown as `[secret:NAME]`. Remote services wait for approval unless `approval = false`. `norn check` reads the secrets and names a missing one (M21, D-157, D-162).
+
+### Changed
+
+- An `[[external.service]]` URL may now start with `https://` (D-162). Plain `http://` is still allowed only for `127.0.0.1` by number, as before.
 
 ## 1.1.0 (2026-11-26; the plan "v2": `docs/v2-scope.md`)
 

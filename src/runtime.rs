@@ -102,6 +102,8 @@ pub fn create(opts: &RunOptions, agent: &dyn Agent) -> Result<(Gateway, File)> {
     for note in &programs.notes {
         eprintln!("note: {note}");
     }
+    // Read now, so a missing secret stops the run before anything is made (S1).
+    let secrets = crate::secrets::Secrets::load(&policy)?;
     let sandbox = prepare_sandbox()?;
 
     let id = workspace::new_execution_id();
@@ -157,7 +159,7 @@ pub fn create(opts: &RunOptions, agent: &dyn Agent) -> Result<(Gateway, File)> {
 
     // Whatever the agent needs to be rebuilt after a crash (the script).
     agent.persist(&dir)?;
-    Ok((Gateway::new(dir.clone(), log, policy, programs, sandbox, 1, base, repo), lock))
+    Ok((Gateway::new(dir.clone(), log, policy, programs, sandbox, 1, base, repo, secrets), lock))
 }
 
 /// Run recovery on an interrupted execution and print what it decided.
@@ -239,6 +241,7 @@ fn reopen_gateway(dir: &ExecDir, log: EventLog, events: &[crate::log::Event]) ->
     for note in &programs.notes {
         eprintln!("note: {note}");
     }
+    let secrets = crate::secrets::Secrets::load(&policy)?;
     let sandbox = prepare_sandbox()?;
     let calls = crate::log::calls(events)?;
     let next_call_id = calls.iter().map(|c| c.call_id).max().unwrap_or(0) + 1;
@@ -246,7 +249,7 @@ fn reopen_gateway(dir: &ExecDir, log: EventLog, events: &[crate::log::Event]) ->
     // Where the repository was when the execution started; only used for
     // the policy's read-only folders (D-122).
     let repo = created(events).map(|(repo, _)| PathBuf::from(repo)).context("no execution.created event in the log")?;
-    Ok(Gateway::new(dir.clone(), log, policy, programs, sandbox, next_call_id, last_cp, repo))
+    Ok(Gateway::new(dir.clone(), log, policy, programs, sandbox, next_call_id, last_cp, repo, secrets))
 }
 
 /// The repository and agent kind of the `execution.created` event.
@@ -358,6 +361,21 @@ fn finish(gw: &mut Gateway, status: &str, summary: &str, verbose: bool) -> Resul
 fn finish_parts(dir: &ExecDir, log: &mut EventLog, policy: &Policy, status: &str, summary: &str, verbose: bool) -> Result<()> {
     let base = dir.checkpoints().join(checkpoint::name(0));
     let report = checkpoint::write_patch(&base, &dir.work(), &dir.patch(), |rel| policy.scratch(rel))?;
+    // S3, the last backstop: the agent never sees a secret, so none should
+    // be in its work; if one is, it is taken out of the patch.
+    if !policy.secrets.is_empty() {
+        match crate::secrets::Secrets::load(policy) {
+            Ok(secrets) => {
+                let patch = std::fs::read(dir.patch())?;
+                let found = secrets.found_in(&patch);
+                if !found.is_empty() {
+                    std::fs::write(dir.patch(), secrets.redact(&String::from_utf8_lossy(&patch)))?;
+                    eprintln!("note: the patch held the value of {}; it was replaced by [secret:NAME]", found.join(", "));
+                }
+            }
+            Err(e) => eprintln!("note: the patch was not checked for secrets: {e:#}"),
+        }
+    }
     log.append(EventBody::ExecutionFinished { status: status.into(), summary: summary.into(), patch: Some(dir.patch().display().to_string()) })?;
     crate::interrupt::finished();
     if verbose {
@@ -486,6 +504,12 @@ pub fn check(policy_path: Option<&Path>, repo: Option<&Path>) -> usize {
                 );
                 // The largest change of v3 to what a command can do, said
                 // plainly (v3 scope §6).
+                if !policy.secrets.is_empty() {
+                    match crate::secrets::Secrets::load(&policy) {
+                        Ok(s) => println!("  secrets: {} read (values are never shown)", s.names().join(", ")),
+                        Err(e) => fail("secrets", format!("{e:#}")),
+                    }
+                }
                 if policy.network.allow.is_empty() {
                     println!("  network: none (commands cannot connect anywhere)");
                 } else {

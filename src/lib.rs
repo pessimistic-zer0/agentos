@@ -18,6 +18,7 @@ pub mod policy;
 pub mod recovery;
 pub mod runtime;
 pub mod sandbox;
+pub mod secrets;
 pub mod tools;
 pub mod trace;
 pub mod workspace;

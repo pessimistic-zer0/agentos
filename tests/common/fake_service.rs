@@ -16,6 +16,11 @@
 //! | same key, different body | `409`: refused, nothing applied |
 //! | no `Idempotency-Key` header | `400` |
 //! | `GET /state` | `200` with everything applied so far, as JSON |
+//! | body starts with `echo` | applied as usual, and the answer also lists every request header it got (a careless service; for the secret tests, M21) |
+//!
+//! `start_tls` serves the same over HTTPS with the test certificate in
+//! `tests/fixtures/tls/` (M21). `require_auth` makes it answer `401` to a
+//! request without that exact `Authorization` header.
 //!
 //! Faults are queued per payload; each `POST /apply` for that payload uses
 //! up the next one:
@@ -61,8 +66,10 @@ pub struct Seen {
     pub key: String,
     pub payload: String,
     /// `applied`, `replayed`, `dropped-before`, `applied-then-dropped`,
-    /// `replayed-then-dropped`, `rejected`, `conflict`.
+    /// `replayed-then-dropped`, `rejected`, `conflict`, `unauthorized`.
     pub outcome: &'static str,
+    /// The `Authorization` header, as received.
+    pub authorization: Option<String>,
 }
 
 #[derive(Default)]
@@ -70,12 +77,14 @@ struct State {
     applied: Vec<Applied>,
     seen: Vec<Seen>,
     faults: HashMap<String, VecDeque<Fault>>,
+    require_auth: Option<String>,
 }
 
 pub struct FakeService {
     port: u16,
     state: Arc<Mutex<State>>,
     stop: Arc<AtomicBool>,
+    https: bool,
 }
 
 impl FakeService {
@@ -84,8 +93,32 @@ impl FakeService {
     /// before closing it without an answer; make it longer than the
     /// caller's timeout.
     pub fn start(port: u16, hold: Duration) -> std::io::Result<FakeService> {
+        FakeService::start_with(port, hold, None)
+    }
+
+    /// The same service over HTTPS, with the test server certificate
+    /// (signed by `tests/fixtures/tls/ca.pem`, for `127.0.0.1` and
+    /// `localhost`).
+    pub fn start_tls(port: u16, hold: Duration) -> std::io::Result<FakeService> {
+        use rustls::pki_types::pem::PemObject;
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tls");
+        let certs: Vec<CertificateDer<'static>> =
+            CertificateDer::pem_file_iter(dir.join("server.pem")).map_err(std::io::Error::other)?.collect::<Result<_, _>>().map_err(std::io::Error::other)?;
+        let key = PrivateKeyDer::from_pem_file(dir.join("server-key.pem")).map_err(std::io::Error::other)?;
+        let config = rustls::ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()
+            .map_err(std::io::Error::other)?
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .map_err(std::io::Error::other)?;
+        FakeService::start_with(port, hold, Some(Arc::new(config)))
+    }
+
+    fn start_with(port: u16, hold: Duration, tls: Option<Arc<rustls::ServerConfig>>) -> std::io::Result<FakeService> {
         let listener = TcpListener::bind(("127.0.0.1", port))?;
         let port = listener.local_addr()?.port();
+        let https = tls.is_some();
         let state = Arc::new(Mutex::new(State::default()));
         let stop = Arc::new(AtomicBool::new(false));
         let (st, sp) = (state.clone(), stop.clone());
@@ -96,13 +129,28 @@ impl FakeService {
                 }
                 if let Ok(conn) = conn {
                     let st = st.clone();
+                    let tls = tls.clone();
                     std::thread::spawn(move || {
-                        let _ = handle(conn, &st, hold);
+                        let _ = conn.set_read_timeout(Some(Duration::from_secs(5)));
+                        match tls {
+                            None => {
+                                let _ = handle(conn, &st, hold);
+                            }
+                            Some(cfg) => {
+                                let Ok(server) = rustls::ServerConnection::new(cfg) else { return };
+                                let _ = handle(rustls::StreamOwned::new(server, conn), &st, hold);
+                            }
+                        }
                     });
                 }
             }
         });
-        Ok(FakeService { port, state, stop })
+        Ok(FakeService { port, state, stop, https })
+    }
+
+    /// Answer `401` unless the request has exactly this `Authorization` header.
+    pub fn require_auth(&self, value: &str) {
+        self.state.lock().unwrap().require_auth = Some(value.to_string());
     }
 
     pub fn port(&self) -> u16 {
@@ -111,7 +159,7 @@ impl FakeService {
 
     /// The URL to put in the policy.
     pub fn url(&self) -> String {
-        format!("http://127.0.0.1:{}/apply", self.port)
+        format!("{}://127.0.0.1:{}/apply", if self.https { "https" } else { "http" }, self.port)
     }
 
     /// Queue faults for the next `POST /apply` requests carrying `payload`.
@@ -146,10 +194,10 @@ struct Request {
     path: String,
     key: Option<String>,
     body: String,
+    headers: Vec<(String, String)>,
 }
 
-fn read_request(conn: &mut TcpStream) -> std::io::Result<Request> {
-    conn.set_read_timeout(Some(Duration::from_secs(5)))?;
+fn read_request(conn: &mut impl Read) -> std::io::Result<Request> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
     let head_end = loop {
@@ -168,8 +216,10 @@ fn read_request(conn: &mut TcpStream) -> std::io::Result<Request> {
     let method = first.next().unwrap_or("").to_string();
     let path = first.next().unwrap_or("").to_string();
     let (mut key, mut len) = (None, 0usize);
+    let mut headers = Vec::new();
     for line in lines {
         if let Some((name, value)) = line.split_once(':') {
+            headers.push((name.to_string(), value.trim().to_string()));
             match name.to_ascii_lowercase().as_str() {
                 "idempotency-key" => key = Some(value.trim().to_string()),
                 "content-length" => len = value.trim().parse().unwrap_or(0),
@@ -188,13 +238,14 @@ fn read_request(conn: &mut TcpStream) -> std::io::Result<Request> {
         buf.extend_from_slice(&chunk[..n]);
     }
     let body = String::from_utf8_lossy(&buf[head_end..head_end + len]).into_owned();
-    Ok(Request { method, path, key, body })
+    Ok(Request { method, path, key, body, headers })
 }
 
-fn respond(conn: &mut TcpStream, status: u16, body: &str) -> std::io::Result<()> {
+fn respond(conn: &mut impl Write, status: u16, body: &str) -> std::io::Result<()> {
     let reason = match status {
         200 => "OK",
         400 => "Bad Request",
+        401 => "Unauthorized",
         404 => "Not Found",
         409 => "Conflict",
         _ => "Unprocessable Entity",
@@ -220,7 +271,7 @@ fn apply(state: &Mutex<State>, key: &str, payload: &str) -> Result<(u64, bool), 
     Ok((seq, false))
 }
 
-fn handle(mut conn: TcpStream, state: &Mutex<State>, hold: Duration) -> std::io::Result<()> {
+fn handle<C: Read + Write>(mut conn: C, state: &Mutex<State>, hold: Duration) -> std::io::Result<()> {
     let req = read_request(&mut conn)?;
     if req.method == "GET" && req.path == "/state" {
         let st = state.lock().unwrap();
@@ -236,9 +287,15 @@ fn handle(mut conn: TcpStream, state: &Mutex<State>, hold: Duration) -> std::io:
     let Some(key) = req.key else {
         return respond(&mut conn, 400, r#"{"error":"Idempotency-Key header is required"}"#);
     };
+    let authorization = req.headers.iter().find(|(n, _)| n.eq_ignore_ascii_case("authorization")).map(|(_, v)| v.clone());
     let note = |outcome: &'static str| {
-        state.lock().unwrap().seen.push(Seen { key: key.clone(), payload: req.body.clone(), outcome });
+        state.lock().unwrap().seen.push(Seen { key: key.clone(), payload: req.body.clone(), outcome, authorization: authorization.clone() });
     };
+    let required = state.lock().unwrap().require_auth.clone();
+    if required.is_some() && required != authorization {
+        note("unauthorized");
+        return respond(&mut conn, 401, r#"{"error":"missing or wrong Authorization header"}"#);
+    }
     if req.body.starts_with("reject") {
         note("rejected");
         return respond(&mut conn, 422, r#"{"error":"rejected by the service; nothing was applied"}"#);
@@ -263,7 +320,12 @@ fn handle(mut conn: TcpStream, state: &Mutex<State>, hold: Duration) -> std::io:
         return Ok(()); // applied, but the caller never hears about it
     }
     note(if replayed { "replayed" } else { "applied" });
-    let body = serde_json::json!({"seq": seq, "key": key, "replayed": replayed}).to_string();
+    let mut body = serde_json::json!({"seq": seq, "key": key, "replayed": replayed});
+    if req.body.starts_with("echo") {
+        let headers: serde_json::Map<String, serde_json::Value> = req.headers.iter().map(|(n, v)| (n.clone(), serde_json::Value::from(v.clone()))).collect();
+        body["headers_received"] = serde_json::Value::Object(headers);
+    }
+    let body = body.to_string();
     // The caller may be gone (killed mid-request); that is not our problem.
     let _ = respond(&mut conn, 200, &body);
     Ok(())

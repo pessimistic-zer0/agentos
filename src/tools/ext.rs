@@ -40,9 +40,47 @@ pub fn idempotency_key(execution_id: &str, call_id: u64) -> String {
     format!("agentos-{execution_id}-c{call_id}")
 }
 
-/// Send `payload` to `url` once, with `key` as the `Idempotency-Key` header.
-pub fn send(url: &str, key: &str, payload: &str, timeout: Duration, max_body: usize) -> Answer {
+/// Where and how one request is sent. `headers` hold real secret values
+/// (M21): a `Target` is built just before sending and never stored.
+#[derive(Clone)]
+pub struct Target {
+    pub url: String,
+    pub headers: Vec<(String, String)>,
+    /// PEM of the one certificate authority to trust (`ca_file`, D-157);
+    /// `None`: the compiled-in list.
+    pub ca_pem: Option<Vec<u8>>,
+}
+
+impl Target {
+    pub fn plain(url: &str) -> Target {
+        Target { url: url.to_string(), headers: Vec::new(), ca_pem: None }
+    }
+
+    /// The target for `url`, with the header templates filled in from
+    /// `secrets` and the CA file read.
+    pub fn build(url: &str, headers: &std::collections::BTreeMap<String, String>, ca_file: Option<&str>, secrets: &crate::secrets::Secrets) -> anyhow::Result<Target> {
+        use anyhow::Context;
+        let headers = headers.iter().map(|(k, v)| Ok((k.clone(), secrets.expand(v)?))).collect::<anyhow::Result<Vec<_>>>()?;
+        let ca_pem = match ca_file {
+            Some(f) => Some(std::fs::read(f).with_context(|| format!("reading ca_file {f}"))?),
+            None => None,
+        };
+        Ok(Target { url: url.to_string(), headers, ca_pem })
+    }
+}
+
+/// Send `payload` to the target once, with `key` as the `Idempotency-Key` header.
+pub fn send(target: &Target, key: &str, payload: &str, timeout: Duration, max_body: usize) -> Answer {
+    let mut tls = ureq::tls::TlsConfig::builder();
+    if let Some(pem) = &target.ca_pem {
+        // Trust this authority only, for this service (D-157, E5).
+        match ureq::tls::Certificate::from_pem(pem) {
+            Ok(cert) => tls = tls.root_certs(ureq::tls::RootCerts::new_with_certs(&[cert])),
+            Err(e) => return Answer::Unknown { why: format!("ca_file is not a PEM certificate: {e}") },
+        }
+    }
     let agent: ureq::Agent = ureq::Agent::config_builder()
+        .tls_config(tls.build())
         .timeout_global(Some(timeout))
         // A status code is an answer to classify, not an error.
         .http_status_as_error(false)
@@ -54,7 +92,11 @@ pub fn send(url: &str, key: &str, payload: &str, timeout: Duration, max_body: us
         .proxy(None)
         .build()
         .into();
-    let sent = agent.post(url).header("Idempotency-Key", key).header("Content-Type", "text/plain; charset=utf-8").send(payload);
+    let mut req = agent.post(&target.url).header("Idempotency-Key", key).header("Content-Type", "text/plain; charset=utf-8");
+    for (k, v) in &target.headers {
+        req = req.header(k, v);
+    }
+    let sent = req.send(payload);
     let mut resp = match sent {
         Ok(resp) => resp,
         Err(e) => return Answer::Unknown { why: e.to_string() },
@@ -82,10 +124,10 @@ pub fn send(url: &str, key: &str, payload: &str, timeout: Duration, max_body: us
 ///
 /// Sending again is safe only because the key is the same: the service
 /// promises to apply a key at most once and to repeat its first answer.
-pub fn send_until_answered(url: &str, key: &str, payload: &str, timeout: Duration, attempts: u32, max_body: usize) -> (Answer, u32) {
+pub fn send_until_answered(target: &Target, key: &str, payload: &str, timeout: Duration, attempts: u32, max_body: usize) -> (Answer, u32) {
     let mut last = Answer::Unknown { why: "no request was sent".into() };
     for n in 1..=attempts.max(1) {
-        last = send(url, key, payload, timeout, max_body);
+        last = send(target, key, payload, timeout, max_body);
         if !matches!(last, Answer::Unknown { .. }) {
             return (last, n);
         }
