@@ -27,6 +27,13 @@
 //! errors are written there as `error: ...`. G's copy of fd 3 is marked
 //! close-on-exec, so a successful `execve` closes it silently; a failed one
 //! writes `exec-failed: ...`. When G ends, C writes `exit N` or `signal N`.
+//!
+//! Network (M19, D-155): when the policy allows hosts, file descriptor 4 is
+//! one end of a Unix socket pair whose other end the runtime holds. C, after
+//! bringing up `lo`, makes a TCP socket listening on `127.0.0.1:3128` in the
+//! sandbox's own (otherwise empty) network namespace and sends the socket
+//! itself to the runtime over fd 4 (`SCM_RIGHTS`), then closes both. The
+//! runtime accepts the command's connections on it; G never has either.
 
 use std::ffi::CString;
 use std::fs;
@@ -70,10 +77,18 @@ pub struct SandboxSpec {
     /// `/work/<path>` (D-122).
     #[serde(default)]
     pub ro_dirs: Vec<(PathBuf, String)>,
+    /// Make the proxy's listening socket and hand it to the runtime on
+    /// `NET_FD` (D-155). Off unless the policy lists hosts.
+    #[serde(default)]
+    pub proxy: bool,
 }
 
 /// The fd the status pipe is placed on in the helper.
 pub const STATUS_FD: i32 = 3;
+/// The fd the network socket pair is placed on in the helper (only with `proxy`).
+pub const NET_FD: i32 = 4;
+/// The port the proxy listens on inside the sandbox.
+pub const PROXY_PORT: u16 = 3128;
 /// Exit code of the helper when setup fails.
 pub const SETUP_FAILED: i32 = 125;
 
@@ -194,6 +209,16 @@ fn helper(spec_json: &str, status: &mut fs::File) -> Result<i32> {
     // Mark fd 3 close-on-exec now. H and C never exec, so they keep it; G's
     // execve closes it, which is how the runtime learns the exec succeeded.
     nix::fcntl::fcntl(&*status, nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::FD_CLOEXEC))?;
+    // The same for the network socket pair, which only C uses.
+    let net = if spec.proxy {
+        // SAFETY: the runtime placed one end of a socket pair on NET_FD for
+        // this process (sandbox::run); nothing else in H owns that number.
+        let fd = unsafe { OwnedFd::from_raw_fd(NET_FD) };
+        nix::fcntl::fcntl(&fd, nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::FD_CLOEXEC))?;
+        Some(fd)
+    } else {
+        None
+    };
 
     // Die with the runtime. If the runtime is killed (kill -9), the kernel
     // sends us SIGKILL. Check the parent afterwards: if it died before the
@@ -224,7 +249,7 @@ fn helper(spec_json: &str, status: &mut fs::File) -> Result<i32> {
     // the child may run any code after fork.
     match unsafe { fork() }.context("fork of sandbox init")? {
         ForkResult::Child => {
-            let code = match init(&spec, status) {
+            let code = match init(&spec, status, net) {
                 Ok(code) => code,
                 Err(e) => {
                     let _ = writeln!(status, "error: {e:#}");
@@ -233,20 +258,27 @@ fn helper(spec_json: &str, status: &mut fs::File) -> Result<i32> {
             };
             std::process::exit(code)
         }
-        ForkResult::Parent { child } => Ok(match waitpid(child, None)? {
+        ForkResult::Parent { child } => Ok({
+            // Only C needs the socket pair.
+            drop(net);
+            match waitpid(child, None)? {
             WaitStatus::Exited(_, code) => code,
             WaitStatus::Signaled(_, sig, _) => 128 + sig as i32,
             _ => SETUP_FAILED,
+            }
         }),
     }
 }
 
 /// Process C: PID 1 inside the sandbox.
-fn init(spec: &SandboxSpec, status: &mut fs::File) -> Result<i32> {
+fn init(spec: &SandboxSpec, status: &mut fs::File, net: Option<OwnedFd>) -> Result<i32> {
     // If H dies, C dies; when C (PID 1) dies, the kernel kills the rest.
     nix::sys::prctl::set_pdeathsig(Signal::SIGKILL)?;
     build_root(spec)?;
     loopback_up().context("bringing up loopback")?;
+    if let Some(net) = net {
+        hand_out_proxy_socket(&net).context("handing the proxy socket to the runtime")?;
+    }
     chdir("/work")?;
     drop_privileges()?;
     let ro: Vec<&Path> = spec.ro_mounts.iter().map(|p| p.as_path()).collect();
@@ -446,6 +478,22 @@ fn remount(dst: &Path, add: MsFlags) -> Result<()> {
         }
     }
     mount(None::<&str>, dst, None::<&str>, flags, None::<&str>).with_context(|| format!("remount {}", dst.display()))
+}
+
+/// Make the socket commands reach the proxy through, in this (the sandbox's)
+/// network namespace, and send it to the runtime (D-155). A socket stays in
+/// the namespace it was made in whoever holds it, so the runtime accepts
+/// connections that come from inside the sandbox while making its own
+/// outgoing ones from the host's network.
+fn hand_out_proxy_socket(net: &OwnedFd) -> Result<()> {
+    use nix::sys::socket::{sendmsg, ControlMessage, MsgFlags};
+    use std::os::fd::AsRawFd;
+    let listener = std::net::TcpListener::bind(("127.0.0.1", PROXY_PORT)).with_context(|| format!("listening on 127.0.0.1:{PROXY_PORT}"))?;
+    let fds = [listener.as_raw_fd()];
+    let msg = [std::io::IoSlice::new(b"L")];
+    sendmsg::<()>(net.as_raw_fd(), &msg, &[ControlMessage::ScmRights(&fds)], MsgFlags::empty(), None).context("sendmsg")?;
+    // Our copy of the listener closes here; the runtime has its own.
+    Ok(())
 }
 
 /// A new network namespace has only `lo`, and it is down. Bring it up so

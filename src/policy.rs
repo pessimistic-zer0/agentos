@@ -226,6 +226,8 @@ pub struct SandboxRules {
 const RESERVED_MOUNTS: [&str; 4] = ["/work", "/tmp", "/proc", "/dev"];
 /// Variables the runtime sets for every command.
 const RESERVED_ENV: [&str; 3] = ["PATH", "HOME", "LANG"];
+/// Variables the runtime sets when the policy allows hosts (either case).
+const PROXY_ENV: [&str; 3] = ["HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"];
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -417,6 +419,9 @@ impl Policy {
             }
             if RESERVED_ENV.contains(&name.as_str()) {
                 return Err(err("PATH, HOME and LANG are set by the runtime and cannot be changed"));
+            }
+            if !self.network.allow.is_empty() && PROXY_ENV.contains(&name.to_ascii_uppercase().as_str()) {
+                return Err(err("with [network] allow set, the runtime sets the proxy variables (HTTPS_PROXY, HTTP_PROXY, NO_PROXY) itself"));
             }
             if value.contains('\0') {
                 return Err(err("the value contains a NUL byte"));
@@ -920,5 +925,8 @@ max_tool_calls = 20
             assert!(matches!(Policy::parse(&text), Err(PolicyError::Network { .. })), "{bad:?} should be refused");
         }
         assert!(matches!(Policy::parse(&format!("{DEMO}[network]\nhosts = []\n")), Err(PolicyError::Parse { .. })), "unknown keys are refused");
+        let env = DEMO.replace("[limits]", "[sandbox.env]\nhttps_proxy = \"http://elsewhere:1\"\n[limits]");
+        assert!(Policy::parse(&env).is_ok(), "without [network] the name is the policy's own");
+        assert!(matches!(Policy::parse(&format!("{env}[network]\nallow = [\"pypi.org\"]\n")), Err(PolicyError::Env { .. })), "with it, the runtime sets it");
     }
 }

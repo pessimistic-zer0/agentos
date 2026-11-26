@@ -20,7 +20,7 @@ The agent may be hostile from the start or become so by reading a file ("prompt 
 1. Host files outside the workspace, especially `~/.ssh`, `~/.config`, tokens.
 2. Files in the target repository that the policy denies (for example `.env`).
 3. The runtime's environment variables and credentials (including the LLM API key).
-4. Network egress. (v0.1: none at all. With the bonus tool: requests to `127.0.0.1` services named in the policy; see §7.)
+4. Network egress. (v0.1: none at all. With the bonus tool: requests to `127.0.0.1` services named in the policy; see §7. Since v3, with `[network] allow`: connections from commands to the hosts listed there, through the runtime's proxy; see §9.)
 5. The event log, the checkpoints and the blob store (the agent must not rewrite its own history).
 6. Host CPU, memory and process ids.
 7. The original repository (never modified; the output is a patch).
@@ -152,3 +152,25 @@ Sections 1 to 6 describe v0.1, which had no way to reach anything outside the wo
 
 Everything else is as above: the tools, the policy, the sandbox, the log and recovery are the same for both front doors.
 
+## 9. The network allow-list (added for v3)
+
+Until v3 a command could not connect anywhere. With `[network] allow` it can reach the hosts listed there (M19, D-153). This is the largest change to this document since v0.1, so it is stated plainly: **a command that may reach a host may send that host anything it can read in the sandbox**, which is the workspace copy (without denied files) and the read-only folders. What it sends cannot be undone. Without `[network]` nothing changes: the sandbox's network is empty.
+
+How the way out is built:
+
+- The sandbox keeps its empty network namespace. Its init process makes one listening socket on `127.0.0.1:3128` there and hands the socket itself to the runtime (D-155). The runtime's proxy accepts on it. No other address leads anywhere, and no program besides the command runs in the sandbox.
+- The proxy reads only the request head: `CONNECT host:port` (HTTPS: the proxy sees the name and the byte counts, never the content; there is no TLS interception, D-153) or a plain-HTTP request with a full URL. A `host:port` that no `network.allow` entry matches is refused with `403` (design rule 2). A name without a port matches port 443 only.
+- The proxy resolves names itself (there is no DNS in the sandbox) and refuses a name that resolves only to an address of this machine or its link (loopback, link-local such as a cloud machine's metadata service at `169.254.169.254`, unspecified, multicast). An entry written as an address (`127.0.0.1:8080`) is the only way to reach such an address, and it must be written on purpose.
+- Every connection is in the log, allowed or not: event `exec.network`, with host, port, method, rule, and bytes each way (N3). The agent sees refusals in the command's stderr.
+
+| # | Attack | Defence | Test |
+|---|---|---|---|
+| N1 | Connect directly, without the proxy, to an allowed host or anywhere else | Empty network namespace; the proxy socket is the only listener that leads out | `a_listed_host_is_reached_through_the_proxy_and_logged` (`tests/network.rs`) |
+| N2 | Ask the proxy for a host or port not on the list | `403`, logged as refused | same; `hosts_not_listed_are_refused_and_recorded` (`src/sandbox/proxy.rs`) |
+| N3 | An allowed name that resolves to the runtime's own machine | Local addresses refused for names | `an_allowed_name_that_resolves_to_this_machine_is_refused` |
+| N4 | Malformed or tricky requests (no `http://`, `https://` without a tunnel, a user name in the URL, IPv6 literals) | `400`, nothing connected | `malformed_requests_get_400_and_no_record` |
+| N5 | A command with `[network]` off | No proxy, no proxy variables | `without_a_network_section_a_command_reaches_nothing` |
+
+The security suite of M22 adds more cases (raw IPs, UDP, a second proxy hop, both front doors).
+
+What this does not stop: anything sent *to an allowed host* (a package registry that accepts uploads is a way out for data, if the command has credentials for it; norn gives commands none). A wildcard entry (`*.example.com`) allows every name under it, including names someone else controls. If the network namespace itself ever failed, the network would be open: Landlock's network rules are not used as a second wall, because they match TCP ports only (D-156).

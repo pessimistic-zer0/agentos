@@ -235,3 +235,10 @@ With `norn mcp` the agent is a client such as Claude Code (D-139). Nothing in se
 
 Checked: the kill cells of section 6 driven by an MCP client that restarts the server after each kill, 200 per cell: 4,800 runs, 4,782 killed, 0 invariant violations, 0 duplicated effects, 3,897 of 3,897 cut-off calls classified correctly (`docs/results/recovery-mcp-200-nix.md`, D-144). `fs.delete` is recovered like a write: absent means applied (1,600 runs, 0 violations, `docs/results/recovery-delete-200-nix.md`, D-147).
 
+## 11. Commands that used the network (added for v3)
+
+A command that used the network (`[network] allow`, M19) is recovered like any command: if it was cut off, the workspace goes back to the last checkpoint and the call is NOT APPLIED. What it **sent** cannot be taken back, and what it downloaded into the workspace is rolled back with everything else; if the agent runs the command again, it downloads again.
+
+The connections of a finished command are logged (`exec.network`) before its checkpoint and completion record. A command cut off by a crash has no such record: the crash ends the runtime, and with it the proxy and its counts. So the log names every connection of every command that finished, and none of a command that did not. The allow-list, not the log, is what limits what a cut-off command could reach.
+
+Checked: the kill cells of section 6 with `[network]` on, each `exec` asking the proxy for a tunnel first (`NORN_RECOVERY_NETWORK=1`; part of `make test` with 3 kills per cell and of `make eval-recovery` with 200).

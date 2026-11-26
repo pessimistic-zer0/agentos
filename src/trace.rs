@@ -75,6 +75,19 @@ pub fn render_calls(events: &[Event]) -> Result<String> {
             if let EventBody::PolicyViolation { reverted, .. } = &ev.body {
                 writeln!(out, "      policy violation: reverted {}", reverted.join(", "))?;
             }
+            if let EventBody::ExecNetwork { connections, dropped, .. } = &ev.body {
+                for n in connections {
+                    let what = match (n.allowed, &n.error) {
+                        (false, _) => format!("REFUSED ({})", n.rule),
+                        (true, Some(e)) => format!("failed: {}", truncate(e, 50)),
+                        (true, None) => format!("{} B up, {} B down", n.bytes_up, n.bytes_down),
+                    };
+                    writeln!(out, "      network: {} {}:{} {what}", n.method, n.host, n.port)?;
+                }
+                if *dropped > 0 {
+                    writeln!(out, "      network: {dropped} more connection(s) not recorded")?;
+                }
+            }
         }
     }
     if let Some(Event { body: EventBody::ExecutionFinished { status, summary, patch }, .. }) =

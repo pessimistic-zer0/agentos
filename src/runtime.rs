@@ -483,6 +483,17 @@ pub fn check(policy_path: Option<&Path>, repo: Option<&Path>) -> usize {
                     policy.sandbox.ro_mounts.len(),
                     policy.sandbox.env.len()
                 );
+                // The largest change of v3 to what a command can do, said
+                // plainly (v3 scope §6).
+                if policy.network.allow.is_empty() {
+                    println!("  network: none (commands cannot connect anywhere)");
+                } else {
+                    println!(
+                        "  network: commands may connect to {} through the runtime's proxy; everything else is refused, and every connection is logged. \
+                         What a command sends to these hosts cannot be undone",
+                        policy.network.allow.join(", ")
+                    );
+                }
                 Some(policy)
             }
             Err(e) => {

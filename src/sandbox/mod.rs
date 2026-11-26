@@ -7,7 +7,7 @@
 //! | Path access (exec) | Landlock | `landlock.rs` |
 //! | Process | user + PID namespace, no capabilities, `no_new_privs` | `ns.rs` |
 //! | System calls | seccomp deny list: namespaces, mounts, `bpf`, `ptrace`, `io_uring`, ... fail with `EPERM` | `seccomp.rs` |
-//! | Network | empty network namespace (loopback only) | `ns.rs` |
+//! | Network | empty network namespace (loopback only); with `[network] allow`, one way out: a proxy in the runtime that checks each host (D-155) | `ns.rs`, `proxy.rs` |
 //! | Resources | cgroup v2 limits; watchdog kills the cgroup at the time limit or when the workspace is over `workspace_mb` | `cgroup.rs`, here |
 //! | Environment | cleared; only PATH, HOME, LANG | `gateway.rs` |
 
@@ -15,6 +15,7 @@ pub mod beneath;
 pub mod cgroup;
 pub mod landlock;
 pub mod ns;
+pub mod proxy;
 pub mod seccomp;
 
 use std::io::Read;
@@ -85,6 +86,7 @@ pub fn run(
     timeout: Duration,
     max_output: usize,
     disk: &DiskLimit,
+    hosts: &[(String, crate::policy::HostRule)],
 ) -> Result<(ExecOutput, Option<Stopped>), ToolError> {
     let start = Instant::now();
     let fail = |m: String| ToolError::new(format!("sandbox: {m}"));
@@ -100,25 +102,47 @@ pub fn run(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // With hosts allowed, a socket pair: the helper gets one end as fd 4,
+    // the proxy keeps the other (D-155). Both are close-on-exec here.
+    let net = if spec.proxy {
+        let (ours, theirs) = std::os::unix::net::UnixStream::pair().map_err(|e| fail(format!("socketpair: {e}")))?;
+        Some((OwnedFd::from(ours), OwnedFd::from(theirs)))
+    } else {
+        None
+    };
     let w = status_w.as_raw_fd();
+    let n = net.as_ref().map(|(_, theirs)| theirs.as_raw_fd()).unwrap_or(-1);
     // SAFETY: runs in the child between fork and exec, where only
-    // async-signal-safe calls are allowed; dup2 and fcntl are. dup2 onto
-    // fd 3 clears close-on-exec on the copy, so the helper inherits it.
+    // async-signal-safe calls are allowed; fcntl and dup2 are. Each
+    // descriptor is first copied above 10, so placing one on 3 can never
+    // close the other before it is copied; dup2 then clears close-on-exec
+    // on the copies at 3 and 4, so the helper inherits exactly those.
     unsafe {
         cmd.pre_exec(move || {
-            if w == ns::STATUS_FD {
-                let flags = libc::fcntl(w, libc::F_GETFD);
-                if flags < 0 || libc::fcntl(w, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+            let high = |fd: i32| {
+                let h = libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 10);
+                if h < 0 { Err(std::io::Error::last_os_error()) } else { Ok(h) }
+            };
+            let w_high = high(w)?;
+            let n_high = if n >= 0 { Some(high(n)?) } else { None };
+            if libc::dup2(w_high, ns::STATUS_FD) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if let Some(nh) = n_high {
+                if libc::dup2(nh, ns::NET_FD) < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
-            } else if libc::dup2(w, ns::STATUS_FD) < 0 {
-                return Err(std::io::Error::last_os_error());
             }
             Ok(())
         });
     }
     let mut child = cmd.spawn().map_err(|e| fail(format!("starting helper {}: {e}", helper.display())))?;
     drop(status_w); // keep only the helper's copy, so EOF arrives when it is gone
+    // The same for the socket pair; then wait for the sandbox's socket.
+    let proxy = net.map(|(ours, theirs)| {
+        drop(theirs);
+        proxy::Proxy::start(ours, hosts.to_vec())
+    });
     let stdout = capture(child.stdout.take().expect("piped"), max_output);
     let stderr = capture(child.stderr.take().expect("piped"), max_output);
     let status_reader = std::thread::spawn(move || {
@@ -168,6 +192,8 @@ pub fn run(
     let (out, out_cut) = stdout.join().unwrap_or_default();
     let (err, err_cut) = stderr.join().unwrap_or_default();
     let report = status_reader.join().unwrap_or_default();
+    // Every process of the command is gone; close what it left open.
+    let network = proxy.map(proxy::Proxy::finish);
     wait.map_err(|e| fail(format!("waiting for helper: {e}")))?;
     cleanup.map_err(|e| fail(format!("{e:#}")))?;
 
@@ -198,6 +224,9 @@ pub fn run(
     if pids_hit {
         stderr_text.push_str("\n[norn] the command hit limits.pids; some fork() calls failed\n");
     }
+    if let Some(net) = &network {
+        stderr_text.push_str(&network_notes(net, hosts));
+    }
     let out = ExecOutput {
         exit_code,
         signal,
@@ -207,8 +236,36 @@ pub fn run(
         truncated: out_cut || err_cut,
         duration_ms: start.elapsed().as_millis() as u64,
         reverted: Vec::new(),
+        network,
     };
     Ok((out, stopped))
+}
+
+/// Lines for the command's stderr about connections the proxy refused or
+/// could not make, so that the agent (which reads stderr) learns why a
+/// download failed and what is allowed (as D-146 does for refused calls).
+fn network_notes(net: &proxy::Report, hosts: &[(String, crate::policy::HostRule)]) -> String {
+    let mut seen: Vec<(String, u16)> = Vec::new();
+    let mut out = String::new();
+    for c in &net.connections {
+        if (c.allowed && c.error.is_none()) || seen.contains(&(c.host.clone(), c.port)) || seen.len() >= 5 {
+            continue;
+        }
+        seen.push((c.host.clone(), c.port));
+        let why = match (&c.error, c.allowed) {
+            (Some(e), _) => e.clone(),
+            (None, _) => c.rule.clone(),
+        };
+        out.push_str(&format!("\n[norn] network: {}:{} was not reached: {why}", c.host, c.port));
+    }
+    if !out.is_empty() {
+        let allowed: Vec<&str> = hosts.iter().map(|(t, _)| t.split_once(' ').map(|x| x.1).unwrap_or(t).trim_matches('"')).collect();
+        out.push_str(&format!("\n[norn] network.allow lists: {}\n", allowed.join(", ")));
+    }
+    if net.dropped > 0 {
+        out.push_str(&format!("[norn] network: {} more connections were not recorded\n", net.dropped));
+    }
+    out
 }
 
 /// Check, at startup, that this machine can run the sandbox. Returns every

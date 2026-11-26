@@ -2,6 +2,12 @@
 
 What changed for someone who uses Norn, newest first. The reasons are in `docs/decision-log.md` (the `D-` numbers); the bugs in `docs/bugs.md` (the `B-` numbers).
 
+## Unreleased (to be 1.2.0; the plan "v3": `docs/v3-scope.md`)
+
+### Added
+
+- **`[network] allow`**: hosts that commands may reach, through a proxy in the runtime; nothing else is reachable, and every connection is logged as `exec.network` and shown by `norn trace` (M19, D-153 to D-155, D-160). Without the section, commands have no network, as before. `norn check` says which hosts a policy opens.
+
 ## 1.1.0 (2026-11-26; the plan "v2": `docs/v2-scope.md`)
 
 Tagged `v1.1` on the commit CI run 45728656310 passed on Ubuntu 24.04, Ubuntu with AppArmor, and Debian 12 (D-158). Policy files and execution folders of 1.0 work unchanged.

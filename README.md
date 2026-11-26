@@ -13,7 +13,7 @@ It is a learning and portfolio project, not a product. It does one thing: one ag
 - **What it has been run on.** The demo; a Python project with real PyPI packages in a virtualenv; a Node project; a Rust project ([`real-repo-trial-nix.md`](docs/results/real-repo-trial-nix.md), [`second-stack-trial-nix.md`](docs/results/second-stack-trial-nix.md)). Six tickets of a Python project, each solved and checked on a fresh clone: by Claude through norn's own agent loop ([`relay-model-trial-nix.md`](docs/results/relay-model-trial-nix.md)), and by Claude Code as an MCP client with its own tools switched off ([`mcp-claude-code-trial-nix.md`](docs/results/mcp-claude-code-trial-nix.md)).
 - **Where it is verified.** NixOS 26.05 on the development machine (`nix` preset); Ubuntu 24.04 and Debian 12 in CI (`fhs` preset), including a job that keeps Ubuntu's restriction on user namespaces on and uses the AppArmor profile that comes with norn. `v1.0` passed CI run 45489487156; the 1.1.0 work is not yet verified on `fhs`. Fedora and Arch use the same preset and have not been run.
 - **What the suites say** (on `nix`, results in [`docs/results/`](docs/results/)): 4,800 kills at 8 points with 0 invariant violations through norn's own agents, and the same 4,800 through `norn mcp` with 0; 1,600 each for `fs.edit` and `fs.delete`; 32 attacks with 0 escapes, sent both ways; 223 tests in all. See [What it shows](#what-it-shows).
-- **What it is not.** Not hardened like a container runtime (a seccomp deny list but no allow list, a measured disk limit but no hard cap), no network for commands, one agent per execution. Read [what it does not do](#what-it-does-not-do) before trusting it with anything.
+- **What it is not.** Not hardened like a container runtime (a seccomp deny list but no allow list, a measured disk limit but no hard cap), no network for commands unless a policy lists hosts, one agent per execution. Read [what it does not do](#what-it-does-not-do) before trusting it with anything.
 - **How it got here.** Fourteen bugs were found on the way: eight by the suites and the first CI runs, and six after every suite had passed. Each has a note in [`docs/bugs.md`](docs/bugs.md), and the six are told as a story in [`docs/what-the-suites-missed.md`](docs/what-the-suites-missed.md). The history by milestone is in [`docs/milestones/`](docs/milestones/) (M0 to M18).
 - Licensed under MIT or Apache-2.0, at your option (see [License](#license)).
 
@@ -153,7 +153,7 @@ Five parts:
 |---|---|---|
 | Gateway | The agent cannot touch anything. It asks; the gateway does it. | `src/gateway.rs` |
 | Policy | A TOML file: which paths may be read and written, which are denied, which commands may run, with what limits. No matching rule means no. | `src/policy.rs`, `policies/` |
-| Sandbox | Commands run in a box that holds only a copy of the repo (`/work`) and read-only system folders. No network, no home folder, no privileges, limited memory, CPU and processes. | `src/sandbox/` |
+| Sandbox | Commands run in a box that holds only a copy of the repo (`/work`) and read-only system folders. No network (or, if the policy lists hosts, only those, through a proxy in the runtime), no home folder, no privileges, limited memory, CPU and processes. | `src/sandbox/` |
 | Event log | Before doing anything, write "about to do X" and fsync it. Afterwards, write "X is done". | `src/log.rs` |
 | Checkpoints and recovery | After each change, copy the folder. After a crash, decide per call whether it happened; if that cannot be known, go back to the last copy. | `src/checkpoint.rs`, `src/recovery.rs` |
 
@@ -242,7 +242,7 @@ workspace_mb   = 2048
 The shipped policies fit the demo. For a real repository, copy one and change four things.
 
 1. **Where the agent may write.** `[filesystem] write`: for example `["src/**", "tests/**", "pyproject.toml"]`. `fs.write` makes missing folders inside these paths. Anything else is refused, and what a command changes elsewhere is put back.
-2. **Which commands it may run.** `[exec] allow`: argv prefixes, bare program names. Every allowed command is arbitrary code (your test suite runs your code); the sandbox is what confines it. There is no network in the sandbox, so a command that downloads something will fail: dependencies must already be on disk. If a command starts other programs by name, list them in `[exec] helpers`; the agent cannot run those itself. Two that were tried: `allow = [["cargo", "test"]]` needs `helpers = ["cc"]` and `scratch = ["target/**"]`; `allow = [["npm", "test"]]` needs `helpers = ["sh"]` (`[["node", "--test"]]` needs none).
+2. **Which commands it may run.** `[exec] allow`: argv prefixes, bare program names. Every allowed command is arbitrary code (your test suite runs your code); the sandbox is what confines it. There is no network in the sandbox unless the policy lists hosts (see [Network for commands](#network-for-commands)); without that, a command that downloads something will fail and dependencies must already be on disk. If a command starts other programs by name, list them in `[exec] helpers`; the agent cannot run those itself. Two that were tried: `allow = [["cargo", "test"]]` needs `helpers = ["cc"]` and `scratch = ["target/**"]`; `allow = [["npm", "test"]]` needs `helpers = ["sh"]` (`[["node", "--test"]]` needs none).
 3. **The packages your tests need.** The sandbox sees the copy of the repo and the folders in `sandbox.ro_mounts`, nothing else. Not your home folder, and not a virtualenv, even one inside the repo.
    - *A virtualenv:* add its folder to `ro_mounts`, start `norn` with it activated, and if it lives inside the repo put it in `skip` so that it is not copied. A mount may not be under `/tmp`. If you forget to activate it, `norn` prints a note.
 
@@ -283,6 +283,22 @@ Things to know before the first run:
 - **If the model gives up**, the run ends as `STOPPED`, not `COMPLETED`: a model that answers with words while its last command is still failing is reminded once, then the run is closed with its last words.
 - **Nothing is deleted for you.** Each execution keeps its workspace and one checkpoint per change. `norn rm --older-than 14` removes old ones; it keeps executions that are running or can still be resumed.
 
+### Network for commands
+
+By default a command cannot connect anywhere. To let commands download packages, list the hosts in the policy:
+
+```toml
+[network]
+allow = ["pypi.org", "files.pythonhosted.org"]
+```
+
+- An entry is a host name, optionally with a port (`host:8443`); without one it means port 443 (HTTPS). `*.example.com` matches every name under `example.com`. An address (`127.0.0.1:8080`) matches only requests for that address.
+- Commands get `HTTPS_PROXY` and `HTTP_PROXY` (and the lower-case spellings) pointing at `http://127.0.0.1:3128`, and `NO_PROXY=localhost,127.0.0.1,::1`. Inside the sandbox that address is the runtime's proxy, the only way out. pip, npm, cargo and git use the variables by themselves (`experiments/m19-connect-proxy/NOTES.md`).
+- The hosts each tool needed in that experiment: Python `pypi.org`, `files.pythonhosted.org`; Node `registry.npmjs.org`; Rust `index.crates.io`, `static.crates.io`; git over HTTPS the forge's host (`github.com`). A host that is missing shows in the command's error output as `[norn] network: <host>:443 was not reached: no matching rule`.
+- Every connection is logged with its host, port and bytes, and `norn trace` shows them under the call. `norn check` says which hosts a policy opens.
+- A name that resolves to this machine (`localhost`, or a name pointed at `127.0.0.1`) is refused; write the address to mean it.
+- What a command sends to an allowed host cannot be undone. Read [the threat model](docs/threat-model.md), §9, before listing a host.
+
 ### From an MCP client (Claude Code and others)
 
 `norn mcp` offers the tools to any agent that speaks MCP (the Model Context Protocol), over standard input and output. The agent then reads, writes and runs commands through norn's gateway, policy, sandbox and log, on a copy of the repository. For Claude Code, a configuration file:
@@ -308,7 +324,7 @@ claude --mcp-config norn.json --strict-mcp-config --tools "" --allowedTools mcp_
 - **No power-loss guarantee.** The tests kill the process; they do not cut power. Checkpoints are not fsynced.
 - **No exactly-once execution.** A command that was cut off is rolled back and may be issued again by the agent as a new call. An external call is applied once only if the service honours the idempotency key.
 - **The disk limit is measured, not a hard cap.** `limits.workspace_mb` stops and undoes a command that takes the workspace past it, but the size is measured every 50 ms, so a fast writer can pass it for a moment. Checkpoints are never pruned, and each holds a copy of the workspace.
-- **No network, ever**, for commands. No web search, no package downloads. The only thing that leaves the runtime is the bonus tool's request to a `127.0.0.1` service that a policy names, and the LLM request.
+- **No network for commands unless the policy lists hosts**, and then only those, by name, through the runtime's proxy. There is no content inspection: what a command sends to an allowed host is not seen and cannot be undone. Besides that, only the bonus tool's request to a `127.0.0.1` service that a policy names, and the LLM request, leave the runtime.
 - **The sandbox can see** the read-only system folders in full (on NixOS, all of `/nix/store`) and some facts about the host (host name, kernel version, the workspace's path).
 - **Prompt injection is contained, not prevented.** A file can talk the model into asking for something bad; the policy and sandbox then refuse or confine it.
 - **Containment ends at the patch.** A patch can change test hooks or CI files that later run unsandboxed on your machine. Read it before applying. The same goes for `norn apply`: it copies what the agent made, executable bits and symlinks included, and lists each one.

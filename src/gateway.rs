@@ -66,6 +66,24 @@ pub struct Gateway {
     repo: PathBuf,
 }
 
+/// The proxy variables for a command when the policy allows hosts (M19).
+/// Both spellings, because programs differ in which they read (curl reads
+/// only the lower-case `http_proxy`). `NO_PROXY` keeps a project's own test
+/// servers on `127.0.0.1` from being sent to the proxy, which would refuse
+/// them (D-154).
+fn proxy_env() -> Vec<(String, String)> {
+    let url = format!("http://127.0.0.1:{}", sandbox::ns::PROXY_PORT);
+    let local = "localhost,127.0.0.1,::1".to_string();
+    vec![
+        ("HTTPS_PROXY".into(), url.clone()),
+        ("https_proxy".into(), url.clone()),
+        ("HTTP_PROXY".into(), url.clone()),
+        ("http_proxy".into(), url),
+        ("NO_PROXY".into(), local.clone()),
+        ("no_proxy".into(), local),
+    ]
+}
+
 /// What the policy step produced for a call that may go ahead. It holds the
 /// already-opened file handles, so the effect uses exactly what was checked.
 enum Approved {
@@ -620,6 +638,7 @@ impl Gateway {
     fn run_exec(&mut self, call_id: u64, argv: &[String]) -> Result<Result<ToolOutput, ToolError>> {
         let program = self.programs.lookup(&argv[0]).expect("checked in plan").to_path_buf();
         let work = std::fs::canonicalize(self.dir.work())?;
+        let hosts = self.policy.host_rules();
         let spec = SandboxSpec {
             workspace: work.clone(),
             ro_mounts: self.policy.sandbox.ro_mounts.iter().map(PathBuf::from).collect(),
@@ -634,6 +653,7 @@ impl Gateway {
             ]
             .into_iter()
             .chain(self.policy.sandbox.env.iter().map(|(k, v)| (k.clone(), v.clone())))
+            .chain(if hosts.is_empty() { Vec::new() } else { proxy_env() })
             .collect(),
             cgroup: self.sandbox.cgroups.path_of(&sandbox::cgroup_name(&self.dir.id, call_id)),
             parent_pid: std::process::id() as i32,
@@ -641,12 +661,19 @@ impl Gateway {
             gid: nix::unistd::getgid().as_raw(),
             max_file_bytes: self.policy.limits.workspace_bytes(),
             ro_dirs: self.policy.filesystem.ro_dirs.iter().map(|d| (self.repo.join(d), d.clone())).collect(),
+            proxy: !hosts.is_empty(),
         };
         let cg = self.sandbox.cgroups.create(&sandbox::cgroup_name(&self.dir.id, call_id), &self.policy.limits)?;
         let timeout = std::time::Duration::from_secs(self.policy.limits.call_timeout_s);
         let max = (self.policy.limits.max_output_kb * 1024) as usize;
         let disk = sandbox::DiskLimit { dir: work.clone(), max_bytes: self.policy.limits.workspace_bytes() };
-        let result = sandbox::run(&self.sandbox.helper, &spec, &cg, timeout, max, &disk);
+        let result = sandbox::run(&self.sandbox.helper, &spec, &cg, timeout, max, &disk, &hosts);
+        // What went out is logged whatever happens to the call next (N3).
+        if let Ok((out, _)) = &result {
+            if let Some(net) = out.network.as_ref().filter(|n| !n.connections.is_empty() || n.dropped > 0) {
+                self.log.append(EventBody::ExecNetwork { call_id, connections: net.connections.clone(), dropped: net.dropped })?;
+            }
+        }
         let _ = cg.destroy();
         // Stopped while running, or over the limit when it ended (it may have
         // finished between two measurements): either way it is undone, so no

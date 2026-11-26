@@ -53,6 +53,15 @@ ro_mounts = ["/usr", "/bin", "/lib", "/lib64"]
 # files next to the sources: a patch cannot carry them (D-090, D-092).
 PYTHONDONTWRITEBYTECODE = "1"
 
+# Network for commands: none unless hosts are listed here. Each listed host is
+# reached through the runtime's proxy; everything else is refused, and every
+# connection is logged. What a command sends there cannot be undone. Hosts
+# for package registries (experiments/m19-connect-proxy): Python "pypi.org",
+# "files.pythonhosted.org"; Node "registry.npmjs.org"; Rust "index.crates.io",
+# "static.crates.io". See "Network for commands" in the README.
+# [network]
+# allow = ["pypi.org", "files.pythonhosted.org"]
+
 [limits]
 memory_mb      = 512
 pids           = 128

@@ -3965,6 +3965,39 @@ Earlier runs on the way: 45723220958 on `2312511` (failed: MCP test client, TOCT
 
 **Concepts to learn.** Exponential back-off.
 
+### D-160 — How the network allow-list is built (M19)
+- **Date:** 2026-11-26
+- **Status:** Taken
+- **Area:** sandbox
+- **ADR:** none
+
+**In plain words.** `[network] allow` in a policy lists the hosts commands may reach. When it is set, every `exec` gets a proxy: the sandbox hands its listening socket to the runtime (D-155), and a thread in the runtime reads each request, checks the host against the list, resolves the name, connects, and copies bytes both ways while counting them. When the command ends, the proxy closes whatever is still open and its list of connections goes into the log as one event, `exec.network`, before the call's checkpoint. Refused or failed connections are also added to the command's error output, so the agent learns which host was missing.
+
+**The problem.** Building M19 (N1 to N4 of `docs/v3-scope.md`) with the shape chosen by the experiments.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Entry syntax `host`, `host:port`, `*.domain[:port]`, or an IPv4 address; port 443 when none is given; IPv6 literals refused | Taken | As the plan says (N1); no rule can name an IPv6 address, so none is accepted from a client either |
+| A name never matches a request by address, nor an address rule a request by name | Taken | Otherwise listing `pypi.org` would allow whatever address a command typed |
+| Refuse names that resolve only to local addresses (loopback, link-local, unspecified, multicast) | Taken | An allowed name pointed at `127.0.0.1` would reach the runtime's own machine; link-local includes a cloud machine's metadata service. An address entry is the deliberate way to reach such an address |
+| Refuse private network ranges (10/8, 192.168/16, ...) as well | Discarded | A company's package mirror is often on one; the list already names every host |
+| Plain HTTP: any method, the full URL turned into a path before forwarding | Taken | Restricting plain HTTP to `GET` would be pointless while a `CONNECT` tunnel carries any method; servers expect a path |
+| One `exec.network` event per call, after the command ends | Taken | Byte counts exist only when a connection closes (E1); one row per call keeps the log small |
+| One event per connection, written as it happens | Discarded | The proxy threads would write to the log, which today only the gateway does; the record would be more complete across a crash but needs locking in the log. The gap is stated in the recovery semantics (§11) |
+| At most 256 connection records per call, then a count | Taken | A command could otherwise fill the log with refused attempts |
+| At most 128 open connections per call; head and connect timeouts of 10 s | Taken | Bounds the threads one command can make the runtime start |
+| `HTTPS_PROXY`, `HTTP_PROXY`, both spellings, and `NO_PROXY=localhost,127.0.0.1,::1` | Taken | E1; curl reads only the lower-case `http_proxy`; `NO_PROXY` keeps a project's own test servers off the proxy (urllib honours it even for an explicit proxy, Findings) |
+| A policy that sets the proxy variables in `[sandbox.env]` while `[network]` is on is refused | Taken | Two values for one variable would leave it to each program which one wins |
+| `norn check` prints the hosts a policy opens, and that what is sent cannot be undone | Taken | v3 scope §6: say the change plainly |
+| `nix` features `socket` and `uio`, for `sendmsg`/`recvmsg` with `SCM_RIGHTS` | Taken | Already a dependency; the feature brings in one small crate, `memoffset` (field offsets for the socket structures). Raw `libc` calls with the `CMSG_*` macros would avoid it with more `unsafe` |
+
+**What this means for the code.** `src/policy.rs` (`NetworkRules`, `HostRule`), `src/sandbox/proxy.rs` (new), `src/sandbox/ns.rs` (`SandboxSpec::proxy`, `hand_out_proxy_socket`), `src/sandbox/mod.rs` (socket pair on fd 4, proxy start and finish, stderr notes), `src/gateway.rs` (variables, `exec.network`), `src/log.rs` (event), `src/trace.rs`, `src/runtime.rs` (`check`). `ExecOutput` gets an optional `network` field. Tests: `tests/network.rs`, unit tests in `proxy.rs` and `policy.rs`, and the kill cells again with `NORN_RECOVERY_NETWORK=1`.
+
+**Evidence.** On `nix`: `cargo test --test network` 4 passed; `cargo test --lib` 53 passed (8 proxy tests); `NORN_RECOVERY_NETWORK=1 cargo test --test recovery recovery_holds_at_every_crash_point`: `network total: 72 runs, 72 killed, 0 invariant violations, 0 duplicated effects, 60/60 cut-off calls classified correctly`. A hand run showed `network: CONNECT 127.0.0.1:9 failed: cannot connect: Connection refused (os error 111)` in the trace.
+
+**Concepts to learn.** Absolute-form and origin-form request targets (HTTP); link-local addresses; server-side request forgery (SSRF).
+
 ---
 
 ## Still open
@@ -4073,6 +4106,8 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-26 | E1: the logging proxy wrote a connection's line only when the connection closed, and npm keeps up to five connections open until it exits; in one run, npm's lines were missing because the proxy was stopped first. Logging `OPEN` when a tunnel starts showed all five (`experiments/m19-connect-proxy/NOTES.md`) | A record written only at the end of something is lost if the end never comes. The runtime must close and log what is still open when a command ends |
 | 2026-11-26 | E5: a test certificate made with `openssl req -x509` was refused by `ureq` even when it was the one trusted root: `CaUsedAsEndEntity`. `openssl` marks such a certificate as a CA, and the verifier refuses a CA certificate used by a server. A CA plus a server certificate signed by it works (`experiments/m21-https/NOTES.md`) | A strict verifier is right to refuse it, and a test setup must look like the real thing: an authority and a certificate it signed |
 | 2026-11-26 | Two sessions worked in the same folder at once. One committed the experiments E1, E2, E3, E5 as D-154 to D-157; the other, a few minutes later, recorded the CI run of v2 also as D-154, and its commit (`23dba65`) took in the first session's unfinished files (the start of the `[network]` policy code and the E4 probe). The CI record is renumbered D-158; the files it took in are kept and finished in later commits | Entry numbers are handed out by whoever writes next; two writers need one of them to stop. `git add` of everything in a shared folder commits someone else's half-done work: stage files by name |
+| 2026-11-26 | The first run of the network tests failed one test: a Python client given the proxy explicitly still connected directly, and was refused. urllib applies `NO_PROXY` (which norn sets to `127.0.0.1`) even to an explicit `ProxyHandler`; the test servers were on the host's `127.0.0.1`. The test now clears `NO_PROXY`; the proxy itself was fine (the tunnel test passed) | The setting worked as intended for real projects and against the test. When a test of a way out fails, first check whether the client even tried it |
+| 2026-11-26 | Adding the `exec.network` event, the call state machine in `src/log.rs` would have refused it: it lists which event may follow which, and anything else is an error ("`exec.network` is not allowed after state IntentLogged"). Found by reading the code before the first run, not by a test | Every new event kind must be added to the state machine, not only to the enum. The compiler checks the enum's matches; it cannot check a table of allowed orders |
 
 ---
 
@@ -4179,3 +4214,5 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | `SCM_RIGHTS` | A way to send an open file or socket to another process through a Unix socket; the receiver gets its own descriptor for the same object (D-155) |
 | Certificate authority (CA) | An organisation (or a test key) that signs certificates. A client trusts a server's certificate when a CA it trusts signed it and the name matches (D-157) |
 | `webpki-roots` | Mozilla's list of trusted certificate authorities, compiled into a Rust program; what `ureq` checks against (D-157) |
+| SSRF (server-side request forgery) | Making a server that fetches things for you fetch something on its own side, such as a service only reachable from that machine. The proxy refuses names that resolve to the runtime's own machine for this reason (D-160) |
+| Link-local address | An address valid only on one network link, such as `169.254.x.x`. Cloud machines serve their metadata (sometimes with credentials) at `169.254.169.254` (D-160) |

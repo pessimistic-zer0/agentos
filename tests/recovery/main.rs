@@ -46,6 +46,16 @@ use serde_json::{json, Value};
 /// doubled run would show as an extra line.
 const APPEND: &str = "import time\nf = open('src/counter.txt', 'a'); f.write('x\\n'); f.flush()\ntime.sleep(0.03)\nopen('src/side.txt', 'a').write('y\\n')";
 
+/// `NORN_RECOVERY_NETWORK=1`: the same cells with `[network]` on (M19,
+/// v3 scope §7). Each `exec` then first asks the runtime's proxy for a
+/// tunnel to a listed host where nothing listens, so the proxy is started,
+/// used and stopped inside every killed command.
+fn network() -> bool {
+    std::env::var("NORN_RECOVERY_NETWORK").as_deref() == Ok("1")
+}
+
+const NET_PROBE: &str = "import socket\ntry:\n  s = socket.create_connection(('127.0.0.1', 3128), timeout=2); s.sendall(b'CONNECT 127.0.0.1:9 HTTP/1.1\\r\\n\\r\\n'); s.recv(100); s.close()\nexcept OSError:\n  pass\n";
+
 fn big(tag: &str) -> String {
     // ~400 KB, so the temp-file write takes long enough for a kill to land in it.
     format!("{tag} line of text for the fault-injection workload\n").repeat(8000)
@@ -56,7 +66,7 @@ const TOOL_STEPS: [(&str, &[usize]); 4] = [("fs.list", &[0]), ("fs.write", &[1, 
 
 fn script_text() -> String {
     let w = |path: &str, content: &str| format!("[[step]]\ntool = \"fs.write\"\npath = \"{path}\"\ncontent = '''\n{content}'''\n");
-    let exec = format!("[[step]]\ntool = \"exec\"\nargv = [\"python3\", \"-c\", '''\n{APPEND}\n''']\n");
+    let exec = format!("[[step]]\ntool = \"exec\"\nargv = [\"python3\", \"-c\", '''\n{}{APPEND}\n''']\n", if network() { NET_PROBE } else { "" });
     format!(
         "task = \"fault-injection workload\"\n[[step]]\ntool = \"fs.list\"\npath = \"src\"\n{}{exec}[[step]]\ntool = \"fs.read\"\npath = \"src/small.txt\"\n{}{exec}{}",
         w("src/a.txt", &big("A1")),
@@ -81,6 +91,9 @@ fn policy_text() -> String {
         }
         out.push_str(line);
         out.push('\n');
+    }
+    if network() {
+        out.push_str("\n[network]\nallow = [\"127.0.0.1:9\"]\n");
     }
     out
 }
@@ -575,8 +588,9 @@ fn recovery_holds_at_every_crash_point() {
     }
     all_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let (p50, p99) = (percentile(&all_times, 0.50), percentile(&all_times, 0.99));
+    let label = if network() { "network " } else { "" };
     println!(
-        "\ntotal: {total_runs} runs, {total_crashed} killed, {total_viol} invariant violations, {total_dup} duplicated effects, \
+        "\n{label}total: {total_runs} runs, {total_crashed} killed, {total_viol} invariant violations, {total_dup} duplicated effects, \
          {total_cls_ok}/{total_cls} cut-off calls classified correctly; `norn recover` wall time p50 {p50:.1} ms, p99 {p99:.1} ms; \
          harness took {:.0} s with {workers} workers",
         elapsed.as_secs_f64()
@@ -585,13 +599,13 @@ fn recovery_holds_at_every_crash_point() {
         println!("VIOLATION {} {} #{}: {:?}", job.point, job.tool, job.n, o.violations);
     }
     let report = json!({
-        "runs_per_cell": runs, "preset": preset(), "rows": rows,
+        "runs_per_cell": runs, "preset": preset(), "network": network(), "rows": rows,
         "total": {"runs": total_runs, "killed": total_crashed, "violations": total_viol, "duplicated_effects": total_dup,
                   "classified": total_cls, "classified_correctly": total_cls_ok},
         "recover_ms": {"p50": p50, "p99": p99, "samples": all_times.len()},
         "harness_seconds": elapsed.as_secs_f64(),
     });
-    let path = repo_root().join("target/recovery-report.json");
+    let path = repo_root().join(if network() { "target/recovery-network-report.json" } else { "target/recovery-report.json" });
     std::fs::write(&path, serde_json::to_string_pretty(&report).unwrap()).unwrap();
     println!("report written to {}", path.display());
 
@@ -620,7 +634,7 @@ const ORDERS: [(&str, u64); 2] = [("order-1", 2), ("order-2", 4)];
 
 fn ext_script_text() -> String {
     let ext = |payload: &str| format!("[[step]]\ntool = \"ext.call\"\nservice = \"ledger\"\npayload = \"{payload}\"\n");
-    let exec = format!("[[step]]\ntool = \"exec\"\nargv = [\"python3\", \"-c\", '''\n{APPEND}\n''']\n");
+    let exec = format!("[[step]]\ntool = \"exec\"\nargv = [\"python3\", \"-c\", '''\n{}{APPEND}\n''']\n", if network() { NET_PROBE } else { "" });
     format!(
         "task = \"external-call workload\"\n[[step]]\ntool = \"fs.write\"\npath = \"src/a.txt\"\ncontent = \"A1\\n\"\n{}{exec}{}[[step]]\ntool = \"fs.write\"\npath = \"src/new.txt\"\ncontent = \"new\\n\"\n",
         ext(ORDERS[0].0),

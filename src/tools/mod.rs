@@ -347,6 +347,10 @@ pub struct ExecOutput {
     /// put back from the checkpoint (D-009).
     #[serde(default)]
     pub reverted: Vec<String>,
+    /// What the command asked the network proxy for (M19). Absent when the
+    /// policy allows no hosts, and in results written before v3.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<crate::sandbox::proxy::Report>,
 }
 
 impl ToolOutput {

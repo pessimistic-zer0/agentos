@@ -78,6 +78,12 @@ pub enum EventBody {
     /// Code run by `exec` changed paths outside the write globs; they were put back.
     #[serde(rename = "policy.violation")]
     PolicyViolation { call_id: u64, reverted: Vec<String> },
+    /// Connections an `exec` command asked the network proxy for, allowed
+    /// or refused, with bytes each way (M19, N3). Written when the command
+    /// has ended, before the call's checkpoint; a call cut off by a crash
+    /// has no such record.
+    #[serde(rename = "exec.network")]
+    ExecNetwork { call_id: u64, connections: Vec<crate::sandbox::proxy::Connection>, dropped: u64 },
     /// Recovery began after a crash. `pending` lists the calls that had no
     /// ending. May appear more than once if recovery itself was interrupted.
     #[serde(rename = "recovery.started")]
@@ -116,6 +122,7 @@ impl EventBody {
             EventBody::ToolCompleted { .. } => "tool.completed",
             EventBody::ToolFailed { .. } => "tool.failed",
             EventBody::PolicyViolation { .. } => "policy.violation",
+            EventBody::ExecNetwork { .. } => "exec.network",
             EventBody::RecoveryStarted { .. } => "recovery.started",
             EventBody::ToolReconciled { .. } => "tool.reconciled",
             EventBody::RecoveryCompleted { .. } => "recovery.completed",
@@ -132,7 +139,8 @@ impl EventBody {
             | EventBody::ToolCompleted { call_id, .. }
             | EventBody::ToolFailed { call_id, .. }
             | EventBody::ToolReconciled { call_id, .. }
-            | EventBody::PolicyViolation { call_id, .. } => Some(*call_id),
+            | EventBody::PolicyViolation { call_id, .. }
+            | EventBody::ExecNetwork { call_id, .. } => Some(*call_id),
             _ => None,
         }
     }
@@ -303,7 +311,7 @@ pub fn calls(events: &[Event]) -> Result<Vec<CallRecord>> {
         rec.state = match (&rec.state, &ev.body) {
             (CallState::Requested, EventBody::ToolDenied { rule, .. }) => CallState::Denied { rule: rule.clone() },
             (CallState::Requested, EventBody::ToolIntent { plan, .. }) => CallState::IntentLogged { plan: plan.clone() },
-            (CallState::IntentLogged { .. }, EventBody::PolicyViolation { .. }) => rec.state.clone(),
+            (CallState::IntentLogged { .. }, EventBody::PolicyViolation { .. } | EventBody::ExecNetwork { .. }) => rec.state.clone(),
             (CallState::IntentLogged { .. }, EventBody::ToolCompleted { output, checkpoint, .. }) => {
                 CallState::Completed { output: output.clone(), checkpoint: checkpoint.clone() }
             }

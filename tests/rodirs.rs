@@ -279,10 +279,11 @@ fn the_sandbox_refuses_a_mount_point_that_is_a_symlink() {
             gid: nix::unistd::getgid().as_raw(),
             max_file_bytes: policy.limits.workspace_bytes(),
             ro_dirs: vec![(repo.join("vendor"), "vendor".into())],
+            proxy: false,
         };
         let cg = cgroups.create(&format!("ro-ns-{}-{name}", std::process::id()), &policy.limits).unwrap();
         let disk = DiskLimit { dir: work, max_bytes: policy.limits.workspace_bytes() };
-        sandbox::run(&norn_bin(), &spec, &cg, std::time::Duration::from_secs(20), 4096, &disk)
+        sandbox::run(&norn_bin(), &spec, &cg, std::time::Duration::from_secs(20), 4096, &disk, &[])
     };
     // The control: a plain folder as the mount point works.
     let (out, _) = attempt("good", &|w| std::fs::create_dir(w.join("vendor")).unwrap()).unwrap();

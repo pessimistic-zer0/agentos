@@ -164,7 +164,7 @@ mod tests {
     use super::*;
 
     fn out(code: i32, stdout: &str) -> ExecOutput {
-        ExecOutput { exit_code: Some(code), signal: None, timed_out: false, stdout: stdout.into(), stderr: String::new(), truncated: false, duration_ms: 1, reverted: vec![] }
+        ExecOutput { exit_code: Some(code), signal: None, timed_out: false, stdout: stdout.into(), stderr: String::new(), truncated: false, duration_ms: 1, reverted: vec![], network: None }
     }
     fn set(v: &[&str]) -> BTreeSet<String> {
         v.iter().map(|s| s.to_string()).collect()
