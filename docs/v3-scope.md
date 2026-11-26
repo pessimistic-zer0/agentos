@@ -1,8 +1,8 @@
-# norn v3 — Scope (draft, waiting for Prince's approval)
+# norn v3 — Scope
 
-*Drafted 2026-11-26. Decision: D-152 (open until approved). Road map: D-137 (v3 is Phase 2 of the spec: hardening).*
+*Drafted 2026-11-26 (D-152); approved by Prince the same day (D-153). Road map: D-137 (v3 is Phase 2 of the spec: hardening).*
 
-**Status: draft.** Nothing here is approved or built. Until Prince approves it, the scope stays v2 (`docs/v2-scope.md`).
+**Status: approved; this is the plan for v3.** All four milestones. TLS interception stays out. The trial uses a local fake HTTPS service. The release is 1.2.0. Nothing is built yet.
 
 ## 1. In one paragraph
 
@@ -91,7 +91,7 @@ Today a sandboxed command has no network at all, the only outside effect is `ext
 - The kill cells still pass, with network on.
 - The trial is recorded; CI is green on both presets and Debian.
 
-## 8. Questions only Prince can answer
+## 8. Questions only Prince can answer (answered 2026-11-26, D-153: all four milestones; TLS interception out; a local fake HTTPS service; 1.2.0)
 
 1. **Approve the scope:** all four milestones, or a smaller v3 (for example M19 alone, network only, which removes the trials' biggest limit).
 2. **TLS interception stays out?** Recommended: yes. Without it a secret cannot be added to a command's own HTTPS traffic, which is why secrets go through `ext.call` (S2).

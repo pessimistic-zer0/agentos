@@ -3765,7 +3765,7 @@ Open questions for Prince, in the draft (§8): approval of the items; whether th
 
 ### D-152 — The v3 scope, drafted: a network allow-list, approvals, secrets used by the runtime
 - **Date:** 2026-11-26
-- **Status:** Open (waiting for Prince's approval)
+- **Status:** Replaced by D-153 (approved as drafted)
 - **Area:** scope
 - **ADR:** none
 
@@ -3790,6 +3790,32 @@ Open questions for Prince, in the draft (§8): approval of the items; whether th
 
 **Concepts to learn.** HTTP `CONNECT`; SNI; TLS interception; credential brokering; Landlock network rules (ABI 4).
 
+### D-153 — The v3 scope is approved: all four milestones, no TLS interception, a local fake HTTPS service for the trial, version 1.2.0
+- **Date:** 2026-11-26
+- **Status:** Taken
+- **Area:** scope
+- **ADR:** none
+
+**In plain words.** Prince approved the v3 draft (D-152) as written: M19 a network allow-list, M20 approvals, M21 secrets used by the runtime for HTTPS `ext.call`, M22 evidence and release. TLS interception stays out, so secrets go only through `ext.call`. The trial uses a local fake HTTPS service, not a real account. He left the version number open; it is 1.2.0, because everything is optional and off by default. `docs/v3-scope.md` is now the plan for v3.
+
+**The problem.** D-152's four questions.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| All four milestones | Taken | Prince's choice |
+| M19 alone | Discarded | Offered; not chosen |
+| TLS interception out | Taken | Prince's choice, as recommended |
+| Local fake HTTPS service for the trial | Taken | Prince's choice, as recommended; no token needed |
+| A real service with a token | Discarded | Offered; not chosen |
+| 1.2.0 | Taken | Prince left it to Claude; semantic versioning for additions that are off by default |
+
+**What this means for the code.** Work starts with the experiments E1 to E5 of `docs/v3-scope.md`. Milestones M19 to M22; tags `m19` to `m22` and `v1.2` after green CI runs.
+
+**Evidence.** Prince's words: "all four milestone for the scope, and tls stays out, fake https servvice, and version number whatever you want".
+
+**Concepts to learn.** None new.
+
 ---
 
 ## Still open
@@ -3798,7 +3824,7 @@ Open questions for Prince, in the draft (§8): approval of the items; whether th
 |---|---|
 | ~~A key for the hosted-model trial (M13)~~ | Not needed: Claude through a relay, at Prince's request (D-130) |
 | ~~Project name~~ | Answered by D-133: norn (Prince, 2026-11-25) |
-| The v3 scope (`docs/v3-scope.md`) | D-152: drafted 2026-11-26; Prince to approve, and to answer its four questions |
+| ~~The v3 scope (`docs/v3-scope.md`)~~ | Answered by D-153: all four milestones; no TLS interception; a local fake HTTPS service; 1.2.0 |
 | ~~The v2 scope (`docs/v2-scope.md`)~~ | Answered by D-139: approved as drafted; trial with Prince's account; version 1.1.0 |
 | ~~License~~ | Answered by D-069: dual MIT OR Apache-2.0 |
 | ~~Public repo from day one, or after v0.1?~~ | Answered by events: Prince pushed `main` to GitHub on 2026-11-12, after v0.1 was tagged locally |

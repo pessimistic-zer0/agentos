@@ -7,6 +7,7 @@ A Rust runtime that runs a coding agent's tool calls inside a rootless Linux san
 - `AgentOS v1 — Scoped Design.md` is **the plan**. Read it before any design or code work.
 - `AgentOS_Project_Spec.md` is a "maybe someday" list. It never adds work to v1. If the two disagree, the v1 document wins.
 - `docs/decision-log.md` records every decision taken or discarded, with reasons. Prince will study from it later, so it must stay complete.
+- `docs/v3-scope.md` is **the plan for v3** (approved 2026-11-26, D-153): network allow-list, approvals, secrets used by the runtime, released as 1.2.0. Milestones M19 to M22.
 - `docs/v2-scope.md` is **the plan for v2** (approved 2026-11-26, D-139): norn as an MCP server, M15 to M18, released as 1.1.0. The order of the versions after it is D-137; each needs its own approval.
 - `docs/decisions/` holds the ADRs. `docs/threat-model.md`, `docs/recovery-semantics.md`, `docs/bugs.md` and `docs/results/` are the other documents of record.
 
@@ -78,6 +79,10 @@ At the end of each milestone, write `docs/milestones/M<n>-<name>.md` from `docs/
 | `M16-mcp-recovery.md` | v2 | `norn mcp --resume`, kill cells and security cases through MCP |
 | `M17-agent-friction.md` | v2 | Test baseline, denials that say what is allowed, `fs.search`, `fs.delete`, `replace_all`, end on `413` |
 | `M18-mcp-trial-release.md` | v2 | Claude Code on the six tickets through norn; documents; 1.1.0, tag `v1.1` |
+| `M19-network.md` | v3 | `[network] allow`: a proxy in the runtime, a forwarder in the sandbox, connections in the log (D-153) |
+| `M20-approvals.md` | v3 | `[approvals] require`, `norn approve` / `norn deny`, exact and expiring |
+| `M21-secrets.md` | v3 | `[secrets]`, `ext.call` to HTTPS services with a secret header, redaction |
+| `M22-v3-trial-release.md` | v3 | Security cases, a trial with a local fake HTTPS service, documents, 1.2.0, tag `v1.2` |
 | `M8-first-user.md` | after M7 | Bugs found by hand (B-009 to B-013), folder-making writes, first messages, the patch's notes, packages from outside the repo, the AppArmor profile, the first trial on a real project |
 
 ## Design rules that must hold
@@ -182,6 +187,6 @@ v2 (D-139, `docs/v2-scope.md`), in progress. M15 (`docs/milestones/M15-mcp-serve
 Open, and only Prince can close them:
 
 - The tags `v1.0` and `m14` are on GitHub, pushed by Prince on 2026-11-25.
-- Push, so CI can verify v2 (M15 to M18) on `fhs`; then the tags `m15` to `m18` and `v1.1` (D-150). v2 is approved (D-139) and in progress; later versions are ordered (D-137) but not yet scoped.
+- Nothing. v2 waits for a green CI run: run 45723220958 failed (the MCP test client on a half-written answer, fixed; the TOCTOU test in the AppArmor job, cause unknown, Findings 2026-11-26). Then the tags `m15` to `m18` and `v1.1` go on the commit that passed (D-150). v3 is approved (D-153) and not started; v4 and v5 are ordered (D-137) but not scoped.
 
 Update this section when any of these changes.
