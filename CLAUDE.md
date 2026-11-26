@@ -187,6 +187,6 @@ v2 (D-139, `docs/v2-scope.md`), in progress. M15 (`docs/milestones/M15-mcp-serve
 Open, and only Prince can close them:
 
 - The tags `v1.0` and `m14` are on GitHub, pushed by Prince on 2026-11-25.
-- Nothing. v2 waits for a green CI run: run 45723220958 failed (the MCP test client on a half-written answer, fixed; the TOCTOU test in the AppArmor job, cause unknown, Findings 2026-11-26). Then the tags `m15` to `m18` and `v1.1` go on the commit that passed (D-150). v3 is approved (D-153) and not started; v4 and v5 are ordered (D-137) but not scoped.
+- Nothing. v2 waits for a green CI run: run 45723220958 failed (the MCP test client on a half-written answer, fixed; the TOCTOU test in the AppArmor job, probably B-015: `openat2` gave `EAGAIN` under concurrent renames and norn never retried; fixed). Then the tags `m15` to `m18` and `v1.1` go on the commit that passed (D-150). v3 is approved (D-153) and not started; v4 and v5 are ordered (D-137) but not scoped.
 
 Update this section when any of these changes.
