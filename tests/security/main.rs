@@ -924,3 +924,150 @@ fn output_flood_is_truncated_and_does_not_fill_the_log() {
     let size = |p: &str| std::fs::metadata(t.exec_dir(&r.id).join(p)).map(|m| m.len()).unwrap_or(0);
     assert!(size("log.db") + size("log.db-wal") < 2 * 1024 * 1024, "log grew to {} bytes", size("log.db") + size("log.db-wal"));
 }
+
+// ===========================================================================
+// 9. v3: the network allow-list, secrets, approvals (M22, D1)
+// ===========================================================================
+
+/// A web server on the host that answers every request with `hello`.
+fn host_web_server() -> (std::net::TcpListener, u16) {
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    let c = l.try_clone().unwrap();
+    std::thread::spawn(move || {
+        use std::io::{Read, Write};
+        for mut s in c.incoming().flatten() {
+            let mut b = [0u8; 4096];
+            let _ = s.read(&mut b);
+            let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello");
+        }
+    });
+    (l, port)
+}
+
+/// Python: ask the proxy for something; raise unless it says yes.
+const VIA_PROXY: &str = r#"
+def via_proxy(first_line, extra=b""):
+    s = socket.create_connection(("127.0.0.1", 3128), timeout=5)
+    s.sendall(first_line.encode() + b"\r\nHost: x\r\n\r\n" + extra)
+    head = s.recv(200)
+    if not head.startswith(b"HTTP/1.1 200"):
+        raise PermissionError(head.split(b"\r\n")[0].decode())
+    return s
+def second_hop(allowed):
+    s = via_proxy("CONNECT " + allowed + " HTTP/1.1")
+    s.sendall(b"CONNECT 1.1.1.1:80 HTTP/1.1\r\nHost: x\r\n\r\n")
+    head = s.recv(200)
+    if b"Connection established" not in head:
+        raise PermissionError("the allowed host is not a proxy: " + head[:30].decode())
+    return head
+"#;
+
+#[test]
+fn the_network_allow_list_cannot_be_escaped() {
+    let (_web, allowed) = host_web_server();
+    let (_other, other) = host_web_server();
+    let text = format!("{}\n[network]\nallow = [\"127.0.0.1:{allowed}\"]\n", policy_text(256, 64, 20));
+    let t = TestEnv::new("sec-v3-net").with_policy_text(&text);
+    let repo = make_repo(&t);
+    let code = py(&format!(
+        "{VIA_PROXY}\n\
+         probe('direct tcp to the allowed host', lambda: socket.create_connection(('127.0.0.1', {allowed}), timeout=3))\n\
+         probe('direct tcp to 1.1.1.1:80', lambda: socket.create_connection(('1.1.1.1', 80), timeout=3))\n\
+         probe('udp to 8.8.8.8:53', lambda: socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(b'x', ('8.8.8.8', 53)))\n\
+         probe('dns lookup', lambda: socket.getaddrinfo('example.com', 443))\n\
+         probe('proxy: another host', lambda: via_proxy('CONNECT 1.1.1.1:443 HTTP/1.1'))\n\
+         probe('proxy: the allowed host on another port', lambda: via_proxy('CONNECT 127.0.0.1:{other} HTTP/1.1'))\n\
+         probe('proxy: a name for this machine', lambda: via_proxy('CONNECT localhost:{allowed} HTTP/1.1'))\n\
+         probe('proxy: the same name with a final dot and capitals', lambda: via_proxy('CONNECT LOCALHOST.:{allowed} HTTP/1.1'))\n\
+         probe('proxy: plain http to another host', lambda: via_proxy('GET http://1.1.1.1/ HTTP/1.1'))\n\
+         probe('proxy: user name trick', lambda: via_proxy('GET http://127.0.0.1:{allowed}@1.1.1.1/ HTTP/1.1'))\n\
+         probe('proxy: ipv6 literal', lambda: via_proxy('CONNECT [::1]:{allowed} HTTP/1.1'))\n\
+         probe('a second proxy hop through the allowed host', lambda: second_hop('127.0.0.1:{allowed}'))\n\
+         s = via_proxy('CONNECT 127.0.0.1:{allowed} HTTP/1.1'); s.sendall(b'GET / HTTP/1.1\\r\\n\\r\\n'); print('ALLOWED:', s.recv(200)[-5:])"
+    ));
+    let (r, out) = attack(&t, &repo, &code);
+    assert_blocked(
+        &out,
+        &[
+            "direct tcp to the allowed host",
+            "direct tcp to 1.1.1.1:80",
+            "udp to 8.8.8.8:53",
+            "dns lookup",
+            "proxy: another host",
+            "proxy: the allowed host on another port",
+            "proxy: a name for this machine",
+            "proxy: the same name with a final dot and capitals",
+            "proxy: plain http to another host",
+            "proxy: user name trick",
+            "proxy: ipv6 literal",
+            "a second proxy hop through the allowed host",
+        ],
+    );
+    // The allowed connection works, so the BLOCKED lines are not a dead proxy.
+    assert!(out["stdout"].as_str().unwrap().contains("ALLOWED: b'hello'"), "{}", out["stdout"]);
+    // Every refusal is in the log.
+    let net = r.events.iter().find(|e| e["type"] == "exec.network").expect("exec.network");
+    let refused = net["connections"].as_array().unwrap().iter().filter(|c| c["allowed"] == false).count();
+    assert!(refused >= 5, "{net}");
+}
+
+#[test]
+fn a_secret_cannot_be_reached_by_the_agent_or_its_commands() {
+    use common::fake_service::FakeService;
+    const TOKEN: &str = "sec-canary-5d1e9b77c2";
+    let svc = FakeService::start_tls(0, std::time::Duration::from_secs(3)).unwrap();
+    let ca = repo_root().join("tests/fixtures/tls/ca.pem");
+    let text = format!(
+        "{}\n[secrets]\nTOKEN = {{ from = \"env\", var = \"NORN_SEC_TOKEN\" }}\n[external]\nattempts = 1\n\
+         [[external.service]]\nname = \"svc\"\nurl = \"{}\"\nca_file = \"{}\"\napproval = false\n\
+         [external.service.headers]\nAuthorization = \"Bearer {{secret:TOKEN}}\"\n",
+        policy_text(256, 64, 20),
+        svc.url(),
+        ca.display()
+    );
+    let t = TestEnv::new("sec-v3-secret").with_policy_text(&text);
+    let repo = make_repo(&t);
+    let code = py(
+        "probe('the secret in the environment', lambda: [v for v in os.environ.values() if 'canary' in v][0])\n\
+         probe('the secret in /proc/1/environ', lambda: [x for x in open('/proc/1/environ','rb').read().split(b'\\0') if b'canary' in x][0])\n\
+         probe('the secret in the runtime\\'s files', lambda: [p for p in ['../policy.toml', '/proc/1/root/../policy.toml'] if 'canary' in open(p).read()][0])",
+    );
+    let steps = format!(
+        "[[step]]\ntool = \"ext.call\"\nservice = \"svc\"\npayload = \"echo please\"\n\
+         [[step]]\ntool = \"exec\"\nargv = [\"python3\", \"-c\", '''\nimport os, sys\n{code}\n''']\n"
+    );
+    let r = run_steps_with_env(&t, &repo, &steps, &[("NORN_SEC_TOKEN", TOKEN.to_string())]);
+    let echoed = t.output_of(&r.id, &r.events, 1).expect("the call completed");
+    assert!(echoed["body"].as_str().unwrap().contains("[secret:TOKEN]"), "{echoed}");
+    let out = t.output_of(&r.id, &r.events, 2).expect("exec completed");
+    assert_blocked(&out, &["the secret in the environment", "the secret in /proc/1/environ", "the secret in the runtime's files"]);
+    assert_eq!(svc.seen()[0].authorization.as_deref(), Some(format!("Bearer {TOKEN}").as_str()), "the service did get it");
+    assert_nowhere(&t, &r.id, TOKEN);
+}
+
+#[test]
+fn the_agent_cannot_approve_its_own_call() {
+    // The approval the agent would need, worked out the way the runtime does.
+    let wanted = norn::approval::approval_id(&norn::tools::LoggedCall::FsDelete { path: "src/stats.py".into() });
+    let text = format!("{}\n[approvals]\nrequire = [\"fs.delete\"]\n", policy_text(256, 64, 20));
+    let t = TestEnv::new("sec-v3-approve").with_policy_text(&text);
+    let repo = make_repo(&t);
+    let forged = format!(r#"{{"approve": true, "by": "agent", "at": "2026-01-01T00:00:00Z", "expires_unix": 4000000000}}"#);
+    let steps = format!(
+        "[[step]]\ntool = \"fs.delete\"\npath = \"src/stats.py\"\n\
+         [[step]]\ntool = \"fs.write\"\npath = \"../approvals/{wanted}.json\"\ncontent = '''{forged}'''\n\
+         [[step]]\ntool = \"fs.write\"\npath = \"/proc/self/cwd/../approvals/{wanted}.json\"\ncontent = '''{forged}'''\n\
+         [[step]]\ntool = \"exec\"\nargv = [\"python3\", \"-c\", '''\nimport os\nfor d in ['../approvals', '/approvals', '/proc/1/cwd/../approvals']:\n    try:\n        os.makedirs(d, exist_ok=True); open(d + '/{wanted}.json', 'w').write({forged:?}); print('wrote', d)\n    except OSError as e:\n        print('BLOCKED:', d, type(e).__name__)\n''']\n\
+         [[step]]\ntool = \"fs.delete\"\npath = \"src/stats.py\"\n"
+    );
+    let r = run_steps(&t, &repo, &steps);
+    let of = |ty: &str| r.events.iter().filter(|e| e["type"] == ty).count();
+    assert_eq!(of("approval.requested"), 2, "both deletes waited: {:#?}", r.events);
+    assert_eq!(of("approval.used"), 0);
+    assert!(r.denied_rule(2).is_some() && r.denied_rule(3).is_some());
+    assert!(!t.exec_dir(&r.id).join("approvals").exists(), "nothing reached the execution folder");
+    assert!(t.exec_dir(&r.id).join("work/src/stats.py").exists());
+    let requested: Vec<&Value> = r.events.iter().filter(|e| e["type"] == "approval.requested").collect();
+    assert!(requested.iter().all(|e| e["approval"] == wanted.as_str()), "the test computed the id the runtime uses");
+}
