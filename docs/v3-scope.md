@@ -36,7 +36,7 @@ Today a sandboxed command has no network at all, the only outside effect is `ext
 | # | Item | Notes |
 |---|---|---|
 | A1 | `[approvals] require = [...]`: calls that need a person's yes, matched by tool, command prefix, path glob or service | e.g. `["exec:npm publish", "fs.delete:**", "ext.call:github"]` |
-| A2 | A call that needs approval is not run: the agent is answered "waiting for approval", the log records `approval.requested` with the exact call (and the diff for a write) | The gateway never blocks; no new waiting state for recovery to reason about. How long a client will wait for one answer is experiment E4 |
+| A2 | A call that needs approval is not run: the agent is answered "waiting for approval", the log records `approval.requested` with the exact call (and the diff for a write) | The gateway never blocks; no new waiting state for recovery to reason about. The pending approval has one id for every identical attempt (D-159, after E4: a new id per attempt made the model stop retrying) |
 | A3 | `norn approve <id> <call>` / `norn deny`: a person's answer, recorded with who and when, valid for that exact call (same arguments, same hash) for a limited time | Run from the person's shell; commands in the sandbox cannot reach the state folder (design rule 9), so the agent cannot approve itself |
 | A4 | The agent asks again; an approved identical call runs, with the policy checked again at that moment | Spec §9.12: "revalidated at execution time" |
 
@@ -64,7 +64,7 @@ Today a sandboxed command has no network at all, the only outside effect is `ext
 | E1 | Do `pip`, `npm`, `cargo` and `git` work through an HTTPS `CONNECT` proxy given by `HTTPS_PROXY`, with only the registry hosts allowed? Which hosts does each really need? | A 50-line proxy that logs every `CONNECT`; install one package with each tool. `experiments/m19-connect-proxy`; D-154 |
 | E2 | A forwarder inside an empty network namespace: `127.0.0.1:3128` to a Unix socket mounted from outside. Does it hold up under parallel downloads? | `experiments/m19-forwarder`; led to D-155 |
 | E3 | Landlock's network rules (ABI 4, kernel 6.7+): can the sandbox be limited to connecting to port 3128 only, as a second wall? What happens on Debian 12 (kernel 6.1), which has no ABI 4? | Probe on all three systems; if absent, the empty namespace is the only wall, as today. `experiments/m19-landlock-net`; D-156: not used |
-| E4 | How long does an MCP client wait for one `tools/call`, and what does a model do with "waiting for approval, ask again"? | Claude Code with a probe tool that sleeps, and one that answers "waiting" twice |
+| E4 | How long does an MCP client wait for one `tools/call`, and what does a model do with "waiting for approval, ask again"? | Claude Code with a probe tool that sleeps, and one that answers "waiting" twice. `experiments/m20-approval-wait`; D-159 |
 | E5 | HTTPS from the runtime: does `ureq` with its default TLS verify certificates against the system store on NixOS, Ubuntu and Debian? A new dependency would need its own entry | A request to a real host and to a self-signed one. `experiments/m21-https`; D-157 |
 
 ## 5. What is not in v3

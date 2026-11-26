@@ -18,3 +18,4 @@ showed. None of this code is used by the runtime.
 | `m19-forwarder/` | M19 | E2: reaching a proxy from an empty network namespace; the sandbox's listening socket handed out with `SCM_RIGHTS` |
 | `m19-landlock-net/` | M19 | E3: Landlock's TCP port rules (ABI 4+) as a second wall; not used |
 | `m21-https/` | M21 | E5: `ureq`'s certificate checks, and trusting one test CA |
+| `m20-approval-wait/` | M20 | E4: how long Claude Code waits for one tool call, and what a model does with "waiting for approval" |

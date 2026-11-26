@@ -3912,7 +3912,7 @@ Open questions for Prince, in the draft (§8): approval of the items; whether th
 
 **Concepts to learn.** Certificate authority (CA); certificate chain; `webpki-roots`; subject alternative name (SAN).
 
-### D-154 — CI run 45728656310 on `1571d09` is green; v2 is released as 1.1.0, tags `m15` to `m18` and `v1.1` there
+### D-158 — CI run 45728656310 on `1571d09` is green; v2 is released as 1.1.0, tags `m15` to `m18` and `v1.1` there
 - **Date:** 2026-11-26
 - **Status:** Taken (carries out D-150 on the commit CI passed)
 - **Area:** process
@@ -3940,6 +3940,30 @@ Open questions for Prince, in the draft (§8): approval of the items; whether th
 Earlier runs on the way: 45723220958 on `2312511` (failed: MCP test client, TOCTOU in the AppArmor job), 45725672960 on `8756f4c` (green), 45726709554 on `3294088` (failed: B-015).
 
 **Concepts to learn.** None new.
+
+### D-159 — E4: an approval is a non-blocking answer, and a pending approval is named by the call, not by the attempt
+- **Date:** 2026-11-26
+- **Status:** Taken
+- **Area:** policy
+- **ADR:** none
+
+**In plain words.** Before building approvals (M20), Claude Code was given a probe tool that answers "waiting for approval, ask again" twice before it works. When the approval id in that answer was new on every attempt, the model stopped after two tries, reasoning that each try made a new request. When the id stayed the same, it waited 10 s, then 30 s, asked again and succeeded. So the plan's non-blocking answer stays, with one change: a pending approval is named by the call itself (tool and exact arguments), and every identical attempt names the same one. Claude Code also waited at least 30 minutes for a tool call that never answered, so blocking would have worked for it, but is still not done.
+
+**The problem.** Experiment E4 of the v3 scope: how long does a client wait for one call, and what does a model do with "waiting"?
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Non-blocking: answer "waiting for approval" at once (A2 of the plan) | Taken | The model handled it in all three sessions: it asked the person, or backed off and retried |
+| One approval id per call's content, reused by identical attempts | Taken | With a new id per attempt the model stopped retrying; with one id it retried until it worked |
+| A new id per attempt (the call id) | Discarded | E4 session b |
+| Hold the call until a person answers | Discarded | Claude Code waited 30 minutes without cancelling, but other clients may not, and a held call across a crash is a new state for recovery |
+
+**What this means for the code.** `norn approve` names a pending approval by a short id derived from the call's tool and arguments; the "waiting" answer gives that id and says to ask again with the same arguments.
+
+**Evidence.** `experiments/m20-approval-wait/NOTES.md`, four sessions with Claude Code 2.1.332 run from an empty folder: a) one call, stopped, asked the person to run `norn approve 1 c1`; b) new id per attempt: two calls with a 10 s wait between, then stopped; c) same id: three calls with waits of 10 s and 30 s, the third answered "published 2.3.0"; d) a call never answered: no cancel or other message in 1,800 s, when the test's `timeout` ended the session. Sessions a to c cost 0.064 USD together.
+
+**Concepts to learn.** Exponential back-off.
 
 ---
 
@@ -4048,6 +4072,7 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-26 | CI run 45726709554, on a commit that changed only documents, failed one `rodirs` test with `Try again`: `openat2(RESOLVE_BENEATH)` returns `EAGAIN` when a rename anywhere on the system races with a `..`, and norn never retried (B-015). Reproduced locally (about 0.7 % of opens under a renaming thread); fixed by retrying. Probably also the cause of the TOCTOU test's failure in run 45723220958 | Read the whole error list of every system call the confinement rests on. A failure on a documents-only commit is a fault in the code, not in the change |
 | 2026-11-26 | E1: the logging proxy wrote a connection's line only when the connection closed, and npm keeps up to five connections open until it exits; in one run, npm's lines were missing because the proxy was stopped first. Logging `OPEN` when a tunnel starts showed all five (`experiments/m19-connect-proxy/NOTES.md`) | A record written only at the end of something is lost if the end never comes. The runtime must close and log what is still open when a command ends |
 | 2026-11-26 | E5: a test certificate made with `openssl req -x509` was refused by `ureq` even when it was the one trusted root: `CaUsedAsEndEntity`. `openssl` marks such a certificate as a CA, and the verifier refuses a CA certificate used by a server. A CA plus a server certificate signed by it works (`experiments/m21-https/NOTES.md`) | A strict verifier is right to refuse it, and a test setup must look like the real thing: an authority and a certificate it signed |
+| 2026-11-26 | Two sessions worked in the same folder at once. One committed the experiments E1, E2, E3, E5 as D-154 to D-157; the other, a few minutes later, recorded the CI run of v2 also as D-154, and its commit (`23dba65`) took in the first session's unfinished files (the start of the `[network]` policy code and the E4 probe). The CI record is renumbered D-158; the files it took in are kept and finished in later commits | Entry numbers are handed out by whoever writes next; two writers need one of them to stop. `git add` of everything in a shared folder commits someone else's half-done work: stage files by name |
 
 ---
 

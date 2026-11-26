@@ -1,0 +1,1 @@
+{"mcpServers": {"probe": {"command": "python3", "args": ["<absolute path of this folder>/probe_server.py"]}}}
