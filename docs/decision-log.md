@@ -3912,6 +3912,35 @@ Open questions for Prince, in the draft (§8): approval of the items; whether th
 
 **Concepts to learn.** Certificate authority (CA); certificate chain; `webpki-roots`; subject alternative name (SAN).
 
+### D-154 — CI run 45728656310 on `1571d09` is green; v2 is released as 1.1.0, tags `m15` to `m18` and `v1.1` there
+- **Date:** 2026-11-26
+- **Status:** Taken (carries out D-150 on the commit CI passed)
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** After two failed runs (a test-client bug, then B-015) and the fixes for both, CI ran on `1571d09` and all four jobs passed: Ubuntu with and without AppArmor's restriction, Debian 12, and the release archive. So v2 counts as verified on `fhs`, and by D-113 it is tagged on that commit: `m15`, `m16`, `m17`, `m18` and `v1.1`. D-150 named the M18 commit `2312511`; the tags move to `1571d09` because that is the commit CI passed, and it holds the B-015 fix the release should have.
+
+**The problem.** D-113: tag only a commit whose CI run is green.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Tag `1571d09` | Taken | Green on all four jobs; contains the B-015 fix |
+| Tag `8756f4c`, also green (run 45725672960) | Discarded | It still has B-015; a release with a known random failure |
+| Tag `2312511` as D-150 said | Discarded | Its run failed |
+
+**What this means for the code.** None. Local tags pushed to GitHub.
+
+**Evidence.** `gh run view 45728656310`: conclusion success, head `1571d09e4fbd5b6b81b171e853945bc207fa62b3`; jobs `fhs`, `fhs-apparmor`, `release`, `debian` all success.
+- `fhs`: `Ubuntu 24.04.5 LTS`, kernel `7.0.0-1017-azure`. The step "Tests" 224 passed (sum of its `test result` lines). 200-kill step: `total: 4800 runs, 4787 killed, 0 invariant violations, 0 duplicated effects, 3653/3653 cut-off calls classified correctly; norn recover wall time p50 14.0 ms, p99 39.9 ms`; `mcp total: 4800 runs, 4773 killed, 0 invariant violations, 0 duplicated effects, 3597/3597 cut-off calls classified correctly; restart to first answer p50 78.1 ms, p99 117.9 ms`; `fs.edit total: 1600 runs, 1600 killed, 0 violations`; `fs.delete total: 1600 runs, 1600 killed, 0 violations`; `external total: 1600 runs, 0 invariant violations, 0 duplicated effects, 937/937`.
+- `fhs-apparmor`: success; `toctou_symlink_swap_during_writes_and_reads_never_escapes ... ok`.
+- `debian`: `Debian GNU/Linux 12 (bookworm), kernel 6.1.0-56-cloud-amd64`; `passed 224 failed 0`.
+- `release`: `norn-1.1.0-x86_64-linux.tar.gz (3.6M)`; `norn 1.1.0`.
+
+Earlier runs on the way: 45723220958 on `2312511` (failed: MCP test client, TOCTOU in the AppArmor job), 45725672960 on `8756f4c` (green), 45726709554 on `3294088` (failed: B-015).
+
+**Concepts to learn.** None new.
+
 ---
 
 ## Still open

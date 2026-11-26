@@ -4,7 +4,7 @@ What changed for someone who uses Norn, newest first. The reasons are in `docs/d
 
 ## 1.1.0 (2026-11-26; the plan "v2": `docs/v2-scope.md`)
 
-Tag `v1.1` once CI has passed on this commit (D-113, D-150). Policy files and execution folders of 1.0 work unchanged.
+Tagged `v1.1` on the commit CI run 45728656310 passed on Ubuntu 24.04, Ubuntu with AppArmor, and Debian 12 (D-154). Policy files and execution folders of 1.0 work unchanged.
 
 ### Added
 
@@ -13,6 +13,10 @@ Tag `v1.1` once CI has passed on this commit (D-113, D-150). Policy files and ex
 - **`fs.delete`** (delete one file) and **`fs.search`** (find lines containing a piece of text in the files the policy lets the agent read) (D-147).
 - **`replace_all`** for `fs.edit`: replace every occurrence (D-147).
 - **A test baseline** (D-145): a command's result before the agent's first file change is remembered, and later runs say what is new and what is fixed. The LLM agent may finish in a project that was already red when fewer tests fail than before and none newly fail.
+
+### Fixed
+
+- B-015: a file call on a path through `..` could fail at random with "Try again" while something else on the machine renamed files; `openat2` is now retried as its manual says.
 
 ### Changed
 

@@ -42,6 +42,8 @@ pub enum PolicyError {
     External { name: String, reason: &'static str },
     #[error("external.{0} must be greater than zero")]
     ZeroExternal(&'static str),
+    #[error("network.allow entry `{entry}`: {reason}")]
+    Network { entry: String, reason: &'static str },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -57,6 +59,100 @@ pub struct Policy {
     /// policies, so by default every `ext.call` is denied (design rule 2).
     #[serde(default)]
     pub external: ExternalRules,
+    /// Hosts that commands may reach through the runtime's proxy (M19,
+    /// D-153). Absent or empty, as in every policy written before v3:
+    /// commands have no network at all.
+    #[serde(default)]
+    pub network: NetworkRules,
+}
+
+/// The `[network]` section.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkRules {
+    /// `host`, `host:port`, `*.domain` or `*.domain:port`; the port is 443
+    /// when none is given. An IP address (`127.0.0.1:8080`) matches only a
+    /// connection asked for by that address.
+    #[serde(default)]
+    pub allow: Vec<String>,
+}
+
+/// One parsed `network.allow` entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostRule {
+    pub host: HostPattern,
+    pub port: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostPattern {
+    /// Exactly this name (lower case, no trailing dot).
+    Name(String),
+    /// Any name that ends with this suffix, which starts with `.`
+    /// (`*.example.com` is `.example.com`; it does not match
+    /// `example.com` itself).
+    Suffix(String),
+    /// This address, asked for by number.
+    Ip(std::net::IpAddr),
+}
+
+impl HostRule {
+    /// Parse one entry. The text is from the policy file, which is trusted;
+    /// the checks are there to catch mistakes, with a message that says
+    /// what is wrong.
+    pub fn parse(entry: &str) -> Result<HostRule, &'static str> {
+        if entry.contains('[') || entry.matches(':').count() > 1 {
+            return Err("IPv6 addresses are not supported; name the host instead");
+        }
+        let (host, port) = match entry.rsplit_once(':') {
+            Some((h, p)) => {
+                let port: u16 = p.parse().map_err(|_| "the port must be a number from 1 to 65535")?;
+                if port == 0 {
+                    return Err("the port must be a number from 1 to 65535");
+                }
+                (h, port)
+            }
+            None => (entry, 443),
+        };
+        let host = host.to_ascii_lowercase();
+        if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+            return Ok(HostRule { host: HostPattern::Ip(ip), port });
+        }
+        let (name, wildcard) = match host.strip_prefix("*.") {
+            Some(rest) => (rest.to_string(), true),
+            None => (host.clone(), false),
+        };
+        if !valid_host_name(&name) {
+            return Err("a host is a name like `pypi.org` or `*.example.com` (letters, digits, `-` and `.`), optionally followed by `:port`");
+        }
+        if wildcard && !name.contains('.') {
+            return Err("`*.` must be followed by a name with at least one dot, like `*.example.com`");
+        }
+        Ok(HostRule { host: if wildcard { HostPattern::Suffix(format!(".{name}")) } else { HostPattern::Name(name) }, port })
+    }
+
+    /// Does a request for `host:port` match? `host` is what the client
+    /// asked for, already lower case and without a trailing dot.
+    pub fn matches(&self, host: &str, port: u16) -> bool {
+        if port != self.port {
+            return false;
+        }
+        match (&self.host, host.parse::<std::net::IpAddr>()) {
+            (HostPattern::Ip(ip), Ok(asked)) => *ip == asked,
+            (HostPattern::Ip(_), Err(_)) | (_, Ok(_)) => false,
+            (HostPattern::Name(n), Err(_)) => n == host,
+            (HostPattern::Suffix(s), Err(_)) => host.len() > s.len() && host.ends_with(s.as_str()),
+        }
+    }
+}
+
+/// A DNS name: labels of letters, digits and `-`, joined by dots.
+fn valid_host_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 253
+        && name.split('.').all(|l| {
+            !l.is_empty() && l.len() <= 63 && !l.starts_with('-') && !l.ends_with('-') && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -358,7 +454,22 @@ impl Policy {
                 return Err(err("the url must be http://127.0.0.1:<port>[/path]"));
             }
         }
+        for entry in &self.network.allow {
+            HostRule::parse(entry).map_err(|reason| PolicyError::Network { entry: entry.clone(), reason })?;
+        }
         Ok(())
+    }
+
+    /// The parsed `network.allow` entries, with the rule text a decision
+    /// names (`network.allow[0] "pypi.org"`). Empty: no network.
+    pub fn host_rules(&self) -> Vec<(String, HostRule)> {
+        self.network
+            .allow
+            .iter()
+            .enumerate()
+            // Checked when the policy was loaded.
+            .filter_map(|(i, e)| HostRule::parse(e).ok().map(|r| (format!("network.allow[{i}] {e:?}"), r)))
+            .collect()
     }
 
     /// Is `rel` (a workspace-relative path with `/` separators, `""` for the
@@ -764,5 +875,50 @@ max_tool_calls = 20
         assert!(matches!(with_external("[external]\nattempts = 0\n"), Err(PolicyError::ZeroExternal("attempts"))));
         assert!(matches!(with_external("[external]\ntimeout_ms = 0\n"), Err(PolicyError::ZeroExternal("timeout_ms"))));
         assert!(matches!(with_external("[external]\nretries = 3\n"), Err(PolicyError::Parse { .. })), "unknown keys are refused");
+    }
+
+    #[test]
+    fn network_is_off_unless_hosts_are_listed() {
+        assert!(demo().host_rules().is_empty(), "a policy without [network] has no network");
+        let p = Policy::parse(&format!("{DEMO}[network]\nallow = []\n")).unwrap();
+        assert!(p.host_rules().is_empty());
+    }
+
+    #[test]
+    fn network_rules_match_names_ports_and_wildcards() {
+        let p = Policy::parse(&format!("{DEMO}[network]\nallow = [\"PyPI.org\", \"*.example.com:8443\", \"127.0.0.1:8080\", \"plain.test:80\"]\n")).unwrap();
+        let rules = p.host_rules();
+        let rule = |host: &str, port: u16| rules.iter().find(|(_, r)| r.matches(host, port)).map(|(t, _)| t.clone());
+        assert_eq!(rule("pypi.org", 443).as_deref(), Some(r#"network.allow[0] "PyPI.org""#));
+        assert_eq!(rule("pypi.org", 80), None, "no port means 443 only");
+        assert_eq!(rule("files.pythonhosted.org", 443), None);
+        assert_eq!(rule("evilpypi.org", 443), None);
+        assert_eq!(rule("a.example.com", 8443).as_deref(), Some(r#"network.allow[1] "*.example.com:8443""#));
+        assert_eq!(rule("a.b.example.com", 8443).as_deref(), Some(r#"network.allow[1] "*.example.com:8443""#));
+        assert_eq!(rule("example.com", 8443), None, "`*.` needs a subdomain");
+        assert_eq!(rule("aexample.com", 8443), None);
+        assert_eq!(rule("127.0.0.1", 8080).as_deref(), Some(r#"network.allow[2] "127.0.0.1:8080""#));
+        assert_eq!(rule("127.0.0.1", 443), None);
+        assert_eq!(rule("plain.test", 80).as_deref(), Some(r#"network.allow[3] "plain.test:80""#));
+    }
+
+    #[test]
+    fn a_name_rule_never_matches_an_address_and_back() {
+        let r = HostRule::parse("localhost:8080").unwrap();
+        assert!(!r.matches("127.0.0.1", 8080));
+        let r = HostRule::parse("127.0.0.1:8080").unwrap();
+        assert!(!r.matches("localhost", 8080));
+        let r = HostRule::parse("*.0.0.1:8080");
+        assert!(r.is_ok(), "a name made of digits is still a name");
+        assert!(!r.unwrap().matches("127.0.0.1", 8080), "a wildcard never matches an address");
+    }
+
+    #[test]
+    fn bad_network_entries_are_refused_with_a_reason() {
+        for bad in ["", "*", "*.com", "pypi.org:0", "pypi.org:99999", "pypi.org:x", "[::1]:443", "::1", "a..b", "-a.org", "a b.org", "https://pypi.org", "pypi.org/simple", "*.*.org"] {
+            let text = format!("{DEMO}[network]\nallow = [{bad:?}]\n");
+            assert!(matches!(Policy::parse(&text), Err(PolicyError::Network { .. })), "{bad:?} should be refused");
+        }
+        assert!(matches!(Policy::parse(&format!("{DEMO}[network]\nhosts = []\n")), Err(PolicyError::Parse { .. })), "unknown keys are refused");
     }
 }
