@@ -44,6 +44,8 @@ pub enum PolicyError {
     ZeroExternal(&'static str),
     #[error("network.allow entry `{entry}`: {reason}")]
     Network { entry: String, reason: &'static str },
+    #[error("approvals.require entry `{entry}`: {reason}")]
+    Approval { entry: String, reason: &'static str },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -64,6 +66,33 @@ pub struct Policy {
     /// commands have no network at all.
     #[serde(default)]
     pub network: NetworkRules,
+    /// Calls that wait for a person's yes before they run (M20, D-153).
+    /// Absent: no call waits, as before.
+    #[serde(default)]
+    pub approvals: ApprovalRules,
+}
+
+/// The `[approvals]` section.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalRules {
+    /// `tool` or `tool:what`: `exec:npm publish` (an argv prefix, words
+    /// split at spaces), `fs.delete:**` or `fs.write:ci/**` (a path glob),
+    /// `ext.call:github` (a service name). The tool alone means every call
+    /// of it. Only tools with effects can be named.
+    #[serde(default)]
+    pub require: Vec<String>,
+}
+
+/// The tools an approval rule may name: those whose calls change something.
+const APPROVAL_TOOLS: [&str; 5] = ["exec", "fs.write", "fs.edit", "fs.delete", "ext.call"];
+
+/// What a call is, for matching approval rules: the tool, and the resolved
+/// path, the argv or the service name.
+pub enum ApprovalSubject<'a> {
+    Path(&'a str),
+    Argv(&'a [String]),
+    Service(&'a str),
 }
 
 /// The `[network]` section.
@@ -462,7 +491,47 @@ impl Policy {
         for entry in &self.network.allow {
             HostRule::parse(entry).map_err(|reason| PolicyError::Network { entry: entry.clone(), reason })?;
         }
+        for entry in &self.approvals.require {
+            let err = |reason| PolicyError::Approval { entry: entry.clone(), reason };
+            let (tool, what) = match entry.split_once(':') {
+                Some((t, w)) => (t, Some(w)),
+                None => (entry.as_str(), None),
+            };
+            if !APPROVAL_TOOLS.contains(&tool) {
+                return Err(err("it must start with exec, fs.write, fs.edit, fs.delete or ext.call (calls that change something), then optionally `:` and what"));
+            }
+            match what {
+                Some(w) if w.trim().is_empty() => return Err(err("nothing after `:`; leave the `:` out to mean every call of the tool")),
+                Some(g) if tool.starts_with("fs.") => check_glob(g).map_err(err)?,
+                _ => {}
+            }
+        }
         Ok(())
+    }
+
+    /// The `approvals.require` entry that makes this call wait for a
+    /// person, if any (M20). `tool` is the call's tool name; `subject` is
+    /// what the policy already decided on (the resolved path, the argv).
+    pub fn approval_rule(&self, tool: &str, subject: &ApprovalSubject) -> Option<String> {
+        self.approvals.require.iter().enumerate().find_map(|(i, entry)| {
+            let (t, what) = match entry.split_once(':') {
+                Some((t, w)) => (t, Some(w)),
+                None => (entry.as_str(), None),
+            };
+            if t != tool {
+                return None;
+            }
+            let hit = match (what, subject) {
+                (None, _) => true,
+                (Some(g), ApprovalSubject::Path(rel)) => glob_match(g, rel),
+                (Some(prefix), ApprovalSubject::Argv(argv)) => {
+                    let words: Vec<&str> = prefix.split_whitespace().collect();
+                    argv.len() >= words.len() && words.iter().zip(argv.iter()).all(|(w, a)| w == a)
+                }
+                (Some(name), ApprovalSubject::Service(s)) => name == *s,
+            };
+            hit.then(|| format!("approvals.require[{i}] {entry:?}"))
+        })
     }
 
     /// The parsed `network.allow` entries, with the rule text a decision
@@ -928,5 +997,31 @@ max_tool_calls = 20
         let env = DEMO.replace("[limits]", "[sandbox.env]\nhttps_proxy = \"http://elsewhere:1\"\n[limits]");
         assert!(Policy::parse(&env).is_ok(), "without [network] the name is the policy's own");
         assert!(matches!(Policy::parse(&format!("{env}[network]\nallow = [\"pypi.org\"]\n")), Err(PolicyError::Env { .. })), "with it, the runtime sets it");
+    }
+
+    #[test]
+    fn approvals_match_tool_and_what() {
+        let p = Policy::parse(&format!("{DEMO}[approvals]\nrequire = [\"exec:npm publish\", \"fs.delete\", \"fs.write:ci/**\", \"ext.call:github\"]\n")).unwrap();
+        let argv = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let r = |tool: &str, s: ApprovalSubject| p.approval_rule(tool, &s);
+        assert_eq!(r("exec", ApprovalSubject::Argv(&argv(&["npm", "publish", "--tag", "x"]))).as_deref(), Some(r#"approvals.require[0] "exec:npm publish""#));
+        assert_eq!(r("exec", ApprovalSubject::Argv(&argv(&["npm", "test"]))), None);
+        assert_eq!(r("exec", ApprovalSubject::Argv(&argv(&["npm"]))), None, "a shorter argv is not the prefix");
+        assert_eq!(r("exec", ApprovalSubject::Argv(&argv(&["npmx", "publish"]))), None);
+        assert!(r("fs.delete", ApprovalSubject::Path("anything/at/all")).is_some());
+        assert!(r("fs.write", ApprovalSubject::Path("ci/deploy.yml")).is_some());
+        assert_eq!(r("fs.write", ApprovalSubject::Path("src/a.py")), None);
+        assert_eq!(r("fs.edit", ApprovalSubject::Path("ci/deploy.yml")), None, "fs.edit is its own tool");
+        assert!(r("ext.call", ApprovalSubject::Service("github")).is_some());
+        assert_eq!(r("ext.call", ApprovalSubject::Service("ledger")), None);
+        assert!(demo().approval_rule("fs.delete", &ApprovalSubject::Path("x")).is_none(), "no [approvals]: nothing waits");
+    }
+
+    #[test]
+    fn bad_approval_entries_are_refused() {
+        for bad in ["fs.read", "fs.read:**", "exec:", "fs.write:/abs", "shell:rm", ""] {
+            let text = format!("{DEMO}[approvals]\nrequire = [{bad:?}]\n");
+            assert!(matches!(Policy::parse(&text), Err(PolicyError::Approval { .. })), "{bad:?} should be refused");
+        }
     }
 }

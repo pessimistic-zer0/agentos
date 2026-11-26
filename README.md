@@ -299,6 +299,20 @@ allow = ["pypi.org", "files.pythonhosted.org"]
 - A name that resolves to this machine (`localhost`, or a name pointed at `127.0.0.1`) is refused; write the address to mean it.
 - What a command sends to an allowed host cannot be undone. Read [the threat model](docs/threat-model.md), §9, before listing a host.
 
+### Calls that wait for a person
+
+Some calls should not run without someone looking first: publishing a package, deleting files, changing CI files, calling a real service. Name them in the policy:
+
+```toml
+[approvals]
+require = ["exec:npm publish", "fs.delete", "fs.write:.github/**", "ext.call:github"]
+```
+
+- An entry is a tool (`exec`, `fs.write`, `fs.edit`, `fs.delete`, `ext.call`), optionally followed by `:` and an argv prefix (for `exec`), a path glob (for the file tools) or a service name (for `ext.call`).
+- Such a call, if the policy allows it, is not run. The agent is told it is waiting, with the command for you. See what waits, with a diff for each write: `norn approve <execution>`. Approve one: `norn approve <execution> <approval>` (good for one run, for 60 minutes; `--minutes` to change). Refuse: `norn deny <execution> <approval>`.
+- The approval belongs to that exact call: other arguments or other content need their own. The agent cannot approve anything itself: the answer is kept outside the workspace.
+- Approval adds to the policy; it never allows what the policy refuses.
+
 ### From an MCP client (Claude Code and others)
 
 `norn mcp` offers the tools to any agent that speaks MCP (the Model Context Protocol), over standard input and output. The agent then reads, writes and runs commands through norn's gateway, policy, sandbox and log, on a copy of the repository. For Claude Code, a configuration file:
@@ -328,7 +342,7 @@ claude --mcp-config norn.json --strict-mcp-config --tools "" --allowedTools mcp_
 - **The sandbox can see** the read-only system folders in full (on NixOS, all of `/nix/store`) and some facts about the host (host name, kernel version, the workspace's path).
 - **Prompt injection is contained, not prevented.** A file can talk the model into asking for something bad; the policy and sandbox then refuse or confine it.
 - **Containment ends at the patch.** A patch can change test hooks or CI files that later run unsandboxed on your machine. Read it before applying. The same goes for `norn apply`: it copies what the agent made, executable bits and symlinks included, and lists each one.
-- One agent, one workspace. MCP over standard input and output only (no network transport). No dashboard, no replay, no SDK, no multi-agent, no approvals: those are later versions (`docs/v2-scope.md`, D-137), not this one.
+- One agent, one workspace. MCP over standard input and output only (no network transport). No dashboard, no replay, no SDK, no multi-agent: those are later versions (`docs/v2-scope.md`, D-137), not this one.
 
 ## Repository
 

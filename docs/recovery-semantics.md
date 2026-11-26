@@ -242,3 +242,7 @@ A command that used the network (`[network] allow`, M19) is recovered like any c
 The connections of a finished command are logged (`exec.network`) before its checkpoint and completion record. A command cut off by a crash has no such record: the crash ends the runtime, and with it the proxy and its counts. So the log names every connection of every command that finished, and none of a command that did not. The allow-list, not the log, is what limits what a cut-off command could reach.
 
 Checked: the kill cells of section 6 with `[network]` on, each `exec` asking the proxy for a tunnel first (`NORN_RECOVERY_NETWORK=1`; part of `make test` with 3 kills per cell and of `make eval-recovery` with 200).
+
+## 12. Approvals (added for v3)
+
+A call that waits for approval is not run, so there is nothing to recover: it ends with `approval.requested` (or `approval.refused`), with no intent. A call that uses a yes logs `approval.used` before its intent; from there on it is an ordinary call. If a crash comes between the two, the call is reconciled as NOT APPLIED like any call cut off before its intent, and the yes is spent: the agent asks again, and the person approves again. Spending it is the safe side: a yes is for one run, and recovery cannot tell whether the agent will ask again.

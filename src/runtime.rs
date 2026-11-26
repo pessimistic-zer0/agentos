@@ -375,6 +375,7 @@ pub fn print_call_line(call_id: u64, tool: &str, args: &str, r: &ToolResult) {
     let (verdict, detail) = match &r.outcome {
         ToolOutcome::Ok => ("allow", r.output.as_ref().map(|o| o.summary()).unwrap_or_default()),
         ToolOutcome::Denied { rule } => ("DENY", rule.clone()),
+        ToolOutcome::Waiting { execution, approval, rule } => ("WAIT", format!("{rule}; norn approve {execution} {approval}")),
         ToolOutcome::Failed { error } => ("allow", format!("FAILED: {}", truncate(error, 60))),
         ToolOutcome::NotApplied { reason } => ("allow", format!("NOT APPLIED: {reason}")),
     };
@@ -620,4 +621,49 @@ pub fn apply(state_dir: &Path, id: &str, to: Option<&Path>, dry_run: bool) -> Re
         }
     }
     Ok(n)
+}
+
+/// `norn approve <id>` without an approval: what is waiting, and for a
+/// write what it would change (a diff against the file as it is now).
+pub fn list_approvals(state_dir: &Path, id: &str) -> Result<String> {
+    use std::fmt::Write as _;
+    let dir = ExecDir::new(state_dir, id);
+    if !dir.log().exists() {
+        bail!("no execution {id} in {}", state_dir.display());
+    }
+    let events = EventLog::open(&dir.log())?.events()?;
+    let pending = crate::approval::pending(&events)?;
+    let mut out = String::new();
+    if pending.is_empty() {
+        writeln!(out, "nothing is waiting for approval in {id}")?;
+        return Ok(out);
+    }
+    let blobs = crate::blob::BlobStore::new(&dir.blobs());
+    for p in &pending {
+        writeln!(out, "{}  call #{}  {}  ({})", p.approval, p.call_id, p.call.describe(), p.rule)?;
+        if let (Some(hash), Some(path)) = (&p.content, p.call.path()) {
+            let new = blobs.get(hash)?;
+            // The file as it is now, if the name is a plain one for a plain
+            // file. The listing runs on the host, outside the sandbox, so it
+            // follows no symlink and no `..` a command may have left.
+            let old = dir.work().join(path);
+            let plain = std::path::Path::new(path).components().all(|c| matches!(c, std::path::Component::Normal(_)) || matches!(c, std::path::Component::CurDir));
+            let inside = std::fs::canonicalize(&old).ok().zip(std::fs::canonicalize(dir.work()).ok()).is_some_and(|(o, w)| o.starts_with(w));
+            let is_file = plain && inside && std::fs::symlink_metadata(&old).map(|m| m.is_file()).unwrap_or(false);
+            let old_arg = if is_file { old.display().to_string() } else { "/dev/null".into() };
+            let mut diff = std::process::Command::new("diff")
+                .args(["-u", "--label", &format!("a/{path}"), "--label", &format!("b/{path}"), &old_arg, "-"])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .context("running diff")?;
+            std::io::Write::write_all(&mut diff.stdin.take().expect("piped"), &new)?;
+            let shown = diff.wait_with_output()?;
+            for line in String::from_utf8_lossy(&shown.stdout).lines() {
+                writeln!(out, "    {line}")?;
+            }
+        }
+        writeln!(out, "  approve: norn approve {id} {}    refuse: norn deny {id} {}", p.approval, p.approval)?;
+    }
+    Ok(out)
 }

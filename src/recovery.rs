@@ -321,8 +321,15 @@ fn kill_leftover_cgroup(path: &Path) -> Result<()> {
 /// back from the blob store; a reconciled call has none.
 pub fn history(events: &[Event], blobs: &crate::blob::BlobStore) -> Result<Vec<crate::tools::ToolResult>> {
     let mut out = Vec::new();
+    let exec_id = events.iter().find_map(|e| match &e.body {
+        EventBody::ExecutionCreated { execution_id, .. } => Some(execution_id.clone()),
+        _ => None,
+    });
     for c in log::calls(events)? {
-        let Some(outcome) = c.outcome() else { continue };
+        let Some(mut outcome) = c.outcome() else { continue };
+        if let (crate::tools::ToolOutcome::Waiting { execution, .. }, Some(id)) = (&mut outcome, &exec_id) {
+            execution.clone_from(id);
+        }
         let output = match &c.state {
             CallState::Completed { output, .. } => blobs.get(output).ok().and_then(|b| serde_json::from_slice(&b).ok()),
             _ => None,

@@ -60,6 +60,20 @@ enum Cmd {
         #[arg(long)]
         policy: PathBuf,
     },
+    /// Approve a call that is waiting for a person's yes (`[approvals]` in
+    /// the policy). Without an approval id: list what is waiting, with the
+    /// change each write would make
+    Approve {
+        /// The execution
+        id: String,
+        /// The approval id from the list (or from the agent's message)
+        approval: Option<String>,
+        /// How long the yes stays usable, in minutes; it is used once
+        #[arg(long, default_value_t = 60)]
+        minutes: u64,
+    },
+    /// Refuse a call that is waiting for approval; the same call is then refused every time
+    Deny { id: String, approval: String },
     /// End an execution nobody is driving (one made by `norn mcp`): settle a
     /// cut-off call, then write its patch. Then read the patch and `norn apply`
     Finish { id: String },
@@ -197,6 +211,17 @@ fn main() -> Result<()> {
         }
         Cmd::Finish { id } => {
             runtime::finish_execution(&state_dir, &id, true)?;
+        }
+        Cmd::Approve { id, approval: None, .. } => {
+            print!("{}", runtime::list_approvals(&state_dir, &id)?);
+        }
+        Cmd::Approve { id, approval: Some(a), minutes } => {
+            let v = norn::approval::answer(&state_dir, &id, &a, true, minutes)?;
+            println!("approved {a} for one run, by {}, for {minutes} minutes; the agent's next identical call runs it", v.by);
+        }
+        Cmd::Deny { id, approval } => {
+            let v = norn::approval::answer(&state_dir, &id, &approval, false, 0)?;
+            println!("refused {approval}, by {}; the agent is told so when it asks again", v.by);
         }
         Cmd::Recover { id, quiet } => {
             runtime::recover(&state_dir, &id, !quiet)?;

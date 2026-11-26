@@ -3998,6 +3998,37 @@ Earlier runs on the way: 45723220958 on `2312511` (failed: MCP test client, TOCT
 
 **Concepts to learn.** Absolute-form and origin-form request targets (HTTP); link-local addresses; server-side request forgery (SSRF).
 
+### D-161 — How approvals are built (M20): a verdict file next to the workspace, used once, logged by the gateway
+- **Date:** 2026-11-26
+- **Status:** Taken
+- **Area:** policy
+- **ADR:** none
+
+**In plain words.** `[approvals] require` names calls that need a person's yes. When one arrives and the policy allows it, the gateway does not run it: it logs `approval.requested` and answers "waiting for approval", with the command the person runs. The person runs `norn approve <execution> <approval>` (or `norn deny`) in their own shell. That writes a small file in the execution folder, beside the workspace, where no sandboxed command and no file tool can reach. When the agent sends the same call again, the gateway finds the yes, logs `approval.used`, and runs the call. A yes is good for one run and for 60 minutes unless `--minutes` says otherwise; a no is final for that exact call.
+
+**The problem.** Building M20 (A1 to A4 of `docs/v3-scope.md`) with the shape E4 chose (D-159).
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Rules `tool` or `tool:what`: an argv prefix for `exec`, a path glob for the file tools, a service for `ext.call`; reading tools cannot be named | Taken | As the plan's examples (A1); a read changes nothing, so asking a person about it only trains them to say yes |
+| Match the path the policy resolved, not the one the agent typed | Taken | `./ci/x` or `src/../ci/x` must not dodge a rule for `ci/**` |
+| The approval id: `a` and 10 hex digits of the SHA-256 of the call as logged (a write's content is in it as a hash) | Taken | D-159: the same call names the same approval, any change names another |
+| The person's answer as a file `approvals/<id>.json` in the execution folder, renamed into place whole | Taken | Only the process driving the execution writes its log; a second writer would need a new locking scheme. The folder is outside the workspace (design rule 9), so the agent cannot write it, and the gateway logs the answer when it uses it |
+| `norn approve` writes into the event log directly | Discarded | Two processes appending to one log, while `seq` must stay gap-free |
+| A yes is used once | Taken | A second identical `npm publish` is a second publish; the person agreed to one |
+| A yes stays usable until revoked | Discarded | The plan says "for a limited time" (A3) |
+| A no is final for that exact call; `norn approve` then refuses it | Taken | The plan does not say; a person who said no should not be asked again by a loop. A changed call (other arguments) is a new request |
+| Approval checked after the policy, on every attempt | Taken | Approval adds to the policy, never replaces it; a call the policy refuses asks nobody. The policy file itself is the one saved when the execution started (D-141), so "checked again" means the whole policy step runs again on the workspace as it is then (Findings) |
+| The answer to the agent: a new outcome, "WAITING FOR APPROVAL", with the exact `norn approve` command and the sentence that the same call names the same approval | Taken | The wording E4 found a model acts on; "DENIED" would read as final |
+| `norn approve <execution>` with no id lists what waits, with a diff for writes made by `diff -u` on the host | Taken | The plan asks for the diff (A2). The listing reads the workspace from the host, so it follows no symlink or `..` and stays inside the workspace |
+
+**What this means for the code.** `src/approval.rs` (new), `src/policy.rs` (`ApprovalRules`, `approval_rule`), `src/gateway.rs` (`approval_rule`, `approval_gate`), `src/log.rs` (three events, the `AwaitingApproval` state), `src/tools/mod.rs` (`ToolOutcome::Waiting`, `LoggedCall::path`), `src/main.rs` and `src/runtime.rs` (`approve`, `deny`, `list_approvals`), the renderers in `src/agent/llm.rs`, `src/trace.rs`. Tests: `tests/approvals.rs` (7), unit tests in `approval.rs`, `policy.rs`, `llm.rs`.
+
+**Evidence.** On `nix`: `cargo test --test approvals` 7 passed (wait, approve, run once, wait again; deny is final; an expired yes is not used; approval does not override the policy; an unknown id is refused; the agent cannot write its own answer through `fs.write` or a command; nothing waits without the section). `cargo test --lib` 56 passed.
+
+**Concepts to learn.** Human in the loop; single-use token; time-of-check to time-of-use for approvals.
+
 ---
 
 ## Still open
@@ -4108,6 +4139,7 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-26 | Two sessions worked in the same folder at once. One committed the experiments E1, E2, E3, E5 as D-154 to D-157; the other, a few minutes later, recorded the CI run of v2 also as D-154, and its commit (`23dba65`) took in the first session's unfinished files (the start of the `[network]` policy code and the E4 probe). The CI record is renumbered D-158; the files it took in are kept and finished in later commits | Entry numbers are handed out by whoever writes next; two writers need one of them to stop. `git add` of everything in a shared folder commits someone else's half-done work: stage files by name |
 | 2026-11-26 | The first run of the network tests failed one test: a Python client given the proxy explicitly still connected directly, and was refused. urllib applies `NO_PROXY` (which norn sets to `127.0.0.1`) even to an explicit `ProxyHandler`; the test servers were on the host's `127.0.0.1`. The test now clears `NO_PROXY`; the proxy itself was fine (the tunnel test passed) | The setting worked as intended for real projects and against the test. When a test of a way out fails, first check whether the client even tried it |
 | 2026-11-26 | Adding the `exec.network` event, the call state machine in `src/log.rs` would have refused it: it lists which event may follow which, and anything else is an error ("`exec.network` is not allowed after state IntentLogged"). Found by reading the code before the first run, not by a test | Every new event kind must be added to the state machine, not only to the enum. The compiler checks the enum's matches; it cannot check a table of allowed orders |
+| 2026-11-26 | A test for "the policy is checked again when an approved call comes back" changed the policy file between two `norn mcp` sessions and expected a refusal. The call ran: a continued execution uses the policy saved when it started (D-141), not the file. The test's premise was wrong; it was replaced by tests of what does hold (a refused call asks nobody; the policy step, with the workspace as it is then, runs again before the approval is looked at) | "Checked again" needs a definition before a test: here the policy is fixed per execution, the workspace is not. A test that changes a file should first check that the program reads that file again |
 
 ---
 
@@ -4216,3 +4248,5 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | `webpki-roots` | Mozilla's list of trusted certificate authorities, compiled into a Rust program; what `ureq` checks against (D-157) |
 | SSRF (server-side request forgery) | Making a server that fetches things for you fetch something on its own side, such as a service only reachable from that machine. The proxy refuses names that resolve to the runtime's own machine for this reason (D-160) |
 | Link-local address | An address valid only on one network link, such as `169.254.x.x`. Cloud machines serve their metadata (sometimes with credentials) at `169.254.169.254` (D-160) |
+| Approval (here) | A person's yes to one exact call, given with `norn approve`, used once, with an expiry (D-161) |
+| Single-use token | Something that allows one action and is spent by it, so a repeated request needs a new one (D-161) |

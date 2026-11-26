@@ -642,6 +642,14 @@ pub(crate) fn parse_call(name: &str, args: &str) -> Result<ToolCall> {
 pub(crate) fn render_result(r: &ToolResult) -> String {
     let text = match (&r.outcome, &r.output) {
         (ToolOutcome::Denied { rule }, _) => format!("DENIED by policy: {rule}. Nothing was done."),
+        // The shape E4 found a model handles well: say nothing was done, how
+        // the person approves, and that the same call names the same
+        // approval (D-159).
+        (ToolOutcome::Waiting { execution, approval, rule }, _) => format!(
+            "WAITING FOR APPROVAL: this call needs a person's yes ({rule}). Nothing was done. \
+             The person approves it with `norn approve {execution} {approval}` (or refuses with `norn deny {execution} {approval}`). \
+             Asking again with exactly the same arguments names the same approval; it runs once it is approved."
+        ),
         (ToolOutcome::Failed { error }, _) => format!("FAILED: {error}. Nothing was changed."),
         (ToolOutcome::NotApplied { reason }, _) => {
             format!("NOT APPLIED: the runtime was restarted while this call was in flight. {reason}. If you still need it, call the tool again.")
@@ -739,6 +747,10 @@ mod tests {
         assert!(render_result(&r).starts_with("DENIED by policy"));
         let r = ToolResult { call_id: 1, outcome: ToolOutcome::NotApplied { reason: "rolled back".into() }, output: None };
         assert!(render_result(&r).contains("call the tool again"));
+        let r = ToolResult { call_id: 1, outcome: ToolOutcome::Waiting { execution: "e1".into(), approval: "a0123456789".into(), rule: "approvals.require[0] \"fs.delete\"".into() }, output: None };
+        let text = render_result(&r);
+        assert!(text.starts_with("WAITING FOR APPROVAL") && text.contains("Nothing was done"), "{text}");
+        assert!(text.contains("`norn approve e1 a0123456789`") && text.contains("same arguments names the same approval"), "{text}");
         let long = ToolResult { call_id: 1, outcome: ToolOutcome::Ok, output: Some(ToolOutput::Read { content: "x".repeat(50_000), lines: None, encoding: None }) };
         assert!(render_result(&long).len() < 13_000);
     }

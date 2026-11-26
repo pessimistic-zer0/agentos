@@ -7,6 +7,7 @@ What changed for someone who uses Norn, newest first. The reasons are in `docs/d
 ### Added
 
 - **`[network] allow`**: hosts that commands may reach, through a proxy in the runtime; nothing else is reachable, and every connection is logged as `exec.network` and shown by `norn trace` (M19, D-153 to D-155, D-160). Without the section, commands have no network, as before. `norn check` says which hosts a policy opens.
+- **`[approvals] require`**, **`norn approve`**, **`norn deny`**: chosen calls (`exec:npm publish`, `fs.delete`, `fs.write:ci/**`, `ext.call:github`) wait for a person's yes instead of running. The agent is told "waiting for approval" with the command to run; the same call asked again runs once approved. A yes is used once and expires (60 minutes by default); a no is final for that call. `norn approve <execution>` lists what waits, with a diff for writes (M20, D-159, D-161).
 
 ## 1.1.0 (2026-11-26; the plan "v2": `docs/v2-scope.md`)
 

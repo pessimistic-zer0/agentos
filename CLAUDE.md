@@ -140,6 +140,7 @@ Run everything inside the dev shell (`flake.nix`): `nix develop -c <command>`, o
 - Release archive: `nix develop -c packaging/release.sh --check` (builds, packs into `target/dist/`, runs the demo task from the unpacked archive; D-127). CI job `release` does the same on Ubuntu and then runs the benchmarks.
 - The compatibility promise (`docs/compatibility.md`, D-126): `tests/compat.rs`, with frozen v0.1 files in `tests/fixtures/compat/` (never regenerate them). User-facing changes go in `CHANGELOG.md`.
 - `fs.delete`, `fs.search`, `replace_all` (D-147): `tests/agent_tools.rs`; delete kill cells: `a_delete_is_recovered_like_a_write` in `tests/recovery/main.rs`. Test baseline (D-145): `src/baseline.rs`. Refusal hints (D-146): `Policy::allowed_hint`.
+- Approvals (v3, M20, D-161): `[approvals] require` in a policy; `norn approve <id> [approval] [--minutes N]`, `norn deny <id> <approval>`; code in `src/approval.rs` and `Gateway::approval_gate`. Tests: `tests/approvals.rs`. Experiment: `experiments/m20-approval-wait/NOTES.md`.
 - Network allow-list (v3, M19, D-160): `[network] allow` in a policy; the proxy is `src/sandbox/proxy.rs`. Tests: `tests/network.rs`, `cargo test --lib sandbox::proxy`; kill cells with the network on: `NORN_RECOVERY_NETWORK=1` (part of `make test` and `make eval-recovery`; report `target/recovery-network-report.json`). Experiments: `experiments/m19-*/NOTES.md`.
 - Binary files (base64) and the executable bit through the file tools (D-123): `tests/binary.rs`.
 - A repository folder shown read-only at its place (`filesystem.ro_dirs`, D-122): `tests/rodirs.rs`.
@@ -188,6 +189,6 @@ v2 (D-139, `docs/v2-scope.md`), done. M15 (`docs/milestones/M15-mcp-server.md`),
 Open, and only Prince can close them:
 
 - The tags `v1.0` and `m14` are on GitHub, pushed by Prince on 2026-11-25.
-- Nothing. v2 is released: CI run 45728656310 on `1571d09` is green on all four jobs, tags `m15` to `m18` and `v1.1` there (D-158). On the way, CI found a test-client bug and B-015 (`openat2` gave `EAGAIN` under concurrent renames and norn never retried), both fixed. v3 is approved (D-153) and in progress: the experiments E1 to E5 are done (D-154 to D-157, D-159); M19 (`docs/milestones/M19-network.md`, D-160) is built and passes on `nix` (`make test`: 207 + 33 + the network kill cells), not yet verified on `fhs`; v4 and v5 are ordered (D-137) but not scoped.
+- Nothing. v2 is released: CI run 45728656310 on `1571d09` is green on all four jobs, tags `m15` to `m18` and `v1.1` there (D-158). On the way, CI found a test-client bug and B-015 (`openat2` gave `EAGAIN` under concurrent renames and norn never retried), both fixed. v3 is approved (D-153) and in progress: the experiments E1 to E5 are done (D-154 to D-157, D-159); M19 (`docs/milestones/M19-network.md`, D-160) and M20 (`docs/milestones/M20-approvals.md`, D-161) are built and pass on `nix` (`make test`: 217 + 33 + the network kill cells), not yet verified on `fhs`; v4 and v5 are ordered (D-137) but not scoped.
 
 Update this section when any of these changes.

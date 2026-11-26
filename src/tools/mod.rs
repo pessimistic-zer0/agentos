@@ -218,6 +218,14 @@ impl LoggedCall {
         }
     }
 
+    /// The path a file-changing call names, as the agent wrote it.
+    pub fn path(&self) -> Option<&str> {
+        match self {
+            LoggedCall::FsWrite { path, .. } | LoggedCall::FsEdit { path, .. } | LoggedCall::FsDelete { path } => Some(path),
+            _ => None,
+        }
+    }
+
     /// Short human description of the arguments, for `norn trace`.
     pub fn describe(&self) -> String {
         match self {
@@ -272,6 +280,9 @@ pub enum ToolOutcome {
     /// After a crash, recovery found this call had not taken effect (or undid
     /// it). The agent may ask again.
     NotApplied { reason: String },
+    /// The call needs a person's yes (`[approvals]`, M20); nothing was done.
+    /// Asking again with the same arguments names the same approval.
+    Waiting { execution: String, approval: String, rule: String },
 }
 
 /// The tool-specific result data.

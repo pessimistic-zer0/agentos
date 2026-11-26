@@ -49,6 +49,7 @@ pub fn render_calls(events: &[Event]) -> Result<String> {
         let (verdict, detail) = match &c.state {
             CallState::Requested => ("?", "requested; no decision recorded".to_string()),
             CallState::Denied { rule } => ("DENY", rule.clone()),
+            CallState::AwaitingApproval { approval, rule } => ("WAIT", format!("waiting for approval {approval} ({rule})")),
             CallState::IntentLogged { .. } => ("allow", "UNCERTAIN: intent recorded, no ending".to_string()),
             CallState::Completed { checkpoint, .. } => {
                 let summary = summary_of(events, c.call_id).unwrap_or_default();

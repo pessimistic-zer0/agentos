@@ -84,6 +84,18 @@ pub enum EventBody {
     /// has no such record.
     #[serde(rename = "exec.network")]
     ExecNetwork { call_id: u64, connections: Vec<crate::sandbox::proxy::Connection>, dropped: u64 },
+    /// The call needs a person's yes and has none that can be used: it was
+    /// not run. Terminal for the call (M20). `content`: for a write, the
+    /// hash of the whole new file, so the person can see what they approve.
+    #[serde(rename = "approval.requested")]
+    ApprovalRequested { call_id: u64, approval: String, rule: String, content: Option<String> },
+    /// A person's yes was found and is used now, for this call; the intent
+    /// follows. `granted_at` tells one answer from a later one for the same id.
+    #[serde(rename = "approval.used")]
+    ApprovalUsed { call_id: u64, approval: String, by: String, granted_at: String },
+    /// A person said no. Terminal for the call, like a denial.
+    #[serde(rename = "approval.refused")]
+    ApprovalRefused { call_id: u64, approval: String, by: String },
     /// Recovery began after a crash. `pending` lists the calls that had no
     /// ending. May appear more than once if recovery itself was interrupted.
     #[serde(rename = "recovery.started")]
@@ -123,6 +135,9 @@ impl EventBody {
             EventBody::ToolFailed { .. } => "tool.failed",
             EventBody::PolicyViolation { .. } => "policy.violation",
             EventBody::ExecNetwork { .. } => "exec.network",
+            EventBody::ApprovalRequested { .. } => "approval.requested",
+            EventBody::ApprovalUsed { .. } => "approval.used",
+            EventBody::ApprovalRefused { .. } => "approval.refused",
             EventBody::RecoveryStarted { .. } => "recovery.started",
             EventBody::ToolReconciled { .. } => "tool.reconciled",
             EventBody::RecoveryCompleted { .. } => "recovery.completed",
@@ -140,7 +155,10 @@ impl EventBody {
             | EventBody::ToolFailed { call_id, .. }
             | EventBody::ToolReconciled { call_id, .. }
             | EventBody::PolicyViolation { call_id, .. }
-            | EventBody::ExecNetwork { call_id, .. } => Some(*call_id),
+            | EventBody::ExecNetwork { call_id, .. }
+            | EventBody::ApprovalRequested { call_id, .. }
+            | EventBody::ApprovalUsed { call_id, .. }
+            | EventBody::ApprovalRefused { call_id, .. } => Some(*call_id),
             _ => None,
         }
     }
@@ -256,13 +274,19 @@ pub enum CallState {
     Failed { error: String },
     /// Terminal: the call was cut off by a crash and recovery settled it.
     Reconciled { applied: bool, reason: String, checkpoint: Option<String> },
+    /// Terminal: not run, waiting for a person's yes (M20).
+    AwaitingApproval { approval: String, rule: String },
 }
 
 impl CallState {
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
-            CallState::Denied { .. } | CallState::Completed { .. } | CallState::Failed { .. } | CallState::Reconciled { .. }
+            CallState::Denied { .. }
+                | CallState::Completed { .. }
+                | CallState::Failed { .. }
+                | CallState::Reconciled { .. }
+                | CallState::AwaitingApproval { .. }
         )
     }
 }
@@ -281,6 +305,9 @@ impl CallRecord {
     pub fn outcome(&self) -> Option<ToolOutcome> {
         match &self.state {
             CallState::Denied { rule } => Some(ToolOutcome::Denied { rule: rule.clone() }),
+            CallState::AwaitingApproval { approval, rule } => {
+                Some(ToolOutcome::Waiting { execution: String::new(), approval: approval.clone(), rule: rule.clone() })
+            }
             CallState::Failed { error } => Some(ToolOutcome::Failed { error: error.clone() }),
             CallState::Completed { .. } => Some(ToolOutcome::Ok),
             CallState::Reconciled { applied: true, .. } => Some(ToolOutcome::Ok),
@@ -311,6 +338,13 @@ pub fn calls(events: &[Event]) -> Result<Vec<CallRecord>> {
         rec.state = match (&rec.state, &ev.body) {
             (CallState::Requested, EventBody::ToolDenied { rule, .. }) => CallState::Denied { rule: rule.clone() },
             (CallState::Requested, EventBody::ToolIntent { plan, .. }) => CallState::IntentLogged { plan: plan.clone() },
+            (CallState::Requested, EventBody::ApprovalUsed { .. }) => CallState::Requested,
+            (CallState::Requested, EventBody::ApprovalRequested { approval, rule, .. }) => {
+                CallState::AwaitingApproval { approval: approval.clone(), rule: rule.clone() }
+            }
+            (CallState::Requested, EventBody::ApprovalRefused { approval, by, .. }) => {
+                CallState::Denied { rule: format!("{by} refused approval {approval}") }
+            }
             (CallState::IntentLogged { .. }, EventBody::PolicyViolation { .. } | EventBody::ExecNetwork { .. }) => rec.state.clone(),
             (CallState::IntentLogged { .. }, EventBody::ToolCompleted { output, checkpoint, .. }) => {
                 CallState::Completed { output: output.clone(), checkpoint: checkpoint.clone() }

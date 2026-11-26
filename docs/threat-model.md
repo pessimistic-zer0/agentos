@@ -174,3 +174,19 @@ How the way out is built:
 The security suite of M22 adds more cases (raw IPs, UDP, a second proxy hop, both front doors).
 
 What this does not stop: anything sent *to an allowed host* (a package registry that accepts uploads is a way out for data, if the command has credentials for it; norn gives commands none). A wildcard entry (`*.example.com`) allows every name under it, including names someone else controls. If the network namespace itself ever failed, the network would be open: Landlock's network rules are not used as a second wall, because they match TCP ports only (D-156).
+
+## 10. Approvals (added for v3)
+
+`[approvals] require` makes chosen calls wait for a person's yes (M20, D-161). This is a control on top of the policy: a call the policy refuses is refused, and nobody is asked.
+
+| # | Attack | Defence | Test (`tests/approvals.rs`) |
+|---|---|---|---|
+| A1 | The agent approves its own call | The answer is a file in the execution folder, beside the workspace. File tools cannot leave the workspace (`openat2`) and commands cannot see the folder (design rule 9) | `the_agent_cannot_write_its_own_approval` |
+| A2 | Reuse a yes for a different call (other arguments, other content) | The approval id is a hash of the exact call; a different call has another id and waits | `a_write_waits_runs_after_approval_and_only_once` |
+| A3 | Reuse a yes twice | Used once; the use is logged and a second identical call waits again | same |
+| A4 | Use an old yes | Expires (60 minutes by default) | `an_expired_approval_is_not_used` |
+| A5 | Ask again and again after a no | A no is final for that exact call | `a_refusal_is_final_for_that_exact_call` |
+| A6 | Dodge a path rule with another spelling of the path | Rules match the path the policy resolved | `approvals_match_tool_and_what` (unit) and the policy step |
+| A7 | A mistyped id approves something else | `norn approve` accepts only an id that is waiting | `approve_refuses_an_id_that_is_not_waiting` |
+
+What this does not stop: a person who approves without reading. `norn approve <execution>` shows each waiting call, and a diff for writes; for `exec` it shows the command line only, not what the command will do.

@@ -187,6 +187,13 @@ impl Gateway {
         if let Approved::Write { content, edit: Some(_), .. } = &approved {
             self.blobs.put(content)?;
         }
+        // Allowed by the policy (checked again now, on every attempt), but
+        // perhaps not without a person's yes (M20, D-159).
+        if let Some(rule) = self.approval_rule(&call, &approved) {
+            if let Some(waiting) = self.approval_gate(call_id, &call, &approved, rule)? {
+                return Ok(waiting);
+            }
+        }
 
         let plan = match self.plan(call_id, &approved) {
             Ok(plan) => plan,
@@ -238,6 +245,47 @@ impl Gateway {
                 Ok(ToolResult { call_id, outcome: ToolOutcome::Failed { error: e.0 }, output: None })
             }
         }
+    }
+
+    /// The `approvals.require` entry this allowed call falls under, judged
+    /// on what the policy step resolved (the real path, not the name the
+    /// agent typed).
+    fn approval_rule(&self, call: &ToolCall, a: &Approved) -> Option<String> {
+        use crate::policy::ApprovalSubject;
+        let subject = match a {
+            Approved::Write { target, .. } | Approved::Delete { target, .. } => ApprovalSubject::Path(&target.rel),
+            Approved::Exec { argv } => ApprovalSubject::Argv(argv),
+            Approved::Ext { service, .. } => ApprovalSubject::Service(service),
+            Approved::Read { .. } | Approved::List { .. } | Approved::Search { .. } => return None,
+        };
+        self.policy.approval_rule(call.name(), &subject)
+    }
+
+    /// Look for a person's answer to this exact call. `None`: there is a
+    /// yes that can be used, now logged as used; go on. Otherwise the
+    /// result to give the agent: refused, or waiting.
+    fn approval_gate(&mut self, call_id: u64, call: &ToolCall, a: &Approved, rule: String) -> Result<Option<ToolResult>> {
+        use crate::approval;
+        let approval = approval::approval_id(&call.logged());
+        match approval::read(&self.dir, &approval) {
+            Some(v) if !v.approve => {
+                self.log.append(EventBody::ApprovalRefused { call_id, approval: approval.clone(), by: v.by.clone() })?;
+                let rule = format!("{} refused this exact call (approval {approval}); do not ask for it again", v.by);
+                return Ok(Some(ToolResult { call_id, outcome: ToolOutcome::Denied { rule }, output: None }));
+            }
+            Some(v) if v.expires_unix > approval::now_unix() && !approval::used(&self.log.events()?, &approval, &v.at) => {
+                self.log.append(EventBody::ApprovalUsed { call_id, approval, by: v.by, granted_at: v.at })?;
+                return Ok(None);
+            }
+            // None yet, expired, or used up by an earlier run of the same call.
+            _ => {}
+        }
+        let content = match a {
+            Approved::Write { content, .. } => Some(self.blobs.put(content)?),
+            _ => None,
+        };
+        self.log.append(EventBody::ApprovalRequested { call_id, approval: approval.clone(), rule: rule.clone(), content })?;
+        Ok(Some(ToolResult { call_id, outcome: ToolOutcome::Waiting { execution: self.dir.id.clone(), approval, rule }, output: None }))
     }
 
     /// A call that was allowed but could not even start (for example the file
