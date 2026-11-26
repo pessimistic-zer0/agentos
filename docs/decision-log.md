@@ -4061,6 +4061,31 @@ Earlier runs on the way: 45723220958 on `2312511` (failed: MCP test client, TOCT
 
 **Concepts to learn.** Credential brokering; redaction; bearer token.
 
+### D-163 — The TOCTOU test's swapper starts after the base checkpoint; a resume of a run stopped in setup says so
+- **Date:** 2026-11-26
+- **Status:** Taken
+- **Area:** durability
+- **ADR:** none
+
+**In plain words.** A security test races a symlink against 300 file calls. Its helper thread started racing as soon as the workspace existed, which is before the runtime has finished setting up (copying the workspace into the base checkpoint). On a slow CI machine it broke that copy, and the run could never be resumed, because setup is not resumable by design; the resume then failed with a bare "No such file or directory" (B-016). The helper now starts once the base checkpoint exists, and a resume of such a run says what happened.
+
+**The problem.** CI run 45818853651 failed on Debian 12 (B-016).
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Start the swapper once `checkpoints/cp-0000` exists | Taken | The test is about file calls racing a symlink; all 300 calls are still raced. No sandboxed code runs during setup, so racing it tests something only a process outside norn could do |
+| Make setup resumable: redo the copy and the base checkpoint on resume | Discarded | A larger change to recovery for a case no agent can cause; "start a new run" loses nothing, as no call has run |
+| Leave the test as it was | Discarded | It fails at random on slower machines for a reason unrelated to what it tests |
+| A clear message when resuming a run stopped in setup | Taken | The old message hid the reason (B-016) |
+| Skip such executions in `norn mcp`'s search for one to continue | Discarded | Tried; the test showed `norn mcp` already skips an execution it cannot reopen and starts a new one |
+
+**What this means for the code.** `runtime::agent_kind` checks for `workspace.created`. The swapper in `toctou_attempt` waits for the base checkpoint. Two tests: `tests/hardening.rs` and `tests/mcp.rs`.
+
+**Evidence.** The CI artifact `debian-12-test-log` of run 45818853651: `first run: Error: cp -a …/work …/checkpoints/.tmp-cp-0000 failed: cp: cannot stat '…/work/src/.swap-tmp': No such file or directory`. On `nix`: the hardening test fails without the fix (`Error: reading script …/script.toml`) and passes with it; the MCP test passes with and without it; the TOCTOU test passes (and passed five of five times on one CPU before the change, with 0 restarts, so the race was not reproduced locally).
+
+**Concepts to learn.** Test flakiness; a test racing the thing under test versus racing its setup.
+
 ---
 
 ## Still open
@@ -4172,6 +4197,8 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-26 | The first run of the network tests failed one test: a Python client given the proxy explicitly still connected directly, and was refused. urllib applies `NO_PROXY` (which norn sets to `127.0.0.1`) even to an explicit `ProxyHandler`; the test servers were on the host's `127.0.0.1`. The test now clears `NO_PROXY`; the proxy itself was fine (the tunnel test passed) | The setting worked as intended for real projects and against the test. When a test of a way out fails, first check whether the client even tried it |
 | 2026-11-26 | Adding the `exec.network` event, the call state machine in `src/log.rs` would have refused it: it lists which event may follow which, and anything else is an error ("`exec.network` is not allowed after state IntentLogged"). Found by reading the code before the first run, not by a test | Every new event kind must be added to the state machine, not only to the enum. The compiler checks the enum's matches; it cannot check a table of allowed orders |
 | 2026-11-26 | A test for "the policy is checked again when an approved call comes back" changed the policy file between two `norn mcp` sessions and expected a refusal. The call ran: a continued execution uses the policy saved when it started (D-141), not the file. The test's premise was wrong; it was replaced by tests of what does hold (a refused call asks nobody; the policy step, with the workspace as it is then, runs again before the approval is looked at) | "Checked again" needs a definition before a test: here the policy is fixed per execution, the workspace is not. A test that changes a file should first check that the program reads that file again |
+| 2026-11-26 | CI run 45818853651 failed the TOCTOU test on Debian; the console showed only `No such file or directory (os error 2)`, because the test kept the first and the last line of the reason and the VM script filters lines. The job's artifact had the full text: the run had failed in setup (B-016) | Before reasoning about a failure, find the full log. The artifact was there; four hypotheses were formed before it was opened |
+| 2026-11-26 | The v3 trial: Claude Code, through `norn mcp` with its own tools off, installed `python-dateutil` from PyPI through the allow-list, made 7 tests pass and filed the tracker update after an approval, in 13 turns, 36 s, 0.12 USD (`docs/results/v3-trial-nix.md`). It noted that pip chose dateutil 4.0.0, newer than it knew, and asked the person to check it | A model reading package contents before trusting them is the behaviour a network allow-list cannot give; the log of what was downloaded lets the person check |
 
 ---
 

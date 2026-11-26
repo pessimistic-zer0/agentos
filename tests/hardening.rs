@@ -750,3 +750,38 @@ fn a_repository_larger_than_the_limit_is_refused_at_the_start() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success() && err.contains("more than limits.workspace_mb (1 MiB)") && err.contains("filesystem.skip"), "{err}");
 }
+
+/// An execution whose setup was cut short: its log has `execution.created`
+/// and nothing else (the base checkpoint was never made). Built by hand, the
+/// way a `kill -9` or a failed copy during setup leaves it.
+pub fn execution_stopped_in_setup(t: &TestEnv, repo: &Path, agent: &str) -> String {
+    use norn::log::{EventBody, EventLog};
+    let id = norn::workspace::new_execution_id();
+    let dir = norn::workspace::ExecDir::new(&t.state, &id);
+    std::fs::create_dir_all(dir.work()).unwrap();
+    std::fs::copy(&t.policy, dir.policy()).unwrap();
+    let mut log = EventLog::create(&dir.log()).unwrap();
+    log.append(EventBody::ExecutionCreated {
+        execution_id: id.clone(),
+        repo: std::fs::canonicalize(repo).unwrap().display().to_string(),
+        policy_name: "t".into(),
+        policy_hash: "sha256:0".into(),
+        agent: agent.into(),
+        task: "t".into(),
+    })
+    .unwrap();
+    id
+}
+
+#[test]
+fn an_execution_stopped_during_setup_says_so_instead_of_a_missing_file() {
+    // B-016: the resume read the saved script first, which setup writes
+    // last, and failed with a bare "No such file or directory".
+    let t = TestEnv::new("hard-setup");
+    let id = execution_stopped_in_setup(&t, &demo_repo(), "scripted");
+    let out = t.output(&["run", "--resume", &id]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("was stopped before its workspace was ready") && err.contains("Start a new run"), "{err}");
+    assert!(!err.contains("No such file or directory"), "{err}");
+}

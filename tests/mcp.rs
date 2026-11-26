@@ -362,3 +362,35 @@ fn the_baseline_survives_a_restart_of_the_server() {
     assert!(text.contains("exit 0") && text.contains("already failed 1 test(s). Now 0 fail."), "rebuilt from the log: {text}");
     c.stop();
 }
+
+#[test]
+fn an_execution_stopped_during_setup_does_not_block_new_sessions() {
+    // `norn mcp` continues the newest unfinished MCP execution of the
+    // repository. One stopped before its base checkpoint cannot be continued
+    // (B-016); the server says so on stderr and starts a new execution. This
+    // already worked before the B-016 fix; the test keeps it that way.
+    use norn::log::{EventBody, EventLog};
+    let t = TestEnv::new("mcp-setup");
+    let id = norn::workspace::new_execution_id();
+    let dir = norn::workspace::ExecDir::new(&t.state, &id);
+    std::fs::create_dir_all(dir.work()).unwrap();
+    std::fs::copy(&t.policy, dir.policy()).unwrap();
+    let mut log = EventLog::create(&dir.log()).unwrap();
+    let repo = std::fs::canonicalize(demo()).unwrap();
+    log.append(EventBody::ExecutionCreated {
+        execution_id: id.clone(),
+        repo: repo.display().to_string(),
+        policy_name: "t".into(),
+        policy_hash: "sha256:0".into(),
+        agent: "mcp".into(),
+        task: "t".into(),
+    })
+    .unwrap();
+    drop(log);
+    let mut c = McpClient::start(&t, &demo());
+    let (err, text) = c.call("fs_list", json!({"path": "src"}));
+    assert!(!err, "{text}");
+    c.stop();
+    let lines = status_lines(&t);
+    assert_eq!(lines.len(), 2, "a new execution next to the stopped one: {lines:?}");
+}

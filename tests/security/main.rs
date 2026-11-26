@@ -727,9 +727,13 @@ fn toctou_attempt(n: usize) -> (u64, usize, usize) {
             if stop2.load(Ordering::SeqCst) {
                 return 0u64;
             }
-            let found = std::fs::read_dir(state.join("executions")).ok().and_then(|mut d| d.next()).and_then(|e| e.ok()).map(|e| e.path().join("work"));
+            // Start once the base checkpoint exists. Setup is not a tool call:
+            // a run stopped before its base checkpoint cannot be resumed by
+            // design, so racing the setup copy only made the test fail on a
+            // slow machine (B-016). All 300 calls are still raced.
+            let found = std::fs::read_dir(state.join("executions")).ok().and_then(|mut d| d.next()).and_then(|e| e.ok()).map(|e| e.path());
             match found {
-                Some(w) if std::fs::symlink_metadata(w.join("src/swap")).is_ok() => break w,
+                Some(x) if x.join("checkpoints/cp-0000").is_dir() && std::fs::symlink_metadata(x.join("work/src/swap")).is_ok() => break x.join("work"),
                 _ => std::thread::sleep(std::time::Duration::from_millis(1)),
             }
         };

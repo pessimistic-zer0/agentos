@@ -196,12 +196,29 @@ fn print_recovery(id: &str, report: &crate::recovery::RecoveryReport) {
 /// The agent kind recorded when the execution was created.
 pub fn agent_kind(state_dir: &Path, id: &str) -> Result<String> {
     let dir = ExecDir::new(state_dir, id);
-    for ev in EventLog::open(&dir.log())?.events()? {
+    let events = EventLog::open(&dir.log())?.events()?;
+    // Checked first: what a resume reads next (the saved script) is only
+    // written once setup is done, and its absence gave a bare "No such file
+    // or directory" instead of this (B-016).
+    if !setup_finished(&events) {
+        bail!(
+            "execution {id} was stopped before its workspace was ready (it has no base checkpoint), so there is nothing to resume. \
+             Start a new run; `norn rm {id} --force` removes this one"
+        );
+    }
+    for ev in events {
         if let EventBody::ExecutionCreated { agent, .. } = ev.body {
             return Ok(agent);
         }
     }
     bail!("execution {id} has no execution.created event")
+}
+
+/// Did the execution get as far as its workspace and base checkpoint? Only
+/// then can it be recovered and continued; before that there is nothing to
+/// go back to, and a new run is the way on.
+fn setup_finished(events: &[crate::log::Event]) -> bool {
+    events.iter().any(|e| matches!(e.body, EventBody::WorkspaceCreated { .. }))
 }
 
 /// Continue an interrupted execution: recover first (design rule 5), rebuild
