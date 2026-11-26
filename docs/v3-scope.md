@@ -2,7 +2,7 @@
 
 *Drafted 2026-11-26 (D-152); approved by Prince the same day (D-153). Road map: D-137 (v3 is Phase 2 of the spec: hardening).*
 
-**Status: approved; this is the plan for v3.** All four milestones. TLS interception stays out. The trial uses a local fake HTTPS service. The release is 1.2.0. Nothing is built yet.
+**Status: approved; this is the plan for v3.** All four milestones. TLS interception stays out. The trial uses a local fake HTTPS service. The release is 1.2.0. Changes after the experiments are marked with their decision (D-154 onwards).
 
 ## 1. In one paragraph
 
@@ -27,7 +27,7 @@ Today a sandboxed command has no network at all, the only outside effect is `ext
 | # | Item | Notes |
 |---|---|---|
 | N1 | `[network] allow = ["pypi.org", "files.pythonhosted.org"]` in the policy; absent or empty means no network, as today | Host names, optionally with a port (default 443); exact names, `*.` for subdomains |
-| N2 | A proxy in the runtime, outside the sandbox: it accepts `CONNECT host:port` (HTTPS) and plain `GET`s (HTTP) for allowed hosts, resolves DNS itself, and refuses everything else | The sandbox keeps its empty network namespace. Inside, a small forwarder (part of the sandbox helper) listens on `127.0.0.1:3128` and passes each connection to the proxy through a Unix socket mounted into the sandbox. Commands get `HTTPS_PROXY`/`HTTP_PROXY` pointing at it |
+| N2 | A proxy in the runtime, outside the sandbox: it accepts `CONNECT host:port` (HTTPS) and plain `GET`s (HTTP) for allowed hosts, resolves DNS itself, and refuses everything else | The sandbox keeps its empty network namespace. Its init process makes a listening socket on `127.0.0.1:3128` there and hands the socket itself to the runtime, which accepts on it directly; nothing else runs inside (D-155, after E2; the plan had a forwarder and a mounted Unix socket). Commands get `HTTPS_PROXY`/`HTTP_PROXY` pointing at it, and `NO_PROXY` for `localhost` (D-154) |
 | N3 | What went out is in the log: per `exec` call, each host, port, bytes each way, and whether it was allowed | A new event kind (allowed by D-126); `norn trace` shows it |
 | N4 | Recovery: a command that used the network is rolled back like any command; what it sent cannot be | Stated in the recovery semantics; the allow-list is the control |
 
@@ -61,11 +61,11 @@ Today a sandboxed command has no network at all, the only outside effect is `ext
 
 | # | Question | How |
 |---|---|---|
-| E1 | Do `pip`, `npm`, `cargo` and `git` work through an HTTPS `CONNECT` proxy given by `HTTPS_PROXY`, with only the registry hosts allowed? Which hosts does each really need? | A 50-line proxy that logs every `CONNECT`; install one package with each tool |
-| E2 | A forwarder inside an empty network namespace: `127.0.0.1:3128` to a Unix socket mounted from outside. Does it hold up under parallel downloads? | Extend `experiments/m2-unshare` |
-| E3 | Landlock's network rules (ABI 4, kernel 6.7+): can the sandbox be limited to connecting to port 3128 only, as a second wall? What happens on Debian 12 (kernel 6.1), which has no ABI 4? | Probe on all three systems; if absent, the empty namespace is the only wall, as today |
+| E1 | Do `pip`, `npm`, `cargo` and `git` work through an HTTPS `CONNECT` proxy given by `HTTPS_PROXY`, with only the registry hosts allowed? Which hosts does each really need? | A 50-line proxy that logs every `CONNECT`; install one package with each tool. `experiments/m19-connect-proxy`; D-154 |
+| E2 | A forwarder inside an empty network namespace: `127.0.0.1:3128` to a Unix socket mounted from outside. Does it hold up under parallel downloads? | `experiments/m19-forwarder`; led to D-155 |
+| E3 | Landlock's network rules (ABI 4, kernel 6.7+): can the sandbox be limited to connecting to port 3128 only, as a second wall? What happens on Debian 12 (kernel 6.1), which has no ABI 4? | Probe on all three systems; if absent, the empty namespace is the only wall, as today. `experiments/m19-landlock-net`; D-156: not used |
 | E4 | How long does an MCP client wait for one `tools/call`, and what does a model do with "waiting for approval, ask again"? | Claude Code with a probe tool that sleeps, and one that answers "waiting" twice |
-| E5 | HTTPS from the runtime: does `ureq` with its default TLS verify certificates against the system store on NixOS, Ubuntu and Debian? A new dependency would need its own entry | A request to a real host and to a self-signed one |
+| E5 | HTTPS from the runtime: does `ureq` with its default TLS verify certificates against the system store on NixOS, Ubuntu and Debian? A new dependency would need its own entry | A request to a real host and to a self-signed one. `experiments/m21-https`; D-157 |
 
 ## 5. What is not in v3
 

@@ -14,3 +14,7 @@ showed. None of this code is used by the runtime.
 | `m3-rename-kill/` | M3 | Direct write vs temp-file + rename under `kill -9` |
 | `m3-sqlite-kill/` | M3 | SQLite inserts killed mid-transaction |
 | `m15-mcp/` | M15 | What Claude Code does as an MCP client: protocol revision, tool names, refusals, tools switched off, a server that dies mid-call, how a session is stopped |
+| `m19-connect-proxy/` | M19 | E1: pip, npm, cargo and git through a logging `CONNECT` proxy with a host list |
+| `m19-forwarder/` | M19 | E2: reaching a proxy from an empty network namespace; the sandbox's listening socket handed out with `SCM_RIGHTS` |
+| `m19-landlock-net/` | M19 | E3: Landlock's TCP port rules (ABI 4+) as a second wall; not used |
+| `m21-https/` | M21 | E5: `ureq`'s certificate checks, and trusting one test CA |

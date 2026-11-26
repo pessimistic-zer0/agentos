@@ -3816,6 +3816,102 @@ Open questions for Prince, in the draft (§8): approval of the items; whether th
 
 **Concepts to learn.** None new.
 
+### D-154 — E1: an HTTPS `CONNECT` proxy with a host list is enough for pip, npm, cargo and git
+- **Date:** 2026-11-26
+- **Status:** Taken
+- **Area:** sandbox
+- **ADR:** none
+
+**In plain words.** Before building the network allow-list (M19), a 70-line Python proxy was put between four package tools and the internet. Each tool found the proxy through the `HTTPS_PROXY` variable alone and worked with only its registry's host names allowed. A list that is too short fails closed, and the proxy's log names the missing host. So the plan's shape (N1, N2 of `docs/v3-scope.md`) stands, and the hosts each ecosystem needs are now known from a run, not guessed.
+
+**The problem.** Experiment E1 of the v3 scope: do real tools work through a `CONNECT` proxy, and which hosts do they need?
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| A `CONNECT` proxy for HTTPS plus plain forwarding for `http://`, host names only | Taken | All four tools worked through it with no setting other than the proxy variables |
+| Also set `NO_PROXY=localhost,127.0.0.1,::1` in the sandbox | Taken | Not tried in E1; reasoning: a project's tests often start a server on `127.0.0.1` and call it, and with the proxy variables set, HTTP libraries would send those calls to the proxy, which would refuse them |
+| Allow by IP address or network range | Discarded | Registries sit behind content networks whose addresses change; the tools ask for names, and a name is what a person can check |
+
+**What this means for the code.** The registry hosts go into the README and the presets' comments: Python `pypi.org`, `files.pythonhosted.org`; Node `registry.npmjs.org`; Rust `index.crates.io`, `static.crates.io`; git over HTTPS the forge's host. A connection's byte counts are known only when it closes, so the log line for a connection is written when it ends, and the runtime closes (and logs) whatever is still open when the command ends.
+
+**Evidence.** `experiments/m19-connect-proxy/NOTES.md`, run on the development machine: in discovery mode pip went to `pypi.org` and `files.pythonhosted.org`, npm to `registry.npmjs.org`, cargo to `index.crates.io` and `static.crates.io`, git to `github.com`. With those six hosts listed, `pip install attrs` and `npm install is-odd` worked; `curl https://example.com` got `CONNECT tunnel failed, response 403`. With `pypi.org` alone, pip failed with `DENY CONNECT files.pythonhosted.org:443` in the log.
+
+**Concepts to learn.** HTTP `CONNECT`; proxy environment variables (`HTTPS_PROXY`, `NO_PROXY`); package registry and its file host.
+
+### D-155 — The sandbox hands its listening socket to the runtime; no forwarder runs inside (replaces part of N2 of `docs/v3-scope.md`)
+- **Date:** 2026-11-26
+- **Status:** Taken
+- **Area:** sandbox
+- **ADR:** none
+
+**In plain words.** The plan put a small forwarder program inside the sandbox: it would listen on `127.0.0.1:3128` and pass each connection through a Unix socket mounted in from outside. Experiment E2 found something simpler that works as well. The sandbox's first process makes the listening socket on `127.0.0.1:3128` inside the sandbox's own network, and passes the socket itself to the runtime through a socket pair. The runtime then accepts connections on it directly. A socket stays in the network where it was made, whoever holds it, so the sandbox still has no way out except this one port, and nothing runs inside the sandbox besides the command.
+
+**The problem.** Experiment E2: how does a command in an empty network namespace reach a proxy outside it?
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Pass the listening socket out with `SCM_RIGHTS` ("fdpass") | Taken | Worked in E2; no process inside the sandbox to keep alive or to be killed by the command; nothing new mounted into the sandbox; one socket per `exec` call, so every connection is known to belong to that call |
+| A forwarder inside, to a Unix socket mounted from outside (the plan) | Discarded | Also worked in E2, but adds a process in the sandbox and a mount; neither is needed |
+| A user-mode network stack (slirp4netns, pasta) | Discarded (already in D-152) | An outside program and a whole network for one port |
+| `setns` into the sandbox's network from the runtime | Discarded | Needs `CAP_SYS_ADMIN` in the runtime's own user namespace, which an unprivileged program does not have (setns(2), reasoning only) |
+
+**What this means for the code.** `SandboxSpec` gets a switch for the proxy socket. The runtime makes a Unix socket pair before starting the helper and gives one end to the helper as file descriptor 4. The sandbox's init process, after bringing `lo` up and before dropping its privileges, makes the TCP listener on `127.0.0.1:3128`, sends it over descriptor 4, and closes both. The command (and everything it starts) never has either. `docs/v3-scope.md` N2 is changed to say this.
+
+**Evidence.** `experiments/m19-forwarder/NOTES.md`: in `unshare -rn` with `lo` up, a direct connection to `1.1.1.1:80` gave `Network is unreachable`; through the proxy, 64 parallel `CONNECT` downloads of a 4 MiB file were all intact, 3 runs of 3, in both modes. The runtime side reported the received descriptor as `AF_INET` bound to `('127.0.0.1', 3128)`.
+
+**Concepts to learn.** `SCM_RIGHTS` (passing a file descriptor to another process); socket pair; a socket's network namespace.
+
+### D-156 — E3: Landlock's network rules are not used; the empty network namespace stays the only wall
+- **Date:** 2026-11-26
+- **Status:** Taken
+- **Area:** sandbox
+- **ADR:** none
+
+**In plain words.** Newer kernels let Landlock limit which TCP ports a process may connect to or listen on. The plan asked whether that could be a second wall: "connect to port 3128 only". Experiment E3 showed the rules work, but they cover TCP only and match the port alone, never the address. "Port 3128 only" would also stop a project's tests from talking to a server they start themselves on `127.0.0.1:8000`, and Debian 12's kernel does not have the rules at all. So they are not used.
+
+**The problem.** Experiment E3 of the v3 scope.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| No Landlock network rules; the empty network namespace is the wall, as since M2 | Taken | Inside it the only way out is the proxy socket the runtime holds (D-155); a port rule would not narrow that |
+| Landlock: connect only to TCP port 3128 | Discarded | Breaks local test servers on any other port; says nothing about UDP; not on Debian 12 |
+| Use the rules where the kernel has them, skip them elsewhere | Discarded | Two behaviours for one policy, and the first one breaks tests |
+
+**What this means for the code.** None. The threat model says that if the network namespace ever failed, the network would be open.
+
+**Evidence.** `experiments/m19-landlock-net/probe.py` on the development machine (kernel 7.1.8, Landlock ABI 9), both plainly and inside `unshare -rn`: bind to a listed port allowed, to another refused (`Permission denied`); connect to a bind-only port refused; connect to the listed port got as far as `Connection refused` (nobody listening); a UDP `sendto` was allowed. Debian 12 not probed; its kernel is 6.1 (D-136's record) and network rules need 6.7, from the kernel's documentation.
+
+**Concepts to learn.** Landlock ABI versions; TCP versus UDP.
+
+### D-157 — E5: HTTPS through `ureq` as it is; a service may name its own CA; the fake HTTPS service uses `rustls` as a development dependency
+- **Date:** 2026-11-26
+- **Status:** Taken
+- **Area:** tooling
+- **ADR:** none
+
+**In plain words.** For M21 the runtime itself sends requests over HTTPS. `ureq`, which norn already uses, checks certificates against a list of trusted authorities compiled into the program (Mozilla's list), not the system's list, so it behaves the same on every distribution. It refuses unknown authorities and certificates made for another name. It can also be told to trust exactly one authority, which is how the tests reach a local fake HTTPS service. No new library is needed for the runtime. The fake service in the tests needs the server half of TLS, which `rustls` (already built as part of `ureq`) provides.
+
+**The problem.** Experiment E5: does HTTPS from the runtime need a new dependency, and how is a local test service trusted without ever turning checks off?
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| `ureq`'s default TLS (`rustls` with the compiled-in `webpki-roots` list) | Taken | Verified a real host and refused bad certificates in E5; same list on every distribution |
+| The system's certificate store (`rustls-platform-verifier` or `native-tls`) | Discarded | A new dependency, and behaviour that differs between distributions; nothing needs it |
+| `ca_file` per external service: trust that one authority only, for that service | Taken | E5 shows `RootCerts::new_with_certs` narrows trust to the given authority; a real host is then refused |
+| A setting that turns certificate checks off | Discarded | Would make a stolen or faked service look real; never needed when a CA can be named |
+| `rustls` as a development dependency for the fake HTTPS service | Taken | Same version and back end (`ring`) as in `Cargo.lock` already; no new crate is downloaded or built for the program |
+| `rcgen` to make test certificates at test time | Discarded | A new crate; a test CA and certificate made once with `openssl` and kept in `tests/fixtures/tls/` do the same |
+
+**What this means for the code.** `[[external.service]]` gets an optional `ca_file`. `rustls` is added under `[dev-dependencies]`. The test CA's certificate, a server certificate for `localhost` and `127.0.0.1`, its key, and `make-certs.sh` go into `tests/fixtures/tls/`. The CA's own key is not kept.
+
+**Evidence.** `experiments/m21-https/NOTES.md`, run on the development machine: default agent to `https://pypi.org/simple/six/` gave HTTP 200; to `https://self-signed.badssl.com/` and to the local test server, `UnknownIssuer`; an agent trusting only the test CA got HTTP 200 locally and `UnknownIssuer` from pypi.org; a certificate for `other.example` served on `127.0.0.1` gave `certificate not valid for name "127.0.0.1"`. The first try with a single self-signed certificate was refused even when trusted, with `CaUsedAsEndEntity` (Findings).
+
+**Concepts to learn.** Certificate authority (CA); certificate chain; `webpki-roots`; subject alternative name (SAN).
+
 ---
 
 ## Still open
@@ -3921,6 +4017,8 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-26 | CI run 45723220958 on `2312511` (v2): `fhs` failed in the MCP kill cells at 200 per cell. The P3 kill (a random delay after the effect starts) landed after a quick read had finished, while the server was writing its answer; the client got half a line and then the end of the output, and the test client panicked on the broken JSON. Never seen in the 4,800 local trials. No invariant was broken | A server can always be killed in the middle of a message. A client must take a line without its newline as "connection closed", and so must the test client; fixed there |
 | 2026-11-26 | The same run: `fhs-apparmor` failed `toctou_symlink_swap_during_writes_and_reads_never_escapes` with "the run did not finish even after 400 restarts" in a suite that took 4.5 s, so every resume failed at once. It passed in the plain `fhs` job of the same run, in the AppArmor job at v1.0, and 15 of 15 times locally. The test did not say why a resume failed; it now prints the first run's and the last resume's error. Cause not yet known | A test that retries must keep the reason for its last failure, or a failure in CI cannot be read |
 | 2026-11-26 | CI run 45726709554, on a commit that changed only documents, failed one `rodirs` test with `Try again`: `openat2(RESOLVE_BENEATH)` returns `EAGAIN` when a rename anywhere on the system races with a `..`, and norn never retried (B-015). Reproduced locally (about 0.7 % of opens under a renaming thread); fixed by retrying. Probably also the cause of the TOCTOU test's failure in run 45723220958 | Read the whole error list of every system call the confinement rests on. A failure on a documents-only commit is a fault in the code, not in the change |
+| 2026-11-26 | E1: the logging proxy wrote a connection's line only when the connection closed, and npm keeps up to five connections open until it exits; in one run, npm's lines were missing because the proxy was stopped first. Logging `OPEN` when a tunnel starts showed all five (`experiments/m19-connect-proxy/NOTES.md`) | A record written only at the end of something is lost if the end never comes. The runtime must close and log what is still open when a command ends |
+| 2026-11-26 | E5: a test certificate made with `openssl req -x509` was refused by `ureq` even when it was the one trusted root: `CaUsedAsEndEntity`. `openssl` marks such a certificate as a CA, and the verifier refuses a CA certificate used by a server. A CA plus a server certificate signed by it works (`experiments/m21-https/NOTES.md`) | A strict verifier is right to refuse it, and a test setup must look like the real thing: an authority and a certificate it signed |
 
 ---
 
@@ -4022,3 +4120,8 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | Test oracle | The part of a test that decides whether a result is right. The kill harness's oracle is its five invariants and the final-state check; M16 reuses it for MCP (D-144) |
 | Baseline (of a command) | What a command failed the first time it ran before the agent changed any file; later runs are compared with it (D-145) |
 | EAGAIN | "Try again": an error meaning the call could not be done right now and may succeed if repeated. `openat2` with `RESOLVE_BENEATH` gives it when a rename races with a `..` (B-015) |
+| HTTP `CONNECT` | A request that asks a proxy for a raw tunnel to `host:port`. For HTTPS the proxy then sees only the host name and how many bytes pass, never the content (D-154) |
+| `HTTPS_PROXY` / `NO_PROXY` | Environment variables that tell programs which proxy to use, and for which hosts not to use it (D-154) |
+| `SCM_RIGHTS` | A way to send an open file or socket to another process through a Unix socket; the receiver gets its own descriptor for the same object (D-155) |
+| Certificate authority (CA) | An organisation (or a test key) that signs certificates. A client trusts a server's certificate when a CA it trusts signed it and the name matches (D-157) |
+| `webpki-roots` | Mozilla's list of trusted certificate authorities, compiled into a Rust program; what `ureq` checks against (D-157) |
