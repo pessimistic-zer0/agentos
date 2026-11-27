@@ -5,7 +5,7 @@
 | Weeks in the plan | v3 (D-153); no week plan |
 | Started / finished | 2026-11-26 / 2026-11-26 on `nix`; `fhs` waits for a CI run |
 | Commits | the experiment `41c7125` (E5), then the M21 commit (tag `m21` after CI is green, D-113) |
-| Status | Done on `nix`. `fhs` and Debian 12 not yet verified |
+| Status | Done. Verified on both presets and Debian 12 by CI run 45920326159 on `01edb37`; tagged there (D-167) |
 
 Write this document for a reader who is new to Rust and Linux internals. Plain words first, the real term next to it.
 

@@ -4,7 +4,7 @@ What changed for someone who uses Norn, newest first. The reasons are in `docs/d
 
 ## 1.2.0 (2026-11-26; the plan "v3": `docs/v3-scope.md`)
 
-Tagged `v1.2` once a CI run on Ubuntu 24.04, Ubuntu with AppArmor and Debian 12 has passed (D-164). Everything new is off unless a policy turns it on; policy files and execution folders of 1.1 work unchanged (`docs/compatibility.md`).
+Tagged `v1.2` on the commit CI run 45920326159 passed on Ubuntu 24.04, Ubuntu with AppArmor, and Debian 12 (D-167). Everything new is off unless a policy turns it on; policy files and execution folders of 1.1 work unchanged (`docs/compatibility.md`).
 
 ### Added
 

@@ -4157,6 +4157,31 @@ Earlier runs on the way: 45723220958 on `2312511` (failed: MCP test client, TOCT
 
 **Concepts to learn.** None new.
 
+### D-167 — CI run 45920326159 on `01edb37` is green; v3 is released as 1.2.0, tags `m21`, `m22` and `v1.2` there
+- **Date:** 2026-11-27
+- **Status:** Taken (carries out D-164)
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** The release commit passed all four CI jobs: Ubuntu with and without AppArmor's restriction, Debian 12, and the release archive. So M21 (secrets), M22 (evidence) and the B-016 fix are verified on `fhs`, and v3 is done. `m21`, `m22` and `v1.2` are tagged on `01edb37`, as D-164 planned.
+
+**The problem.** D-113: tag only a commit whose CI run is green.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Tag `m21`, `m22`, `v1.2` on `01edb37` | Taken | D-164; the first commit after B-016's fix that CI ran |
+| Tag the later commit that records this run | Discarded | It changes only documents and has not been through CI (same as D-136) |
+
+**What this means for the code.** None. Tags pushed.
+
+**Evidence.** `gh run view 45920326159`: conclusion success, head `01edb37c0db9021df86a9b691b640962996d64b1`; jobs `fhs`, `fhs-apparmor`, `release`, `debian` all success.
+- `fhs`: `Ubuntu 24.04.5 LTS`, kernel `7.0.0-1020-azure`. The step "Tests" (`make test`) 267 passed. 200-kill step: `total: 4800 runs, 4800 killed, 0 invariant violations, 0 duplicated effects, 3773/3773 cut-off calls classified correctly; norn recover wall time p50 22.3 ms, p99 59.9 ms`; `mcp total: 4800 runs, 4791 killed, 0 invariant violations, 0 duplicated effects, 3727/3727`; `network total: 4800 runs, 4800 killed, 0 invariant violations, 0 duplicated effects, 3763/3763`; `fs.edit` and `fs.delete` 1,600 runs each, 0 violations; `external total: 1600 runs, 0 invariant violations, 0 duplicated effects, 929/929`.
+- `release`: `norn-1.2.0-x86_64-linux.tar.gz (3.7M)`; `norn 1.2.0`; `check: the packed program ran the demo task from the archive; the patch holds the fix`.
+- `debian`: `Debian GNU/Linux 12 (bookworm), kernel 6.1.0-56-cloud-amd64, 4 CPUs`; `passed 267 failed 0`, including the TOCTOU test that found B-016.
+
+**Concepts to learn.** None new.
+
 ---
 
 ## Still open
