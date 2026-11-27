@@ -5,7 +5,7 @@
 | Weeks in the plan | v3 (D-153); no week plan |
 | Started / finished | 2026-11-26 / 2026-11-26 on `nix`; `fhs` waits for a CI run |
 | Commits | the experiments `41c7125` and `e84a002`, then the M19 commit (tag `m19` after CI is green, D-113) |
-| Status | Done on `nix`. `fhs` and Debian 12 not yet verified |
+| Status | Done. Verified on both presets and Debian 12 by CI run 45816245961 on `f2a662d`; tagged `m19` there (D-166) |
 
 Write this document for a reader who is new to Rust and Linux internals. Plain words first, the real term next to it.
 
@@ -24,7 +24,7 @@ From `docs/v3-scope.md`, M19, and §7.
 | N3 each connection in the log (host, port, bytes, allowed); `norn trace` shows it | Yes, `nix` | `a_listed_host_is_reached_through_the_proxy_and_logged` checks the `exec.network` event, its place before `tool.completed`, and the trace lines |
 | N4 recovery: a command that used the network is rolled back like any; what it sent is not | Yes, `nix` (documented and tested) | `docs/recovery-semantics.md` §11; kill cells with `NORN_RECOVERY_NETWORK=1`: 72 runs, 72 killed, 0 violations, 0 duplicated effects |
 | With the allow-list off, every existing test passes unchanged | Yes, `nix` | `make test`: 207 in the main pass (16 of them new), 33 security cases through MCP, and the network kill cells; 0 failed |
-| Both presets, Debian 12 | Not yet | needs a CI run |
+| Both presets, Debian 12 | Yes | CI run 45816245961 on `f2a662d` (D-166): `make test` 241 passed on Ubuntu 24.04 and Debian 12; network kill cells on Ubuntu, 200 per cell: 4,800 runs, 0 violations |
 | `pip install` etc. through the allow-list from a real registry | Shown in E1 only, with a Python proxy | The trial in M22 (D2) does it through norn |
 
 ## 3. What you need to know first

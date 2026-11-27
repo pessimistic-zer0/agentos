@@ -4086,6 +4086,77 @@ Earlier runs on the way: 45723220958 on `2312511` (failed: MCP test client, TOCT
 
 **Concepts to learn.** Test flakiness; a test racing the thing under test versus racing its setup.
 
+### D-164 — Version 1.2.0, set with the v3 documents; the tags wait for CI
+- **Date:** 2026-11-26
+- **Status:** Taken
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** All four v3 milestones are built and tested on `nix`. The version in `Cargo.toml` is 1.2.0 (D-153: minor number, everything new is off by default), and the CHANGELOG's section is "1.2.0". The tags follow D-113: each goes on a commit whose own CI run is green. `m19` and `m20` go on their milestone commits if their runs pass; `m21`, `m22` and `v1.2` go on the release commit after its run.
+
+**The problem.** M22's last step, in the same order as D-150 for 1.1.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| `m19` on `f2a662d` and `m20` on `4b3dd66`, each after its own green run | Taken | Both commits were pushed and have their own runs, unlike v2's milestones |
+| `m21` on its commit `1877d20` | Discarded | Its run failed (B-016, Debian); the fix is later |
+| `m21`, `m22`, `v1.2` together on the release commit, after its run | Taken | The first commit after the B-016 fix that CI runs |
+
+**What this means for the code.** `Cargo.toml` `version = "1.2.0"`.
+
+**Evidence.** On `nix`, on the release tree: `make test` 267 passed, 0 failed (230 in the main pass, 36 security cases through MCP, the network kill cells); `cargo clippy --all-targets -- -D warnings` clean; `packaging/release.sh --check` packed `norn-1.2.0-x86_64-linux.tar.gz (4.0M)`, the unpacked program printed `norn 1.2.0` and ran the demo task; `make eval-security` 36 passed through each front door; `make eval-recovery` with the network cells in `docs/results/recovery-network-200-nix.md`; the trial in `docs/results/v3-trial-nix.md`. `m19` (D-166) and `m20` (D-165) are verified and tagged; the rest is not yet run on `fhs`.
+
+**Concepts to learn.** None new.
+
+### D-165 — CI run 45817518838 on `4b3dd66` (M20) is green; `m20` is tagged there
+- **Date:** 2026-11-26
+- **Status:** Taken
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** The M20 commit (approvals, on top of M19's network allow-list) passed all four CI jobs. So M19 and M20 are verified on `fhs` and Debian 12 at that commit, and by D-113 and D-164 `m20` is tagged there. The run also gave the first 200-kill result for the kill cells with the network on, on Ubuntu.
+
+**The problem.** D-113: tag only a commit whose CI run is green.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Tag `m20` on `4b3dd66` | Taken | D-164 |
+
+**What this means for the code.** None. Local tag `m20`, pushed.
+
+**Evidence.** `gh run view 45817518838`: conclusion success, head `4b3dd667d6f252db4560d3594b38b7f744720a5a`; jobs `fhs`, `fhs-apparmor`, `release`, `debian` all success.
+- `fhs`: `Ubuntu 24.04.5 LTS`, kernel `7.0.0-1018-aws`. The step "Tests" (`make test`) 251 passed (sum of its `test result` lines). 200-kill step: `total: 4800 runs, 4774 killed, 0 invariant violations, 0 duplicated effects, 3552/3552 cut-off calls classified correctly; norn recover wall time p50 11.8 ms, p99 39.7 ms`; `mcp total: 4800 runs, 4761 killed, 0 invariant violations, 0 duplicated effects, 3513/3513`; `fs.edit total: 1600 runs, 1600 killed, 0 violations`; `fs.delete total: 1600 runs, 1600 killed, 0 violations`; `external total: 1600 runs, 0 invariant violations, 0 duplicated effects, 931/931`; `network total: 4800 runs, 4796 killed, 0 invariant violations, 0 duplicated effects, 3603/3603 cut-off calls classified correctly; norn recover wall time p50 12.7 ms, p99 39.0 ms`.
+- `debian`: `Debian GNU/Linux 12 (bookworm), kernel 6.1.0-56-cloud-amd64, 4 CPUs`; `passed 251 failed 0`.
+- `release`: `norn-1.1.0-x86_64-linux.tar.gz (3.7M)`; `norn 1.1.0` (the version was raised later, D-164).
+- `fhs-apparmor`: success, including `tests/approvals.rs` and the TOCTOU test.
+
+**Concepts to learn.** None new.
+
+### D-166 — CI run 45816245961 on `f2a662d` (M19) is green; `m19` is tagged there
+- **Date:** 2026-11-26
+- **Status:** Taken
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** The M19 commit (the network allow-list) passed all four CI jobs, so M19 is verified on `fhs` and Debian 12 at that commit, and `m19` is tagged there (D-113, D-164).
+
+**The problem.** D-113.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Tag `m19` on `f2a662d` | Taken | D-164 |
+
+**What this means for the code.** None. Local tag `m19`, pushed.
+
+**Evidence.** `gh run view 45816245961`: conclusion success, head `f2a662dbe6ebaad6d745cf39c1bf05eef43262b6`; jobs `fhs`, `fhs-apparmor`, `release`, `debian` all success.
+- `fhs`: kernel `7.0.0-1017-azure`. The step "Tests" (`make test`) 241 passed. 200-kill step: `total: 4800 runs, 4800 killed, 0 invariant violations, 0 duplicated effects, 3749/3749`; `mcp total: 4800 runs, 4796 killed, 0 invariant violations, 0 duplicated effects, 3728/3728`; `network total: 4800 runs, 4800 killed, 0 invariant violations, 0 duplicated effects, 3798/3798 cut-off calls classified correctly; norn recover wall time p50 23.7 ms, p99 67.1 ms`; `fs.edit` and `fs.delete` 1,600 runs each, 0 violations; `external total: 1600 runs, 0 invariant violations, 0 duplicated effects, 937/937`.
+- `debian`: `Debian GNU/Linux 12 (bookworm), kernel 6.1.0-56-cloud-amd64, 4 CPUs`; `passed 241 failed 0`.
+
+**Concepts to learn.** None new.
+
 ---
 
 ## Still open

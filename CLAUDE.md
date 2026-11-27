@@ -190,6 +190,6 @@ v2 (D-139, `docs/v2-scope.md`), done. M15 (`docs/milestones/M15-mcp-server.md`),
 Open, and only Prince can close them:
 
 - The tags `v1.0` and `m14` are on GitHub, pushed by Prince on 2026-11-25.
-- Nothing. v2 is released: CI run 45728656310 on `1571d09` is green on all four jobs, tags `m15` to `m18` and `v1.1` there (D-158). On the way, CI found a test-client bug and B-015 (`openat2` gave `EAGAIN` under concurrent renames and norn never retried), both fixed. v3 is approved (D-153) and in progress: the experiments E1 to E5 are done (D-154 to D-157, D-159); M19 (`docs/milestones/M19-network.md`, D-160), M20 (`docs/milestones/M20-approvals.md`, D-161) and M21 (`docs/milestones/M21-secrets.md`, D-162) are built and pass on `nix`; M19 and M20 wait for their CI runs, M21 for a push; v4 and v5 are ordered (D-137) but not scoped.
+- Nothing. v2 is released: CI run 45728656310 on `1571d09` is green on all four jobs, tags `m15` to `m18` and `v1.1` there (D-158). On the way, CI found a test-client bug and B-015 (`openat2` gave `EAGAIN` under concurrent renames and norn never retried), both fixed. v3 is approved (D-153) and built: M19 to M22 (`docs/milestones/M19-network.md` to `M22-v3-trial-release.md`, D-154 to D-166), version 1.2.0 (D-164). `m19` (CI run 45816245961, D-166) and `m20` (45817518838, D-165) are tagged; `m21`, `m22` and `v1.2` go on the release commit once its CI run is green. On `nix`: `make test` 267 passed. B-016 found and fixed on the way. v4 and v5 are ordered (D-137) but not scoped.
 
 Update this section when any of these changes.

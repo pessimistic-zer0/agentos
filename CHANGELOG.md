@@ -2,7 +2,9 @@
 
 What changed for someone who uses Norn, newest first. The reasons are in `docs/decision-log.md` (the `D-` numbers); the bugs in `docs/bugs.md` (the `B-` numbers).
 
-## Unreleased (to be 1.2.0; the plan "v3": `docs/v3-scope.md`)
+## 1.2.0 (2026-11-26; the plan "v3": `docs/v3-scope.md`)
+
+Tagged `v1.2` once a CI run on Ubuntu 24.04, Ubuntu with AppArmor and Debian 12 has passed (D-164). Everything new is off unless a policy turns it on; policy files and execution folders of 1.1 work unchanged (`docs/compatibility.md`).
 
 ### Added
 
@@ -13,6 +15,10 @@ What changed for someone who uses Norn, newest first. The reasons are in `docs/d
 ### Changed
 
 - An `[[external.service]]` URL may now start with `https://` (D-162). Plain `http://` is still allowed only for `127.0.0.1` by number, as before.
+
+### Fixed
+
+- B-016: resuming a run that was stopped during its setup (before its first checkpoint) failed with a bare "No such file or directory"; it now says that setup was not finished and to start a new run.
 
 ## 1.1.0 (2026-11-26; the plan "v2": `docs/v2-scope.md`)
 

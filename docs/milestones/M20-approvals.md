@@ -5,7 +5,7 @@
 | Weeks in the plan | v3 (D-153); no week plan |
 | Started / finished | 2026-11-26 / 2026-11-26 on `nix`; `fhs` waits for a CI run |
 | Commits | the experiment `e84a002` (E4), then the M20 commit (tag `m20` after CI is green, D-113) |
-| Status | Done on `nix`. `fhs` and Debian 12 not yet verified |
+| Status | Done. Verified on both presets and Debian 12 by CI run 45817518838 on `4b3dd66`; tagged `m20` there (D-165) |
 
 Write this document for a reader who is new to Rust and Linux internals. Plain words first, the real term next to it.
 
@@ -24,7 +24,7 @@ From `docs/v3-scope.md`, M20, and §7 ("an approval is needed, recorded, exact, 
 | A3 `norn approve` / `norn deny`: who and when, for that exact call, for a limited time; the agent cannot approve itself | Yes, `nix` | same test (`by` is logged); `an_expired_approval_is_not_used`; `a_refusal_is_final_for_that_exact_call`; `the_agent_cannot_write_its_own_approval` |
 | A4 an approved identical call runs, with the policy checked again | Yes, `nix` | `a_write_waits_runs_after_approval_and_only_once`; `approval_is_on_top_of_the_policy_never_instead_of_it` |
 | Without the section nothing changes | Yes, `nix` | `without_an_approvals_section_nothing_waits`; `make test` |
-| Both presets, Debian 12 | Not yet | needs a CI run |
+| Both presets, Debian 12 | Yes | CI run 45817518838 on `4b3dd66` (D-165): `make test` 251 passed on Ubuntu 24.04 and on Debian 12 |
 
 ## 3. What you need to know first
 
