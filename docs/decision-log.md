@@ -4182,6 +4182,34 @@ Earlier runs on the way: 45723220958 on `2312511` (failed: MCP test client, TOCT
 
 **Concepts to learn.** None new.
 
+### D-168 — The v4 scope, drafted: TraceWeaver as new ways to read the record a run already leaves
+- **Date:** 2026-11-28
+- **Status:** Proposed (waits for Prince's approval)
+- **Area:** scope
+- **ADR:** none
+
+**In plain words.** The draft is `docs/v4-scope.md`, Phase 3 of the spec as ordered by D-137. Prince asked for the draft on 2026-11-28 ("lets do v3, start with the draft"; v3 was already released, so this is the next version on the road map). There are four milestones. M23 adds a written event schema, filters, durations, an inspector for one call and a security view. M24 adds causal links (a call names the message that asked for it), a graph of them, and the files each call changed. M25 adds the model's token counts, a replay of the agent against the recorded results (nothing is run) and a diff of two runs. M26 adds an OpenTelemetry file, search across runs, a trial on the recorded trials of v1 to v3, and the release. Five experiments come first. Five questions are left for Prince.
+
+**The problem.** D-137 makes TraceWeaver the next version. Its contents need Prince's approval before anything is built.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| TraceWeaver reads the existing log, checkpoints and blobs; the log gains only two optional fields (`cause`, `usage`) | Proposed | Spec §9.13: "consumes events; does not introduce separate instrumentation". Optional fields keep every 1.x log readable (D-126) |
+| Infer which message caused a call from the order of events | Discarded | Spec §9.13: causes come from recorded ids, never from timing. Old logs say "cause not recorded" instead |
+| Replay that stops at the first divergence, and runs nothing | Proposed | No effect, so no new risk and no new recovery case |
+| Replay that goes on after the divergence in a new execution | Left as question 3 | Useful (how would another model have finished?), but it is a new way to start an execution and about one more milestone |
+| A web interface or a TUI | Left as question 2 | A TUI needs a new dependency. OTLP output gives a graphical view in tools that exist already. A single HTML file is a middle way |
+| Send traces to a collector over HTTP | Left as question 4 | A file is enough to use them; sending is one more outward path |
+| A search index across runs | Left out | Few runs on one machine; an index belongs with the daemon of v5 |
+| Cost in money | Left out | Prices change by provider; token counts are the fact. Cost attribution stays parked (spec §22) |
+
+**What this means for the code.** None until approved.
+
+**Evidence.** none; reasoning only. Read: spec §9.13, §14 Phase 3, §21, §22, the appendix example `agentos trace exec_7f3a --denied`; `src/trace.rs` (today: per-call lines, `--events`, `--json`); `src/log.rs` (SQLite in WAL mode, `seq`, `ts`, `SCHEMA_VERSION` 1, no token counts stored); `src/runtime.rs` (`agent.message` is stored before the call it leads to, ADR 0005, but nothing links the two by id; checkpoints are removed only by `norn rm`); `src/mcp.rs` (through MCP the only `agent.message` is the session's tool list).
+
+**Concepts to learn.** OpenTelemetry spans and OTLP; Graphviz DOT; SQLite WAL readers; deterministic replay.
+
 ---
 
 ## Still open
@@ -4409,3 +4437,8 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | Bearer token | A secret string that grants access to whoever presents it, sent in the `Authorization` header (D-162) |
 | Redaction | Replacing a secret's value with a placeholder before text is stored or shown (D-162) |
 | Credential brokering | The runtime holds a secret and uses it for the agent, which only names what it wants done (D-152, D-162) |
+| Causal link | A recorded id that says one thing happened because of another (this call came from that message); never guessed from timing (D-168) |
+| Replay | Running the agent again against a run's recorded tool results, with no tool really run (D-168) |
+| Divergence | The first point where a replayed agent asks for a different call from the recorded one (D-168) |
+| OpenTelemetry / span / OTLP | A common format for traces; a span is one timed step with a parent; OTLP is how spans are written or sent (D-168) |
+| DOT (Graphviz) | A text format for graphs; the `dot` program turns it into a picture (D-168) |
