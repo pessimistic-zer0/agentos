@@ -4184,7 +4184,7 @@ Earlier runs on the way: 45723220958 on `2312511` (failed: MCP test client, TOCT
 
 ### D-168 — The v4 scope, drafted: TraceWeaver as new ways to read the record a run already leaves
 - **Date:** 2026-11-28
-- **Status:** Proposed (waits for Prince's approval)
+- **Status:** Replaced by D-169 (approved with the recommended answers)
 - **Area:** scope
 - **ADR:** none
 
@@ -4209,6 +4209,31 @@ Earlier runs on the way: 45723220958 on `2312511` (failed: MCP test client, TOCT
 **Evidence.** none; reasoning only. Read: spec §9.13, §14 Phase 3, §21, §22, the appendix example `agentos trace exec_7f3a --denied`; `src/trace.rs` (today: per-call lines, `--events`, `--json`); `src/log.rs` (SQLite in WAL mode, `seq`, `ts`, `SCHEMA_VERSION` 1, no token counts stored); `src/runtime.rs` (`agent.message` is stored before the call it leads to, ADR 0005, but nothing links the two by id; checkpoints are removed only by `norn rm`); `src/mcp.rs` (through MCP the only `agent.message` is the session's tool list).
 
 **Concepts to learn.** OpenTelemetry spans and OTLP; Graphviz DOT; SQLite WAL readers; deterministic replay.
+
+### D-169 — The v4 scope is approved: all four milestones, command line only, replay stops at the divergence, OpenTelemetry as a file, version 1.3.0
+- **Date:** 2026-11-28
+- **Status:** Taken
+- **Area:** scope
+- **ADR:** none
+
+**In plain words.** Prince approved the v4 draft (D-168) with the recommended answer to each question ("go with your recs"). All four milestones, M23 to M26. Output stays on the command line: text, JSON, DOT and an OTLP file; no HTML report and no TUI. Replay stops at the first divergence and runs nothing. The OpenTelemetry trace is written to a file, never sent. The release is 1.3.0. `docs/v4-scope.md` is now the plan for v4.
+
+**The problem.** D-168 left five questions that only Prince could answer.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| The four milestones as drafted | Taken | Prince's choice |
+| M23 and M24 only | Discarded | Prince's choice |
+| A self-contained HTML report, or a TUI | Discarded | Prince's choice; the OTLP file gives a graphical view in existing tools |
+| Replay that runs tools after the divergence | Discarded | Prince's choice; stays out of v4 |
+| Sending traces to a collector | Discarded | Prince's choice |
+
+**What this means for the code.** Work starts with the experiments E1 to E5, then M23.
+
+**Evidence.** Prince's message of 2026-11-28: "go with your recs".
+
+**Concepts to learn.** None new.
 
 ---
 

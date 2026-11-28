@@ -7,7 +7,7 @@ A Rust runtime that runs a coding agent's tool calls inside a rootless Linux san
 - `AgentOS v1 — Scoped Design.md` is **the plan**. Read it before any design or code work.
 - `AgentOS_Project_Spec.md` is a "maybe someday" list. It never adds work to v1. If the two disagree, the v1 document wins.
 - `docs/decision-log.md` records every decision taken or discarded, with reasons. Prince will study from it later, so it must stay complete.
-- `docs/v4-scope.md` is the **draft** of v4 (TraceWeaver, D-168): not approved; nothing in it is built until Prince approves it.
+- `docs/v4-scope.md` is **the plan for v4** (approved 2026-11-28, D-169): TraceWeaver, new ways to read a run's record: timeline, inspector, causal links, per-call diffs, replay up to the first divergence, run diff, an OpenTelemetry file, search. Milestones M23 to M26, released as 1.3.0.
 - `docs/v3-scope.md` is **the plan for v3** (approved 2026-11-26, D-153): network allow-list, approvals, secrets used by the runtime, released as 1.2.0. Milestones M19 to M22.
 - `docs/v2-scope.md` is **the plan for v2** (approved 2026-11-26, D-139): norn as an MCP server, M15 to M18, released as 1.1.0. The order of the versions after it is D-137; each needs its own approval.
 - `docs/decisions/` holds the ADRs. `docs/threat-model.md`, `docs/recovery-semantics.md`, `docs/bugs.md` and `docs/results/` are the other documents of record.

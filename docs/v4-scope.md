@@ -1,8 +1,8 @@
 # norn v4 — Scope (draft)
 
-*Drafted 2026-11-28 (D-168). Road map: D-137 (v4 is Phase 3 of the spec: TraceWeaver).*
+*Drafted 2026-11-28 (D-168); approved by Prince the same day (D-169). Road map: D-137 (v4 is Phase 3 of the spec: TraceWeaver).*
 
-**Status: draft, waiting for Prince's approval.** Nothing in it is built until he approves it. The questions he needs to answer are in §8.
+**Status: approved; this is the plan for v4.** All four milestones, with the recommended answer to each question of §8: command line only, replay stops at the divergence, OpenTelemetry as a file, version 1.3.0. Changes after the experiments are marked with their decision (D-170 onwards).
 
 ## 1. In one paragraph
 
@@ -97,7 +97,7 @@ Every execution already leaves a complete record: an append-only event log, the 
 - The OTLP file is accepted by a collector (or, if E4 finds none can run, by the schema, and the document says which).
 - The trial is recorded; CI is green on both presets and Debian.
 
-## 8. Questions only Prince can answer
+## 8. Questions only Prince can answer (answered 2026-11-28, D-169: all four milestones; command line only; stop at the divergence; a file only; 1.3.0)
 
 1. **Approve the scope:** all four milestones, or a smaller v4. For example M23 and M24 only: reading and links, with no replay.
 2. **The form:** CLI only, with text, JSON, DOT and OTLP output (recommended: no new dependency, and OTLP gives a graphical view in tools that exist already). Or also one self-contained HTML report per run (`norn trace --html`: one file, no server). Or a TUI, which needs a new dependency.
