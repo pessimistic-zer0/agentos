@@ -82,13 +82,19 @@ fn start_mock_with(reply_for: fn(&[Value]) -> Value) -> (String, Arc<Mutex<Vec<V
             let mut req: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
             req["_authorization"] = json!(auth);
             let message = reply_for(req["messages"].as_array().map(|v| v.as_slice()).unwrap_or(&[]));
+            let sent = req["messages"].as_array().map(|m| m.len()).unwrap_or(0) as u64;
             req["_nth"] = json!(seen2.lock().unwrap().len());
             seen2.lock().unwrap().push(req);
             // A reply of the form {"_status": 500, "_body": "..."} makes the
             // mock answer with that HTTP status instead of a message.
             let (status, text) = match message["_status"].as_u64() {
                 Some(code) => (code, message["_body"].as_str().unwrap_or("").to_string()),
-                None => (200, json!({"choices": [{"index": 0, "message": message}]}).to_string()),
+                // Token counts as an OpenAI-style server reports them: ten
+                // prompt tokens per message sent, seven for the answer.
+                None => {
+                    let usage = json!({"prompt_tokens": sent * 10, "completion_tokens": 7, "total_tokens": sent * 10 + 7});
+                    (200, json!({"model": "mock-served", "choices": [{"index": 0, "message": message}], "usage": usage}).to_string())
+                }
             };
             // "_retry_after": seconds, sent as the Retry-After header.
             let extra = message["_retry_after"].as_str().map(|s| format!("Retry-After: {s}\r\n")).unwrap_or_default();
@@ -600,4 +606,54 @@ fn each_call_names_the_assistant_message_that_asked_for_it() {
     assert_eq!(unique, causes, "each call has its own message");
     let graph = t.norn(&["trace", &id, "--graph"]);
     assert!(graph.contains("message ") && graph.contains("-> #1 ") && graph.contains("after a stop, resumed by `norn run --resume`"), "{graph}");
+}
+
+#[test]
+fn tokens_are_recorded_and_a_replay_follows_the_recording_until_the_model_differs() {
+    // R1 and R2 (v4, M25).
+    let t = TestEnv::new("llm-replay");
+    let (url, seen) = start_mock();
+    let out = run_llm(&t, &url, &[]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let id = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    let events = t.events(&id);
+    // Every assistant message carries its reply's counts; nothing else does.
+    let mut replies = 0;
+    for e in events.iter().filter(|e| e["type"] == "agent.message") {
+        if e["message"]["role"] == "assistant" {
+            let u = &e["usage"];
+            assert_eq!(u["model"], "mock-served", "the server's own model name: {e}");
+            assert!(u["prompt_tokens"].as_u64().unwrap() >= 20 && u["completion_tokens"] == 7, "{e}");
+            replies += 1;
+        } else {
+            assert!(e.get("usage").is_none(), "{e}");
+        }
+    }
+    assert_eq!(replies, 6);
+    assert!(t.norn(&["trace", &id, "--graph"]).contains("message "));
+
+    // Replay with the same (deterministic) model: no divergence, nothing run.
+    let digest = |t: &TestEnv| (tree_digest(&t.exec_dir(&id).join("work")), tree_digest(&t.exec_dir(&id).join("checkpoints")), std::fs::read(t.exec_dir(&id).join("log.db")).unwrap());
+    let before = digest(&t);
+    let n_requests = seen.lock().unwrap().len();
+    let rep = t.cmd(&["replay", &id]).env("NORN_LLM_API_KEY", "KEY-CANARY-123").output().unwrap();
+    assert!(rep.status.success(), "{}", String::from_utf8_lossy(&rep.stderr));
+    let text = String::from_utf8_lossy(&rep.stdout).to_string();
+    assert!(text.contains("Nothing is run: every call is answered from the recording"), "{text}");
+    assert!(text.contains("the replay asked for the same 5 call(s) as the recording") && text.contains("no divergence"), "{text}");
+    assert!(text.contains("recorded: 5 call(s); tokens 6 reply(ies)") && text.contains("replay:   tokens 6 reply(ies)"), "{text}");
+    assert_eq!(seen.lock().unwrap().len(), n_requests + 6, "the model was asked again, once per reply");
+    assert_eq!(digest(&t), before, "the replay changed nothing in the execution");
+    assert_eq!(std::fs::read_dir(t.state.join("executions")).unwrap().count(), 1, "no new execution");
+
+    // Another model (here: another mock) that edits instead of writing the
+    // whole file diverges where it first asks for something else.
+    let (other, seen2) = start_mock_with(fixes_with_an_edit);
+    let rep = t.cmd(&["replay", &id, "--base-url", &other, "--model", "other-model"]).output().unwrap();
+    let text = String::from_utf8_lossy(&rep.stdout).to_string();
+    assert!(rep.status.success() && text.contains("DIVERGENCE at call #"), "{text}");
+    assert_eq!(seen2.lock().unwrap()[0]["model"], "other-model");
+    assert_eq!(digest(&t), before);
+    // A script is not a model.
+    assert!(!t.output(&["replay", &id, "--script", "x.toml"]).status.success());
 }

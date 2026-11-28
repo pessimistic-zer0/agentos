@@ -58,6 +58,7 @@ One message of the conversation, stored before the call it leads to (ADR 0005). 
 | Field | Meaning |
 |---|---|
 | `message` | For the LLM agent: an OpenAI-style chat message (`role`, `content`, `tool_calls`, `tool_call_id`). For `norn mcp`: once per session, `{"mcp_session": {client, protocol, tools}}`, the tools the client was offered. The scripted agent writes none |
+| `usage` | For a model's reply (an assistant message): `{"model", "prompt_tokens", "completion_tokens"}` as the server reported them, `model` being the server's own name for the model that answered (D-174). Since 1.3.0; absent for other messages and when the server sends no counts |
 
 ## Tool calls
 

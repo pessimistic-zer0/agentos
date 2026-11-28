@@ -360,7 +360,7 @@ impl Server {
                 "protocol": self.legacy.clone().unwrap_or_else(|| MODERN.to_string()),
                 "tools": tools(&self.policy),
             }});
-            open.gw.log.append(EventBody::AgentMessage { message: session })?;
+            open.gw.log.append(EventBody::AgentMessage { message: session, usage: None })?;
         }
         Ok(self.open.as_mut().expect("opened above"))
     }

@@ -35,7 +35,7 @@ pub fn render_call(events: &[Event], call_id: u64, blobs: &BlobStore, full: bool
     if let Some(EventBody::ToolRequested { call, cause, .. }) = mine.first().map(|e| &e.body) {
         let message = |seq: u64| {
             events.iter().find(|e| e.seq == seq).and_then(|e| match &e.body {
-                EventBody::AgentMessage { message } => Some(message),
+                EventBody::AgentMessage { message, .. } => Some(message),
                 _ => None,
             })
         };

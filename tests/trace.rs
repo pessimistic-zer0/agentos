@@ -240,3 +240,83 @@ fn an_mcp_call_names_its_request_and_an_approval_links_two_calls() {
     assert!(dot.contains(&format!("call2 -> appr_{approval} [label=\"waited\"]")), "{dot}");
     assert!(dot.contains("req_req___"), "a string id becomes a safe node name: {dot}");
 }
+
+// ---------------------------------------------------------------------------
+// M25: replay and run diff (scripted runs; the LLM's are in tests/llm_agent.rs).
+// ---------------------------------------------------------------------------
+
+fn untouched(t: &TestEnv, id: &str) -> (Vec<String>, Vec<String>, Vec<String>, Vec<u8>) {
+    let d = t.exec_dir(id);
+    (tree_digest(&d.join("work")), tree_digest(&d.join("checkpoints")), tree_digest(&d.join("blobs")), std::fs::read(d.join("log.db")).unwrap())
+}
+
+#[test]
+fn a_scripted_replay_matches_its_own_script_and_stops_where_another_differs() {
+    let t = TestEnv::new("trace-replay");
+    let id = t.run_script("examples/scripts/fix-demo.toml");
+    let before = untouched(&t, &id);
+    let same = t.norn(&["replay", &id]);
+    assert!(same.contains("the replay asked for the same 7 call(s) as the recording\nand then ended the same way (completed): no divergence"), "{same}");
+    assert!(same.contains("tokens not recorded"));
+
+    let script = std::fs::read_to_string(repo_root().join("examples/scripts/fix-demo.toml")).unwrap();
+    // Another path at step 4: stops there, names the field.
+    let other = t.write_script("other.toml", &script.replacen("path = \"src/stats.py\"", "path = \"src/__init__.py\"", 1));
+    let text = t.norn(&["replay", &id, "--script", other.to_str().unwrap()]);
+    assert!(text.contains("same 3 call(s)") && text.contains("DIVERGENCE at call #4:") && text.contains("replayed  fs.read src/__init__.py") && text.contains("differs in: path"), "{text}");
+    // Another content for the write (step 6): the hash differs; the write is not made.
+    let other = t.write_script("write.toml", &script.replace("return sum(values) / len(values)", "return 0"));
+    let text = t.norn(&["replay", &id, "--script", other.to_str().unwrap()]);
+    assert!(text.contains("DIVERGENCE at call #6:") && text.contains("differs in: bytes, content_hash"), "{text}");
+    // Shorter and longer scripts.
+    let steps: Vec<&str> = script.split("\n[[step]]").collect();
+    let short = t.write_script("short.toml", &steps[..3].join("\n[[step]]"));
+    let text = t.norn(&["replay", &id, "--script", short.to_str().unwrap()]);
+    assert!(text.contains("DIVERGENCE: the replay ended (completed) after 2 call(s); the recording went on to 7 call(s)"), "{text}");
+    let long = t.write_script("long.toml", &format!("{script}\n[[step]]\ntool = \"fs.delete\"\npath = \"src/stats.py\"\n"));
+    let text = t.norn(&["replay", &id, "--script", long.to_str().unwrap()]);
+    assert!(text.contains("DIVERGENCE: the recording ended here, and the replay asked for call #8: fs.delete src/stats.py"), "{text}");
+    // Nothing of the above was run or written.
+    assert_eq!(untouched(&t, &id), before);
+    assert_eq!(std::fs::read_dir(t.state.join("executions")).unwrap().count(), 1);
+    assert!(!t.output(&["replay", &id, "--model", "m"]).status.success(), "a script is not a model");
+}
+
+#[test]
+fn an_mcp_execution_cannot_be_replayed_and_says_why() {
+    let t = TestEnv::new("trace-replay-mcp");
+    let mut c = McpClient::start(&t, &demo());
+    c.call("fs_list", json!({"path": "."}));
+    c.stop();
+    let id = t.norn(&["status"]).lines().next().unwrap().split_whitespace().next().unwrap().to_string();
+    let out = t.output(&["replay", &id]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("driven by an MCP client; its reasoning is not in the log, so it cannot be replayed"));
+}
+
+#[test]
+fn a_run_diff_lines_up_the_calls_and_finds_nothing_against_itself() {
+    let t = TestEnv::new("trace-rundiff");
+    let a = t.run_script("examples/scripts/fix-demo.toml");
+    let itself = t.norn(&["diff", &a, &a]);
+    assert!(itself.contains("7 call(s) the same and in the same order") && itself.contains("no differences in calls, results, ending or patch"), "{itself}");
+
+    let script = std::fs::read_to_string(repo_root().join("examples/scripts/fix-demo.toml")).unwrap();
+    // B reads another file at step 4 and leaves the bug in: the last pytest fails.
+    let other = t.write_script("other.toml", &script.replacen("path = \"src/stats.py\"", "path = \"src/__init__.py\"", 1).replace("return sum(values) / len(values)", "return sum(values) / (len(values) - 1)"));
+    let b = t.run_script(other.to_str().unwrap());
+    let d = t.norn(&["diff", &a, &b]);
+    for line in [
+        "task same, repository same, policy same",
+        "5 call(s) the same and in the same order",
+        "- #4        fs.read src/stats.py  (only in A)",
+        "+      #4   fs.read src/__init__.py  (only in B)",
+        "~ #6   #6   fs.write src/stats.py (548 bytes): other arguments: bytes, content_hash",
+        "! #7   #7   exec pytest -q  A: exit 0  B: exit 1",
+        "= #2   #2   exec pytest -q  exit 1",
+        "patches: DIFFERENT",
+    ] {
+        assert!(d.contains(line), "`{line}` is missing from:\n{d}");
+    }
+    assert!(d.contains("difference(s)") && !d.contains("no differences"));
+}

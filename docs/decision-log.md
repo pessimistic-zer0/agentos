@@ -4349,6 +4349,37 @@ Earlier runs on the way: 45723220958 on `2312511` (failed: MCP test client, TOCT
 
 **Concepts to learn.** Tagged enums in serde (`#[serde(tag = "kind")]`); Graphviz DOT.
 
+### D-174 — M25 as built: token counts with each reply, replay as a report that writes nothing, run diff by the longest common run of calls
+- **Date:** 2026-11-28
+- **Status:** Taken (carries out D-169, D-171; changes one line of the v4 scope, R3)
+- **Area:** event log / agent / tooling
+- **ADR:** none
+
+**In plain words.** Each model reply's token counts are stored with its message (`usage` on `agent.message`), with the model's name as the server gave it. `norn replay <id>` runs the agent again on the same task. Every call it asks for is answered from the recording, nothing is run, and it stops at the first call that differs. It prints a report and creates no execution. `norn diff <a> <b>` lines up two runs call by call and adds up time, tokens, endings and patches.
+
+**The problem.** R1 to R4 of the v4 scope, and how to keep a replay from ever having an effect.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| `usage` as a field of `agent.message`, beside `message` | Taken | The counts belong to one reply. Put inside the message, they would be sent back to the model with the conversation, and a strict server may refuse unknown fields |
+| `Agent::take_messages` returns each message with its `Option<Usage>` | Taken | The LLM agent knows which stored message is the reply; the runtime only stores what it is given |
+| The model's name from the reply's `model` field, else the name norn asked for | Taken | A server may answer with another model than the one named (an alias, a default). The name norn asked for was already kept in `llm.json` since v0.1: D-171's reason "the model can change at a resume" was wrong, because a resume reads that file again (Findings). The log still did not hold it, and now does |
+| Replay drives a fresh agent and answers from `log::calls` and the blob store, outside the gateway | Taken | No gateway, no sandbox, no log: there is nothing that could have an effect. The tests check that the work folder, checkpoints, blobs and log are unchanged, and that no execution appears |
+| Replay creates a new execution that records itself | Discarded | It would copy a workspace and write a log for something that runs nothing; and comparative execution past the divergence was left out (D-169) |
+| Calls compared as their logged form (`LoggedCall` as JSON) | Taken | It is what the log holds: for a write, the content hash and size, so a different file is a different call |
+| A replay of an MCP run is refused, with the reason | Taken | R4: the client's reasoning is not in the log, so there is no agent to run again |
+| R3's "a replay against its original" with `norn diff` | Changed | A replay is a report, not an execution, so `norn diff` cannot take one; the replay prints that comparison itself (matched calls, the divergence, tokens on both sides) |
+| Run diff: the longest common subsequence of logged calls, then calls between two anchors paired by tool and path as "other arguments" | Taken | E2: readable even for two very different agents. A write to the same file with other content is one changed call, not one removed and one added |
+| A command's time left out when comparing results (`exit 0, 0.2s` → `exit 0`) | Taken | The same result in two runs never takes exactly the same time; times are compared in the totals |
+| Patches compared by their changed lines | Taken | The file headers hold times and folder names that differ for the same change |
+
+**What this means for the code.** `log::Usage` and `usage` on `EventBody::AgentMessage`; `Agent::take_messages` returns `(Value, Option<Usage>)`; `LlmAgent` keeps the reply's counts until it stores the assistant message; `src/replay.rs` (`replay`, `render`, `usage_of`, `LIMITS`); `src/trace/rundiff.rs` (`render_run_diff`); commands `norn replay <id> [--script F | --model M --base-url U]` and `norn diff <a> <b>`. The mock model server of `tests/llm_agent.rs` now reports token counts like an OpenAI-style server.
+
+**Evidence.** `cargo test --test llm_agent` (17 passed, including `tokens_are_recorded_and_a_replay_follows_the_recording_until_the_model_differs`: six replies with counts, a replay with no divergence that asked the model six times and changed nothing, another model diverging); `cargo test --test trace` (9 passed, including a scripted replay matching itself and diverging four ways, an MCP replay refused, a run diff against itself and against another run); `cargo test --lib trace::rundiff` (2 passed). `git show v0.1:src/agent/llm.rs` shows `persist` writing `llm.json` with the model.
+
+**Concepts to learn.** Longest common subsequence (dynamic programming); token usage in OpenAI-style APIs.
+
 ---
 
 ## Still open
@@ -4469,6 +4500,7 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-28 | A 35B model whose file is larger than the machine's memory loaded in 30 s but answered at 1.25 tokens per second (E3) | Loading is not running: the file is mapped, and every token reads weights from disk |
 | 2026-11-28 | E1's case "a read-only folder, a clean log: works" was wrong. It passed only because the case before it had left `-wal` and `-shm` behind; alone, the read is refused (`SQLITE_READONLY_DIRECTORY`). Found by a unit test while building M23 (D-172) | A case that depends on what an earlier case left is not a test of itself. Run each case in a fresh folder |
 | 2026-11-28 | A call without an ending was shown as UNCERTAIN while its run was still going (found by the test that reads a running execution, D-172) | The same state in the log means different things depending on whether a process holds the execution: ask the lock |
+| 2026-11-28 | D-171 gave "the model can change at a resume" as a reason; it cannot: a resume reads the model's name from `llm.json`, which every LLM execution has had since v0.1 (found while building R1, D-174) | Check a reason against the code before writing it down, even in an entry about something else |
 
 ---
 
@@ -4590,3 +4622,4 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | `immutable` (SQLite) | An option that tells SQLite a database file will not change while it is open, so it skips locks and shared memory; wrong if anyone does change it (D-172) |
 | `-wal` / `-shm` files | The two side files of an SQLite database in WAL mode: new commits are appended to `-wal`, and `-shm` is the shared index readers and writers use to find them (D-170, D-172) |
 | Timeline / inspector / security view | Three ways `norn trace` reads a run: calls in order with their times; everything about one call; what the rules stopped (D-168, D-172) |
+| Longest common subsequence (LCS) | The longest list of items that appear in two lists in the same order, not always side by side; used to line up two runs' calls (D-174) |

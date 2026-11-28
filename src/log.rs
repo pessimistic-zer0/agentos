@@ -30,6 +30,28 @@ pub struct Event {
     pub body: EventBody,
 }
 
+/// The token counts of one model reply, with the model that gave them
+/// (R1, D-171): the server's own `model` field when it sends one, else the
+/// name norn asked for.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Usage {
+    pub model: String,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+}
+
+impl Usage {
+    /// From an OpenAI-style reply's `usage` object; `None` without one.
+    pub fn from_reply(reply: &Value, asked_for: &str) -> Option<Usage> {
+        let u = reply.get("usage")?;
+        Some(Usage {
+            model: reply.get("model").and_then(Value::as_str).filter(|m| !m.is_empty()).unwrap_or(asked_for).to_string(),
+            prompt_tokens: u.get("prompt_tokens")?.as_u64()?,
+            completion_tokens: u.get("completion_tokens").and_then(Value::as_u64).unwrap_or(0),
+        })
+    }
+}
+
 /// What asked for a tool call (C1, D-170): a recorded id, never a guess.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -70,7 +92,13 @@ pub enum EventBody {
         checkpoint: String,
     },
     #[serde(rename = "agent.message")]
-    AgentMessage { message: Value },
+    AgentMessage {
+        message: Value,
+        /// For a model's reply: its token counts, as the server reported
+        /// them (R1, D-171). Since 1.3.0; absent when the server sends none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<Usage>,
+    },
     #[serde(rename = "tool.requested")]
     ToolRequested {
         call_id: u64,
@@ -624,7 +652,7 @@ mod tests {
             | EventBody::ResultApplied { .. } => TYPES.contains(&b.type_name()),
         };
         let samples = [
-            EventBody::AgentMessage { message: Value::Null },
+            EventBody::AgentMessage { message: Value::Null, usage: None },
             EventBody::ExecutionResumed { by: "x".into(), after_calls: 0 },
             EventBody::RecoveryCompleted { reconciled: 0, duration_ms: 0 },
             EventBody::ResultApplied { target: "t".into(), changes: vec![] },
@@ -643,10 +671,10 @@ mod tests {
         assert!(read_events(&path).is_err());
         assert!(!path.exists(), "reading a missing log does not create it");
         let mut log = EventLog::create(&path)?;
-        log.append(EventBody::AgentMessage { message: Value::Null })?;
+        log.append(EventBody::AgentMessage { message: Value::Null, usage: None })?;
         // The writer is still open; the reader sees what is committed.
         assert_eq!(read_events(&path).context("beside the writer")?.len(), 1);
-        log.append(EventBody::AgentMessage { message: Value::Null })?;
+        log.append(EventBody::AgentMessage { message: Value::Null, usage: None })?;
         assert_eq!(read_events(&path).context("second read")?.len(), 2);
         drop(log);
         // A read-only folder: reading still works (E1).
@@ -674,7 +702,7 @@ mod tests {
         assert_eq!(log.append(EventBody::ToolDenied { call_id: 1, rule: "r".into(), reason: "x".into() })?, 2);
         drop(log);
         let mut log = EventLog::open(&path)?;
-        assert_eq!(log.append(EventBody::AgentMessage { message: Value::Null })?, 3, "seq continues after reopen");
+        assert_eq!(log.append(EventBody::AgentMessage { message: Value::Null, usage: None })?, 3, "seq continues after reopen");
         let evs = log.events()?;
         assert_eq!(evs.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![1, 2, 3]);
         let calls = calls(&evs)?;

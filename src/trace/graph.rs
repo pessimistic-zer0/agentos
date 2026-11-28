@@ -60,7 +60,7 @@ fn build(events: &[Event]) -> Result<Graph<'_>> {
                 g.execution = execution_id.clone();
                 g.agent = agent.clone();
             }
-            EventBody::AgentMessage { message } => {
+            EventBody::AgentMessage { message, .. } => {
                 g.messages.insert(ev.seq, message);
             }
             EventBody::ToolRequested { call_id, cause, .. } => {

@@ -16,6 +16,7 @@ pub mod log;
 pub mod mcp;
 pub mod policy;
 pub mod recovery;
+pub mod replay;
 pub mod runtime;
 pub mod sandbox;
 pub mod secrets;

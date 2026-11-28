@@ -9,6 +9,9 @@ What changed for someone who uses Norn, newest first. The reasons are in `docs/d
 - **`norn trace` views** (M23, D-172): each call's time and the agent's time before it; filters `--denied`, `--failed` (also commands that exited with an error), `--uncertain`, `--tool`, `--path`; `--call N` for everything recorded about one call, including its full output (`--full`); `--security` for denials, undone changes, network connections, approvals and calls cut off by a stop.
 - **Causes and the graph** (M24, D-173): each `tool.requested` names what asked for the call (`cause`): the LLM agent's assistant message, the scripted agent's step, or the MCP client's request id. `norn trace <id> --graph` shows these links with approvals, stops and resumes; `--graph=dot` writes them for Graphviz.
 - **`norn trace <id> --diff N`**: the files call N changed, as a patch between the checkpoints around it; `--diff` alone for the whole run.
+- **Token counts** (M25, D-174): each model reply's `usage` (prompt and answer tokens, and the model the server says answered) is stored with its message.
+- **`norn replay <id>`**: the run's agent again, on the same task, with every call answered from the recording; nothing is run or written. It stops at the first call that differs and names it. `--script` for a scripted run, `--model` and `--base-url` for an LLM run. MCP runs cannot be replayed.
+- **`norn diff <a> <b>`**: two runs lined up call by call (same, other result, other arguments, only in one), with time, tokens, endings and whether the patches make the same changes.
 - **`execution.resumed`**, a new event written when `norn run --resume` or a new `norn mcp` session goes on with a stopped execution (D-170). Before, a resume left no trace and a pause looked like a slow agent.
 - **`docs/event-schema.md`**: what every event in the log means, and the version that added it.
 

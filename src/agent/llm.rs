@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::agent::{Action, Agent};
-use crate::log::{Event, EventBody};
+use crate::log::{Event, EventBody, Usage};
 use crate::tools::{ExecOutput, ToolCall, ToolOutcome, ToolOutput, ToolResult};
 use crate::workspace::ExecDir;
 
@@ -121,7 +121,10 @@ pub struct LlmAgent {
     /// The conversation so far, in OpenAI chat format.
     messages: Vec<Value>,
     /// Messages not yet handed to the runtime for logging.
-    unlogged: Vec<Value>,
+    unlogged: Vec<(Value, Option<Usage>)>,
+    /// Token counts of the reply being turned into a message: given to the
+    /// next message stored (the assistant's), then cleared.
+    reply_usage: Option<Usage>,
     /// Id of the tool call the model is waiting on, if any.
     pending: Option<String>,
     /// How often each read-only call was made since the last write. A model
@@ -145,8 +148,8 @@ pub struct LlmAgent {
 
 /// What one exchange with the model's server gave (see `LlmAgent::complete`).
 enum Reply {
-    /// The assistant's message.
-    Message(Value),
+    /// The assistant's message, and the reply's token counts if it had any.
+    Message(Value, Option<Usage>),
     /// The server refused this request in a way that sending it again
     /// unchanged will not cure. With a local server this is how a reply
     /// that was cut off in the middle of a tool call shows up (HTTP 500).
@@ -189,7 +192,7 @@ fn command_failed(result: &ToolResult) -> Option<bool> {
 
 impl LlmAgent {
     pub fn new(cfg: LlmConfig) -> LlmAgent {
-        let mut a = LlmAgent { cfg, messages: Vec::new(), unlogged: Vec::new(), pending: None, repeats: Default::default(), last_key: None, last_call: None, seen: Default::default(), last_command_failed: false, nudged_to_go_on: false, baseline: Default::default(), last_exec: None };
+        let mut a = LlmAgent { cfg, messages: Vec::new(), unlogged: Vec::new(), reply_usage: None, pending: None, repeats: Default::default(), last_key: None, last_call: None, seen: Default::default(), last_command_failed: false, nudged_to_go_on: false, baseline: Default::default(), last_exec: None };
         let task = a.cfg.task.clone();
         a.push(json!({"role": "system", "content": SYSTEM_PROMPT}));
         a.push(json!({"role": "user", "content": task}));
@@ -198,7 +201,10 @@ impl LlmAgent {
 
     fn push(&mut self, m: Value) {
         self.messages.push(m.clone());
-        self.unlogged.push(m);
+        // The counts belong to the model's reply, which is always stored
+        // as an assistant message.
+        let usage = if m["role"] == "assistant" { self.reply_usage.take() } else { None };
+        self.unlogged.push((m, usage));
     }
 
     /// One request to `/chat/completions`, sent again a few times if the
@@ -285,7 +291,7 @@ impl LlmAgent {
             200 => {
                 let reply: Value = serde_json::from_str(&text).context("the LLM's reply is not JSON")?;
                 let message = reply["choices"][0]["message"].as_object().map(|m| Value::Object(m.clone())).context("the LLM's reply has no choices[0].message")?;
-                Tried::Done(Reply::Message(message))
+                Tried::Done(Reply::Message(message, Usage::from_reply(&reply, &self.cfg.model)))
             }
             429 | 502 | 503 | 504 => Tried::Busy(format!("HTTP {status}: {shown}"), retry_after),
             413 => Tried::Done(Reply::TooLarge(format!("HTTP 413: {shown}"))),
@@ -416,7 +422,10 @@ impl Agent for LlmAgent {
         let mut unusable: Option<String> = None;
         for _ in 0..3 {
             let msg = match self.complete()? {
-                Reply::Message(msg) => msg,
+                Reply::Message(msg, usage) => {
+                    self.reply_usage = usage;
+                    msg
+                }
                 Reply::TooLarge(why) => {
                     return Ok(Action::GiveUp {
                         reason: format!(
@@ -507,7 +516,7 @@ impl Agent for LlmAgent {
         self.cfg.task.clone()
     }
 
-    fn take_messages(&mut self) -> Vec<Value> {
+    fn take_messages(&mut self) -> Vec<(Value, Option<Usage>)> {
         std::mem::take(&mut self.unlogged)
     }
 
@@ -532,7 +541,7 @@ impl Agent for LlmAgent {
         self.messages = events
             .iter()
             .filter_map(|e| match &e.body {
-                EventBody::AgentMessage { message } => Some(message.clone()),
+                EventBody::AgentMessage { message, .. } => Some(message.clone()),
                 _ => None,
             })
             .collect();

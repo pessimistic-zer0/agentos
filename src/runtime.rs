@@ -352,10 +352,10 @@ pub fn drive(gw: &mut Gateway, agent: &mut dyn Agent, mut last: Option<ToolResul
         // holds the message that led to a call (ADR 0005). The assistant
         // message that holds the call is its cause (C1).
         let mut cause = None;
-        for message in agent.take_messages() {
+        for (message, usage) in agent.take_messages() {
             let holds_call = message.get("role").and_then(|r| r.as_str()) == Some("assistant")
                 && message.get("tool_calls").and_then(|c| c.as_array()).is_some_and(|c| !c.is_empty());
-            let seq = gw.log.append(EventBody::AgentMessage { message })?;
+            let seq = gw.log.append(EventBody::AgentMessage { message, usage })?;
             if holds_call {
                 cause = Some(crate::log::Cause::Message { seq });
             }

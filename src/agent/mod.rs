@@ -29,10 +29,11 @@ pub trait Agent {
     fn kind(&self) -> &'static str;
     /// The task, in words, for the log and the trace.
     fn task(&self) -> String;
-    /// Conversation messages produced since the last call of this method.
-    /// The runtime stores each one in the event log as `agent.message`
+    /// Conversation messages produced since the last call of this method,
+    /// each with the token counts of the reply it is, if it is one. The
+    /// runtime stores each one in the event log as `agent.message`
     /// (ADR 0005). The scripted agent has no conversation.
-    fn take_messages(&mut self) -> Vec<serde_json::Value> {
+    fn take_messages(&mut self) -> Vec<(serde_json::Value, Option<crate::log::Usage>)> {
         Vec::new()
     }
     /// For an agent that follows a list of steps: the step (from 1) of the

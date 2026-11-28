@@ -200,6 +200,8 @@ norn trace <id> --call 6    # everything recorded about call 6: rule, plan, outp
 norn trace <id> --security  # denials, undone changes, network, approvals, calls cut off by a stop
 norn trace <id> --graph     # what asked for each call; --graph=dot | dot -Tsvg for a picture
 norn trace <id> --diff 6    # the files call 6 changed; --diff alone for the whole run
+norn replay <id>            # the agent again, answered from the recording (nothing runs); stops where it differs
+norn diff <id-a> <id-b>     # two runs side by side: calls, results, time, tokens, patches
 norn recover <id>           # settle the call that was cut off, repair the workspace
 norn run --resume <id>      # recover, then let the agent continue
 norn apply <id>             # copy the result into the repo (after reading the patch); --dry-run, --to <folder>

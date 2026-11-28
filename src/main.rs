@@ -123,6 +123,22 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Run an execution's agent again, answering every call from the
+    /// recording; nothing is run. Stops at the first call that differs
+    Replay {
+        id: String,
+        /// For a scripted run: another script to replay instead of its own
+        #[arg(long)]
+        script: Option<PathBuf>,
+        /// For an LLM run: another model (default: the recorded one)
+        #[arg(long)]
+        model: Option<String>,
+        /// For an LLM run: another server (default: the recorded one)
+        #[arg(long)]
+        base_url: Option<String>,
+    },
+    /// Compare two executions: calls, results, time, tokens, patches
+    Diff { a: String, b: String },
     /// Print an execution's tool calls (default: the latest execution)
     Trace {
         id: Option<String>,
@@ -328,6 +344,42 @@ fn main() -> Result<()> {
                 }
             }
         },
+        Cmd::Replay { id, script, model, base_url } => {
+            let dir = ExecDir::new(&state_dir, &id);
+            let report = match runtime::agent_kind(&state_dir, &id)?.as_str() {
+                "scripted" => {
+                    if model.is_some() || base_url.is_some() {
+                        bail!("execution {id} was run by a script: --model and --base-url are for LLM runs; use --script");
+                    }
+                    let script = Script::load(&script.unwrap_or_else(|| dir.script()))?;
+                    norn::replay::replay(&dir, &mut ScriptedAgent::new(script))?
+                }
+                "llm" => {
+                    if script.is_some() {
+                        bail!("execution {id} was run by a model: --script is for scripted runs; use --model or --base-url");
+                    }
+                    let mut cfg: LlmConfig = serde_json::from_str(&std::fs::read_to_string(dir.llm_config())?)?;
+                    cfg.api_key = LlmConfig::from_env(String::new()).api_key;
+                    if let Some(m) = model {
+                        cfg.model = m;
+                    }
+                    if let Some(u) = base_url {
+                        cfg.base_url = u;
+                    }
+                    cfg.check_reachable()?;
+                    norn::replay::replay(&dir, &mut LlmAgent::new(cfg))?
+                }
+                "mcp" => bail!("execution {id} was driven by an MCP client; its reasoning is not in the log, so it cannot be replayed"),
+                other => bail!("execution {id} was started with agent `{other}`, which this build cannot replay"),
+            };
+            print!("{}", norn::replay::render(&report)?);
+        }
+        Cmd::Diff { a, b } => {
+            let (da, db) = (ExecDir::new(&state_dir, &a), ExecDir::new(&state_dir, &b));
+            let (ea, eb) = (trace::load(&da)?, trace::load(&db)?);
+            let text = trace::render_run_diff(&trace::Side { id: &a, dir: &da, events: &ea }, &trace::Side { id: &b, dir: &db, events: &eb })?;
+            print!("{text}");
+        }
         Cmd::Trace { id, events, json, call, full, security, graph, diff, denied, failed, uncertain, tool, path } => {
             let id = match id {
                 Some(id) => id,
