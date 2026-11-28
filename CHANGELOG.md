@@ -2,7 +2,9 @@
 
 What changed for someone who uses Norn, newest first. The reasons are in `docs/decision-log.md` (the `D-` numbers); the bugs in `docs/bugs.md` (the `B-` numbers).
 
-## Unreleased (the plan "v4": `docs/v4-scope.md`)
+## 1.3.0 (2026-11-28; the plan "v4": `docs/v4-scope.md`)
+
+TraceWeaver: new ways to read the record a run leaves. Nothing new changes what a run does; the log gains one event and two optional fields, and every execution folder of 1.x reads as before (`docs/compatibility.md`).
 
 ### Added
 
@@ -12,11 +14,14 @@ What changed for someone who uses Norn, newest first. The reasons are in `docs/d
 - **Token counts** (M25, D-174): each model reply's `usage` (prompt and answer tokens, and the model the server says answered) is stored with its message.
 - **`norn replay <id>`**: the run's agent again, on the same task, with every call answered from the recording; nothing is run or written. It stops at the first call that differs and names it. `--script` for a scripted run, `--model` and `--base-url` for an LLM run. MCP runs cannot be replayed.
 - **`norn diff <a> <b>`**: two runs lined up call by call (same, other result, other arguments, only in one), with time, tokens, endings and whether the patches make the same changes.
+- **`norn trace <id> --otel`**: the run as OpenTelemetry spans (OTLP JSON) on standard output, for a collector you send it to; norn sends nothing (M26, D-175).
+- **`norn search`**: calls across all executions, by `--tool`, `--path`, `--outcome` (done, denied, failed, waiting, uncertain, settled) and `--since`.
 - **`execution.resumed`**, a new event written when `norn run --resume` or a new `norn mcp` session goes on with a stopped execution (D-170). Before, a resume left no trace and a pause looked like a slow agent.
 - **`docs/event-schema.md`**: what every event in the log means, and the version that added it.
 
 ### Changed
 
+- Text views print control characters from the log (a command's output, a model's words) as `\u{..}`, so they cannot act on the terminal (D-175).
 - `norn trace`, `norn status` and `norn approve` open the log read-only, so they never change it and can read a running execution (D-170, D-172). A running call shows as RUNNING, not UNCERTAIN.
 
 ## 1.2.0 (2026-11-26; the plan "v3": `docs/v3-scope.md`)

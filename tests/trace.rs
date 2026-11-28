@@ -320,3 +320,135 @@ fn a_run_diff_lines_up_the_calls_and_finds_nothing_against_itself() {
     }
     assert!(d.contains("difference(s)") && !d.contains("no differences"));
 }
+
+// ---------------------------------------------------------------------------
+// M26: OpenTelemetry file and search.
+// ---------------------------------------------------------------------------
+
+/// Checks the OTLP JSON rules found in E4 and returns the spans: one trace
+/// id, lower-case hex ids of the right length, unique span ids, every parent
+/// and link inside the file, start not after end.
+fn check_otlp(text: &str) -> Vec<Value> {
+    let doc: Value = serde_json::from_str(text).unwrap();
+    let spans = doc["resourceSpans"][0]["scopeSpans"][0]["spans"].as_array().unwrap().clone();
+    let hex = |s: &str, n: usize| s.len() == n && s.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase());
+    let trace = spans[0]["traceId"].as_str().unwrap().to_string();
+    assert!(hex(&trace, 32), "{trace}");
+    let ids: Vec<&str> = spans.iter().map(|s| s["spanId"].as_str().unwrap()).collect();
+    let mut unique = ids.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), ids.len(), "span ids are unique");
+    for s in &spans {
+        assert_eq!(s["traceId"], trace.as_str());
+        assert!(hex(s["spanId"].as_str().unwrap(), 16), "{s}");
+        if let Some(p) = s.get("parentSpanId") {
+            assert!(ids.contains(&p.as_str().unwrap()), "a parent that is not in the file (the collector would not notice, E4): {s}");
+        }
+        for l in s["links"].as_array().into_iter().flatten() {
+            assert!(ids.contains(&l["spanId"].as_str().unwrap()), "{l}");
+        }
+        let (a, b): (u128, u128) = (s["startTimeUnixNano"].as_str().unwrap().parse().unwrap(), s["endTimeUnixNano"].as_str().unwrap().parse().unwrap());
+        assert!(a <= b && a > 1_700_000_000_000_000_000, "{s}");
+    }
+    assert_eq!(spans.iter().filter(|s| s.get("parentSpanId").is_none()).count(), 1, "one root: the execution");
+    spans
+}
+
+fn attr<'a>(span: &'a Value, key: &str) -> Option<&'a Value> {
+    span["attributes"].as_array()?.iter().find(|a| a["key"] == key).map(|a| &a["value"])
+}
+
+#[test]
+fn a_run_as_opentelemetry_spans_keeps_its_parts_causes_and_approvals() {
+    // A run killed and resumed: three parts.
+    let t = TestEnv::new("trace-otel");
+    let out = t
+        .cmd(&["run", "--quiet", "--repo", demo().to_str().unwrap(), "--policy", t.policy.to_str().unwrap(), "--script", repo_root().join("examples/scripts/fix-demo.toml").to_str().unwrap()])
+        .env("NORN_CRASH_AT", "P4")
+        .env("NORN_CRASH_CALL", "6")
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let id = t.norn(&["status"]).lines().next().unwrap().split_whitespace().next().unwrap().to_string();
+    t.norn(&["run", "--quiet", "--resume", &id]);
+    let text = t.norn(&["trace", &id, "--otel"]);
+    assert_eq!(text, t.norn(&["trace", &id, "--otel"]), "the same run gives the same file");
+    let spans = check_otlp(&text);
+    let names: Vec<&str> = spans.iter().map(|s| s["name"].as_str().unwrap()).collect();
+    assert_eq!(names[..4], ["execution", "start", "recovery after a stop", "resumed by norn run --resume after 6 call(s)"], "{names:?}");
+    assert_eq!(spans.len(), 4 + 7);
+    let call = |n: u64| spans.iter().find(|s| attr(s, "norn.call_id").is_some_and(|v| v["intValue"].as_str() == Some(n.to_string().as_str()))).unwrap();
+    assert_eq!(call(5)["status"]["code"], 2, "the denied read is an error span");
+    assert!(call(5)["status"]["message"].as_str().unwrap().starts_with("denied: filesystem.deny"));
+    assert_eq!(attr(call(6), "norn.reconciled").unwrap()["stringValue"], "applied");
+    assert_eq!(attr(call(3), "norn.cause").unwrap()["stringValue"], "script step 3");
+    assert_eq!(call(7)["parentSpanId"], spans[3]["spanId"], "call 7 is inside the resumed part");
+    assert_eq!(call(1)["parentSpanId"], spans[1]["spanId"]);
+    assert_eq!(attr(&spans[0], "norn.status").unwrap()["stringValue"], "completed");
+
+    // An approval: the call that used it links to the call that waited.
+    let policy = format!("{}\n[approvals]\nrequire = [\"fs.delete:**\"]\n", std::fs::read_to_string(preset_policy()).unwrap());
+    let t = TestEnv::new("trace-otel-approval").with_policy_text(&policy);
+    let mut c = McpClient::start(&t, &demo());
+    c.call("fs_write", json!({"path": "src/old.py", "content": "OLD = 1\n"}));
+    let (_, text) = c.call("fs_delete", json!({"path": "src/old.py"}));
+    let id = t.norn(&["status"]).lines().next().unwrap().split_whitespace().next().unwrap().to_string();
+    let approval = text.split_whitespace().skip_while(|w| *w != "approve").nth(2).unwrap().trim_end_matches(['`', ')', '.']).to_string();
+    t.norn(&["approve", &id, &approval]);
+    c.call("fs_delete", json!({"path": "src/old.py"}));
+    c.stop();
+    let spans = check_otlp(&t.norn(&["trace", &id, "--otel"]));
+    let call = |n: u64| spans.iter().find(|s| attr(s, "norn.call_id").is_some_and(|v| v["intValue"].as_str() == Some(n.to_string().as_str()))).unwrap();
+    assert_eq!(call(3)["links"][0]["spanId"], call(2)["spanId"]);
+    assert_eq!(attr(call(2), "norn.approval.waiting").unwrap()["stringValue"], approval.as_str());
+    assert_eq!(attr(call(1), "norn.cause").unwrap()["stringValue"], "MCP request 1");
+}
+
+#[test]
+fn search_finds_calls_across_executions() {
+    let t = TestEnv::new("trace-search");
+    let a = t.run_script("examples/scripts/fix-demo.toml");
+    let script = std::fs::read_to_string(repo_root().join("examples/scripts/fix-demo.toml")).unwrap();
+    let other = t.write_script("other.toml", &script.replace("return sum(values) / len(values)", "return sum(values) / (len(values) - 1)"));
+    let b = t.run_script(other.to_str().unwrap());
+
+    let denied = t.norn(&["search", "--outcome", "denied"]);
+    assert!(denied.contains(&format!("{a}  scripted #5   fs.read   .env")) && denied.contains(&format!("{b}  scripted #5")), "{denied}");
+    assert!(denied.contains("2 call(s) in 2 execution(s)"), "{denied}");
+    let writes = t.norn(&["search", "--tool", "fs.write", "--path", "src/**"]);
+    assert!(writes.contains("2 call(s) in 2 execution(s)"), "{writes}");
+    assert_eq!(t.norn(&["search", "--tool", "exec", "--outcome", "done"]).lines().filter(|l| l.contains("#2") || l.contains("#7")).count(), 4);
+    // Executions are dated by their first event, in UTC.
+    assert!(t.norn(&["search", "--since", "2999-01-01"]).contains("0 call(s) in 0 execution(s)"));
+    assert!(t.norn(&["search", "--since", "2000-01-01"]).contains("14 call(s) in 2 execution(s)"));
+    assert!(!t.output(&["search", "--since", "yesterday"]).status.success());
+    assert!(!t.output(&["search", "--outcome", "broken"]).status.success());
+    // A log that cannot be read is named, and the others are still searched.
+    std::fs::write(t.exec_dir(&b).join("log.db"), b"not a database").unwrap();
+    let out = t.norn(&["search", "--outcome", "denied"]);
+    assert!(out.contains("1 call(s) in 1 execution(s)") && out.contains(&format!("not read: {b}")), "{out}");
+}
+
+#[test]
+fn what_a_command_printed_cannot_send_commands_to_the_terminal() {
+    // A command in the sandbox prints an escape sequence that would retitle
+    // a terminal window; the inspector shows it as text (D-175).
+    let t = TestEnv::new("trace-escape").with_policy_text(&policy_with_python());
+    let script = t.write_script(
+        "s.toml",
+        "task = \"esc\"\n[[step]]\ntool = \"exec\"\nargv = [\"python3\", \"-c\", \"print('\\\\x1b]0;owned\\\\x07 first'); print('\\\\x1b[2J second')\"]\n",
+    );
+    let id = t.run_script(script.to_str().unwrap());
+    let events = t.events(&id);
+    let stdout = t.output_of(&id, &events, 1).unwrap()["stdout"].as_str().unwrap().to_string();
+    assert!(stdout.contains("\u{1b}]0;owned\u{7} first"), "the record keeps what the command printed: {stdout:?}");
+    for args in [vec!["trace", id.as_str(), "--call", "1"], vec!["trace", id.as_str()], vec!["trace", id.as_str(), "--graph"], vec!["trace", id.as_str(), "--events"]] {
+        let out = t.norn(&args);
+        assert!(!out.contains('\u{1b}') && !out.contains('\u{7}'), "{args:?} printed a control character:\n{out:?}");
+    }
+    let call = t.norn(&["trace", &id, "--call", "1"]);
+    assert!(call.contains("| \\u{1b}]0;owned\\u{7} first") && call.contains("| \\u{1b}[2J second"), "{call}");
+    // JSON needs no filter: serde_json writes the characters escaped.
+    assert!(!t.norn(&["trace", &id, "--json"]).contains('\u{1b}'));
+}

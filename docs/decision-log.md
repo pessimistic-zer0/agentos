@@ -4380,6 +4380,60 @@ Earlier runs on the way: 45723220958 on `2312511` (failed: MCP test client, TOCT
 
 **Concepts to learn.** Longest common subsequence (dynamic programming); token usage in OpenAI-style APIs.
 
+### D-175 — M26 as built: OTLP spans by part of the run, search without an index, terminal-safe text, and two changes from the trial
+- **Date:** 2026-11-28
+- **Status:** Taken (carries out D-169, D-171)
+- **Area:** tooling / security
+- **ADR:** none
+
+**In plain words.** `norn trace --otel` writes the run as OpenTelemetry spans. There is one span for the execution, one for each part of the run (the start, each stop, each resume), and one for each call inside its part. A call that used an approval links to the one that waited. `norn search` finds calls across all executions by tool, path, outcome and date. Every text view now shows control characters as `\u{..}`, so text a command printed cannot act on the person's terminal. The trial on kept runs changed two things: the order of `norn diff`'s lines, and `norn search` showing the rule of a refused call.
+
+**The problem.** X1 to X4 of the v4 scope, and what the trial (X3) found.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Spans: execution > part of the run > call; the cause as an attribute | Taken | OTLP's parent is a span, and a message or script step is not one. The parts give the shape a person looks for (before and after a stop); the attribute keeps the cause |
+| Model messages as spans of their own, parent of their call | Discarded | Old logs and MCP runs have none, so the shape would differ by agent; and a message has no duration of its own in the log |
+| The approval as an OTLP span *link* from the call that used it to the call that waited | Taken | It is what links are for: a relation between spans that is not parent and child |
+| Ids from SHA-256 of fixed words and the execution id | Taken | D-171: the same run gives the same file (checked by the test) |
+| `norn search` reads every log one after another, no index | Taken | D-168. The 32 kept trial runs were searched in well under a second, by hand |
+| `--since` compares the date with the first event's time as text | Taken | Times are UTC in a fixed format, so text order is time order |
+| A log that cannot be read is named at the end, and the others are searched | Taken | One broken folder should not hide the rest (tested) |
+| Control characters in text views shown as `\u{..}`, except line breaks and tabs | Taken | Found while writing the threat model's TraceWeaver section: `--call` prints a command's output, and the graph prints a model's words, both written by the agent's side. An escape sequence there would reach the person's terminal. JSON and OTLP are already escaped by `serde_json` |
+| Escaping in each view separately | Discarded | One filter at the point of printing cannot be forgotten by a new view |
+| `norn diff`: in each stretch between common calls, what only A has first, then B's calls in B's order with changed ones among them | Taken | The trial's question 2 showed a changed call printed before B's calls that came before it (Findings) |
+| `norn search` prints the rule of a refused call and the error of a failed one | Taken | The trial's question 5 needed `--json` and a script to count refusals by rule |
+| The trial on the runs kept from v1 and v2 and on the frozen 1.2 runs | Taken | The v3 trial's state folder was not kept; the 32 kept runs include every agent kind |
+
+**What this means for the code.** `src/trace/otel.rs` (`render_otel`), `src/trace/search.rs` (`search`, `Query`, `Outcome`), `trace::for_terminal` used by `main.rs` for every text view; `norn trace --otel`, `norn search`; the stretch ordering in `rundiff.rs`; the rule in search lines.
+
+**Evidence.** `cargo test --test trace` (12 passed, including `a_run_as_opentelemetry_spans_keeps_its_parts_causes_and_approvals`, `search_finds_calls_across_executions`, `what_a_command_printed_cannot_send_commands_to_the_terminal`); `docs/results/otlp-collector-nix.md` (four files, 31 spans, all answered 200 by the OpenTelemetry Collector 0.151.0, parents and the link kept); `docs/results/v4-trial-nix.md`.
+
+**Concepts to learn.** OTLP span links; terminal escape sequences (ANSI/OSC).
+
+### D-176 — Version 1.3.0; where the v4 tags go
+- **Date:** 2026-11-28
+- **Status:** Taken (carries out D-169)
+- **Area:** release
+- **ADR:** none
+
+**In plain words.** v4 is released as 1.3.0, as Prince chose (D-169): everything new is optional, and the log only gained one event and two optional fields. As in v3 (D-164), each milestone's tag goes on its own commit once CI has passed there (D-113); `m26` and `v1.3` go on the release commit after its run.
+
+**The problem.** Which commits the tags name.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| `m23`, `m24`, `m25` on their own commits, each after a green run | Taken | Each milestone was its own commit with its own CI run; the tag then points at a complete, verified milestone |
+| All tags on the release commit | Kept for a milestone whose own run fails | As `m21` in v3 (D-164) |
+
+**What this means for the code.** `Cargo.toml` `version = "1.3.0"`.
+
+**Evidence.** none yet for the tags; they wait for CI.
+
+**Concepts to learn.** None new.
+
 ---
 
 ## Still open
@@ -4501,6 +4555,8 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-28 | E1's case "a read-only folder, a clean log: works" was wrong. It passed only because the case before it had left `-wal` and `-shm` behind; alone, the read is refused (`SQLITE_READONLY_DIRECTORY`). Found by a unit test while building M23 (D-172) | A case that depends on what an earlier case left is not a test of itself. Run each case in a fresh folder |
 | 2026-11-28 | A call without an ending was shown as UNCERTAIN while its run was still going (found by the test that reads a running execution, D-172) | The same state in the log means different things depending on whether a process holds the execution: ask the lock |
 | 2026-11-28 | D-171 gave "the model can change at a resume" as a reason; it cannot: a resume reads the model's name from `llm.json`, which every LLM execution has had since v0.1 (found while building R1, D-174) | Check a reason against the code before writing it down, even in an entry about something else |
+| 2026-11-28 | `norn diff` printed a changed call before the calls that came before it in run B; found by using it on two real runs in the v4 trial (D-175) | A view's tests used runs with one difference in each stretch; real runs have many. Try a view on real material before calling it done |
+| 2026-11-28 | `norn trace --call` would have printed a sandboxed command's output raw to the person's terminal; found while writing the threat model, before release (D-175) | Writing down what could go wrong, even for a feature that only reads, still finds things: the reader is a terminal |
 
 ---
 
@@ -4623,3 +4679,5 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | `-wal` / `-shm` files | The two side files of an SQLite database in WAL mode: new commits are appended to `-wal`, and `-shm` is the shared index readers and writers use to find them (D-170, D-172) |
 | Timeline / inspector / security view | Three ways `norn trace` reads a run: calls in order with their times; everything about one call; what the rules stopped (D-168, D-172) |
 | Longest common subsequence (LCS) | The longest list of items that appear in two lists in the same order, not always side by side; used to line up two runs' calls (D-174) |
+| Terminal escape sequence | Bytes starting with ESC that a terminal reads as a command (move the cursor, set the window title) rather than as text to show (D-175) |
+| Span link (OpenTelemetry) | A relation from one span to another that is not parent and child, such as "this call used the approval that call waited for" (D-175) |

@@ -207,3 +207,19 @@ A policy may name secrets (`[secrets]`) that the runtime reads at start and puts
 | S6 | Make the agent's call act on the real service without anyone looking | Remote services wait for approval unless the policy says `approval = false` (§10) | `a_remote_service_waits_for_approval_by_default` |
 
 What this does not stop: the service doing whatever the token allows with whatever payload the agent wrote, once a person approved the call (or the policy switched approval off). The payload is the agent's text. A secret's value that also appears in ordinary text (a token equal to a word in a file) is replaced there too; values shorter than 8 characters are refused for this reason. A process on the same machine, under the same user, can read the runtime's environment; that is outside norn's scope as it was for the model's API key.
+
+## 12. TraceWeaver: reading the record (added for v4)
+
+v4 adds ways to read what a run left (M23 to M26): `norn trace` views, `norn replay`, `norn diff`, `norn search`, and an OpenTelemetry file. None of them is a way in or out for the agent: they run only when a person types them, outside any sandbox, after or beside the run.
+
+| # | Risk | Defence | Test |
+|---|---|---|---|
+| T1 | A view changes the record it reads (the log, a checkpoint), or makes a file where there was none | The log is opened read-only (`log::read_events`); per-call diffs are made in memory (`patch_text`), never written into the execution | `the_views_of_v4_read_executions_that_1_2_wrote` (`tests/compat.rs`: the log's bytes unchanged); `a_reader_changes_nothing_and_reads_beside_a_writer` (`log::tests`); the diff test checks the checkpoints |
+| T2 | A replay has an effect: the replayed agent asks for `exec rm -rf src` or a write | The replay never calls the gateway: every call is compared with the recording and answered from it, or the replay stops | `a_scripted_replay_matches_its_own_script_and_stops_where_another_differs` (work folder, checkpoints, blobs and log unchanged; no new execution); the LLM replay test |
+| T3 | Text from the log takes over the person's terminal: a command's output or a model's message with escape sequences, shown by `--call` or `--graph` | Every text view shows control characters as `\u{..}`; JSON and OTLP are escaped by `serde_json` | `what_a_command_printed_cannot_send_commands_to_the_terminal` (`tests/trace.rs`); `control_characters_are_shown_not_sent` |
+| T4 | Text from the log breaks the DOT output and adds nodes or edges | Labels are quoted with `\`, `"` and line breaks escaped; node names are made of ids reduced to letters, digits and `_` | `labels_from_the_log_cannot_break_out_of_dot`; `check_dot` in `tests/trace.rs` |
+| T5 | An MCP client fills the log through its request ids, now recorded as causes | An id longer than 200 bytes is not recorded | `an_mcp_call_names_its_request_and_an_approval_links_two_calls` |
+
+**What the record now holds that it did not.** Since 1.3.0 the log also holds each model reply's token counts and the name of the model that answered (`usage`), what asked for each call (`cause`: a message number, a script step, or an MCP client's request id), and each resume. None of it is a secret (secret values never reach the log, §11). But an OpenTelemetry file holds the task, every call's arguments in short, the rules, and the models used: treat it as you would treat the log. norn writes it to its standard output only; sending it anywhere is the person's act.
+
+What this does not do: hide anything that was already in the log from someone who can read the state folder. The views add no access control; the state folder's file permissions are the control, as before.

@@ -250,3 +250,11 @@ A call that waits for approval is not run, so there is nothing to recover: it en
 ## 13. `ext.call` with a secret (added for v3)
 
 The intent of an `ext.call` records the request as it will be sent, except for secret values: it holds the header templates (`Bearer {secret:NAME}`) and the CA file (D-162). Recovery sends the same request again with the same idempotency key, as in §9, and fills the templates in from the secrets of the execution's own policy, read again from the environment or files at that moment. If a secret cannot be read then, recovery stops with the variable or file it needs named, and the call stays uncertain: guessing, or sending without the header, would break design rule 5. Checked: `recovery_sends_the_same_request_with_the_secret_again` (`tests/secrets.rs`).
+
+## 14. Resumes and replays (added for v4)
+
+`norn run --resume` writes `execution.resumed` after its recovery and before the agent goes on; so does `norn mcp` when a new session continues an open execution (D-170). The event changes nothing in recovery: it is not a call, carries no checkpoint, and recovery reads past it. A crash between the recovery and this event leaves no resume record for a resume that never got going, which is right.
+
+`norn replay` is not a recovery and not a resume. It runs no call and writes nothing: the agent is given the recorded results in order, and the replay stops at the first call that differs (D-174). So it cannot settle an uncertain call; a recording that ends with one stops the replay there ("the recording has no ending for it").
+
+A call's `cause` and a reply's `usage` are written in the same event as the request and the message, so a crash cannot separate them from what they describe.

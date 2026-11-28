@@ -14,16 +14,16 @@ Norn writes two kinds of file that outlive the program that wrote them: the **po
 
 **2. An execution folder written by 1.0 or a later 1.x can be used by every later 1.x**, with every command: `status`, `trace`, `recover`, `run --resume`, `apply`, `rm`.
 
-- The event log records `schema_version = 1`. New kinds of event and new fields in an event may be added; existing ones keep their names and meaning. A log of another schema version is refused by name.
+- The event log records `schema_version = 1`. New kinds of event and new fields in an event may be added; existing ones keep their names and meaning. A log of another schema version is refused by name. Every kind of event and field is described in `docs/event-schema.md`, with the version that added it (1.3.0 added `execution.resumed`, and the fields `cause` and `usage`).
 - This holds for an interrupted execution too: one that an older version left with a call cut off is recovered by a newer version by the same rules (`docs/recovery-semantics.md`).
 
-**3. What v0.1 wrote still works**, although v0.1 came before this promise. It is tested: the presets as v0.1 shipped them, a finished v0.1 execution and one that v0.1 left interrupted are frozen in `tests/fixtures/compat/` and are read, recovered, resumed and applied by the test suite.
+**3. What v0.1 wrote still works**, although v0.1 came before this promise. It is tested: the presets as v0.1 shipped them, a finished v0.1 execution and one that v0.1 left interrupted are frozen in `tests/fixtures/compat/` and are read, recovered, resumed and applied by the test suite. Executions written by 1.2.0 (with network, approvals and recovery) are frozen there too, and every view of `norn trace` is tested on them.
 
 ## Not promised
 
 - **The other direction.** An *older* program reading a *newer* file. A 1.0 program refuses a policy that uses a setting added in 1.1 (an unknown key is always an error, so that a misspelt `deny` never silently protects nothing), and may not understand a newer event.
 - **Resuming on another machine.** An execution folder holds absolute paths from the machine it ran on (the repository, the sandbox's read-only folders). `trace` and `apply --to` work anywhere; `run --resume` needs the same paths to exist.
-- **The words on the screen.** The text of `trace`, `status` and error messages may change. Programs should read the event log, not the screen.
+- **The words on the screen.** The text of `trace`, `status`, `replay`, `diff`, `search` and error messages may change. Programs should read the event log, not the screen. The file of `trace --otel` follows the OpenTelemetry (OTLP JSON) format; the names and values of its `norn.*` attributes may change.
 - **The Rust library.** `norn` is built as a program; the functions inside it are not a public interface.
 - **The inside of a checkpoint or blob** beyond what the commands above need, and the name or layout of temporary files.
 - **Tool calls offered to a model.** The names and arguments of the tools in a script (`fs.read`, `fs.write`, `fs.edit`, `fs.list`, `fs.search`, `fs.delete`, `exec`, `ext.call`; over MCP with `_` in place of `.`) follow rule 1 (new optional arguments only). The exact wording of the tool descriptions and of the system prompt sent to a model may change.

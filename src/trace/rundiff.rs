@@ -112,25 +112,25 @@ pub fn render_run_diff(a: &Side, b: &Side) -> Result<String> {
     let anchors = pairs.iter().copied().chain(std::iter::once((ca.len(), cb.len())));
     for (ai, bj) in anchors {
         // The calls between the anchors: pair those at the same place.
-        let (mut only_a, mut only_b): (Vec<usize>, Vec<usize>) = ((i..ai).collect(), (j..bj).collect());
-        let mut k = 0;
-        while k < only_a.len() {
-            let x = only_a[k];
-            if let Some(pos) = only_b.iter().position(|&y| place(&ca[x]) == place(&cb[y])) {
-                let y = only_b.remove(pos);
-                lines.push(format!("~ #{:<3} #{:<3} {} {}: other arguments: {}", ca[x].call_id, cb[y].call_id, ca[x].call.name(), super::truncate(&ca[x].call.describe(), 40), fields(&ka[x], &kb[y]).join(", ")));
-                only_a.remove(k);
-                differences += 1;
-            } else {
-                k += 1;
+        // A call of A and one of B at the same tool and path are one changed
+        // call. The lines come out as a diff's do: what only A has first,
+        // then B's calls in B's order, changed ones among them.
+        let mut only_a: Vec<usize> = (i..ai).collect();
+        let mut b_side: Vec<(usize, Option<usize>)> = (j..bj).map(|y| (y, None)).collect();
+        for slot in b_side.iter_mut() {
+            if let Some(pos) = only_a.iter().position(|&x| place(&ca[x]) == place(&cb[slot.0])) {
+                slot.1 = Some(only_a.remove(pos));
             }
         }
         for x in only_a {
             lines.push(format!("- #{:<3}      {} {}  (only in A)", ca[x].call_id, ca[x].call.name(), super::truncate(&ca[x].call.describe(), 50)));
             differences += 1;
         }
-        for y in only_b {
-            lines.push(format!("+      #{:<3} {} {}  (only in B)", cb[y].call_id, cb[y].call.name(), super::truncate(&cb[y].call.describe(), 50)));
+        for (y, paired) in b_side {
+            match paired {
+                Some(x) => lines.push(format!("~ #{:<3} #{:<3} {} {}: other arguments: {}", ca[x].call_id, cb[y].call_id, ca[x].call.name(), super::truncate(&ca[x].call.describe(), 40), fields(&ka[x], &kb[y]).join(", "))),
+                None => lines.push(format!("+      #{:<3} {} {}  (only in B)", cb[y].call_id, cb[y].call.name(), super::truncate(&cb[y].call.describe(), 50))),
+            }
             differences += 1;
         }
         if ai < ca.len() {

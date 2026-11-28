@@ -139,6 +139,21 @@ enum Cmd {
     },
     /// Compare two executions: calls, results, time, tokens, patches
     Diff { a: String, b: String },
+    /// Find calls across all executions
+    Search {
+        /// Only calls of this tool (fs.read, exec, ...)
+        #[arg(long)]
+        tool: Option<String>,
+        /// Only calls whose path matches this glob ('src/**')
+        #[arg(long)]
+        path: Option<String>,
+        /// done, denied, failed, waiting, uncertain or settled
+        #[arg(long)]
+        outcome: Option<String>,
+        /// Only executions created on this day (YYYY-MM-DD, UTC) or later
+        #[arg(long)]
+        since: Option<String>,
+    },
     /// Print an execution's tool calls (default: the latest execution)
     Trace {
         id: Option<String>,
@@ -163,20 +178,23 @@ enum Cmd {
         /// The files call N changed (a patch between its checkpoints); without N, the whole run
         #[arg(long, value_name = "N", num_args = 0..=1, conflicts_with_all = ["events", "json", "call", "security"])]
         diff: Option<Option<u64>>,
-        /// Only calls the policy or a person refused
+        /// The run as OpenTelemetry spans (OTLP JSON), to send to a collector yourself
         #[arg(long, conflicts_with_all = ["events", "json", "call", "security", "graph", "diff"])]
+        otel: bool,
+        /// Only calls the policy or a person refused
+        #[arg(long, conflicts_with_all = ["events", "json", "call", "security", "graph", "diff", "otel"])]
         denied: bool,
         /// Only calls that failed, and commands that exited with an error
-        #[arg(long, conflicts_with_all = ["events", "json", "call", "security", "graph", "diff"])]
+        #[arg(long, conflicts_with_all = ["events", "json", "call", "security", "graph", "diff", "otel"])]
         failed: bool,
         /// Only calls a stop cut off (uncertain, or settled by recovery)
-        #[arg(long, conflicts_with_all = ["events", "json", "call", "security", "graph", "diff"])]
+        #[arg(long, conflicts_with_all = ["events", "json", "call", "security", "graph", "diff", "otel"])]
         uncertain: bool,
         /// Only calls of this tool (fs.read, exec, ...)
-        #[arg(long, value_name = "TOOL", conflicts_with_all = ["events", "json", "call", "security", "graph", "diff"])]
+        #[arg(long, value_name = "TOOL", conflicts_with_all = ["events", "json", "call", "security", "graph", "diff", "otel"])]
         tool: Option<String>,
         /// Only calls whose path matches this glob ('src/**')
-        #[arg(long, value_name = "GLOB", conflicts_with_all = ["events", "json", "call", "security", "graph", "diff"])]
+        #[arg(long, value_name = "GLOB", conflicts_with_all = ["events", "json", "call", "security", "graph", "diff", "otel"])]
         path: Option<String>,
     },
 }
@@ -372,15 +390,19 @@ fn main() -> Result<()> {
                 "mcp" => bail!("execution {id} was driven by an MCP client; its reasoning is not in the log, so it cannot be replayed"),
                 other => bail!("execution {id} was started with agent `{other}`, which this build cannot replay"),
             };
-            print!("{}", norn::replay::render(&report)?);
+            print!("{}", trace::for_terminal(&norn::replay::render(&report)?));
         }
         Cmd::Diff { a, b } => {
             let (da, db) = (ExecDir::new(&state_dir, &a), ExecDir::new(&state_dir, &b));
             let (ea, eb) = (trace::load(&da)?, trace::load(&db)?);
             let text = trace::render_run_diff(&trace::Side { id: &a, dir: &da, events: &ea }, &trace::Side { id: &b, dir: &db, events: &eb })?;
-            print!("{text}");
+            print!("{}", trace::for_terminal(&text));
         }
-        Cmd::Trace { id, events, json, call, full, security, graph, diff, denied, failed, uncertain, tool, path } => {
+        Cmd::Search { tool, path, outcome, since } => {
+            let outcome = outcome.as_deref().map(trace::Outcome::parse).transpose()?;
+            print!("{}", trace::for_terminal(&trace::search(&state_dir, &trace::Query { tool, path, outcome, since })?));
+        }
+        Cmd::Trace { id, events, json, call, full, security, graph, diff, otel, denied, failed, uncertain, tool, path } => {
             let id = match id {
                 Some(id) => id,
                 None => match workspace::list_executions(&state_dir)?.pop() {
@@ -406,10 +428,15 @@ fn main() -> Result<()> {
                 }
             } else if let Some(n) = diff {
                 trace::render_diff(&dir, &evs, n)?
+            } else if otel {
+                trace::render_otel(&evs)?
             } else {
                 let filter = trace::Filter { denied, failed, uncertain, tool, path };
                 trace::render_calls(&evs, &filter, Some(&blobs), trace::is_live(&dir))?
             };
+            // JSON and OTLP are escaped by serde_json; the rest is text from
+            // the log for a terminal (D-175).
+            let text = if json || otel { text } else { trace::for_terminal(&text) };
             print!("{text}");
         }
     }

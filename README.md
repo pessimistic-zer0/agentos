@@ -8,13 +8,13 @@ It is a learning and portfolio project, not a product. It does one thing: one ag
 
 ## Status
 
-**Usable on real projects, by its own agent or by any MCP client, on three tested systems, with its limits written down.** The last tagged release is `v1.2` (2026-11-27; the plan "v3", [`docs/v3-scope.md`](docs/v3-scope.md)): a network allow-list for commands, calls that wait for a person's approval, and secrets the runtime uses for HTTPS services without the agent seeing them. Before it, `v1.1` added `norn mcp`.
+**Usable on real projects, by its own agent or by any MCP client, on three tested systems, with its limits written down.** Version 1.3.0 (the plan "v4", [`docs/v4-scope.md`](docs/v4-scope.md)) adds TraceWeaver: ways to read what a run did and why, replay it without running anything, compare runs, and export it as OpenTelemetry (see [Reading a run afterwards](#reading-a-run-afterwards-traceweaver)); it is tagged `v1.3` once CI passes on it. The last tagged release is `v1.2` (2026-11-27; [`docs/v3-scope.md`](docs/v3-scope.md)): a network allow-list for commands, calls that wait for a person's approval, and secrets the runtime uses for HTTPS services without the agent seeing them. Before it, `v1.1` added `norn mcp`.
 
 - **What it has been run on.** The demo; a Python project with real PyPI packages in a virtualenv; a Node project; a Rust project ([`real-repo-trial-nix.md`](docs/results/real-repo-trial-nix.md), [`second-stack-trial-nix.md`](docs/results/second-stack-trial-nix.md)). Six tickets of a Python project, each solved and checked on a fresh clone: by Claude through norn's own agent loop ([`relay-model-trial-nix.md`](docs/results/relay-model-trial-nix.md)), and by Claude Code as an MCP client with its own tools switched off ([`mcp-claude-code-trial-nix.md`](docs/results/mcp-claude-code-trial-nix.md)).
 - **Where it is verified.** NixOS 26.05 on the development machine (`nix` preset); Ubuntu 24.04 and Debian 12 in CI (`fhs` preset), including a job that keeps Ubuntu's restriction on user namespaces on and uses the AppArmor profile that comes with norn. `v1.2` passed CI run 45920326159. Fedora and Arch use the same preset and have not been run.
-- **What the suites say** (on `nix`, results in [`docs/results/`](docs/results/)): 4,800 kills at 8 points with 0 invariant violations through norn's own agents, the same 4,800 through `norn mcp`, and the same 4,800 with the network allow-list on, each with 0 ([`recovery-network-200-nix.md`](docs/results/recovery-network-200-nix.md)); 1,600 each for `fs.edit` and `fs.delete`; 36 attacks with 0 escapes, sent both ways, including the allow-list, secrets and self-approval ([`security-v3-nix.md`](docs/results/security-v3-nix.md)); 267 tests in `make test`. A ticket that needed a package download and an approved call with a secret, solved by Claude Code ([`v3-trial-nix.md`](docs/results/v3-trial-nix.md)). See [What it shows](#what-it-shows).
+- **What the suites say** (on `nix`, results in [`docs/results/`](docs/results/)): 4,800 kills at 8 points with 0 invariant violations through norn's own agents, the same 4,800 through `norn mcp`, and the same 4,800 with the network allow-list on, each with 0 ([`recovery-network-200-nix.md`](docs/results/recovery-network-200-nix.md)); 1,600 each for `fs.edit` and `fs.delete`; 36 attacks with 0 escapes, sent both ways, including the allow-list, secrets and self-approval ([`security-v3-nix.md`](docs/results/security-v3-nix.md)); 292 tests in `make test`; the same kill cells again on the 1.3.0 tree, 0 violations ([`recovery-200-nix-v4.md`](docs/results/recovery-200-nix-v4.md)). A ticket that needed a package download and an approved call with a secret, solved by Claude Code ([`v3-trial-nix.md`](docs/results/v3-trial-nix.md)). See [What it shows](#what-it-shows).
 - **What it is not.** Not hardened like a container runtime (a seccomp deny list but no allow list, a measured disk limit but no hard cap), no network for commands unless a policy lists hosts, one agent per execution. Read [what it does not do](#what-it-does-not-do) before trusting it with anything.
-- **How it got here.** Fourteen bugs were found on the way: eight by the suites and the first CI runs, and six after every suite had passed. Each has a note in [`docs/bugs.md`](docs/bugs.md), and the six are told as a story in [`docs/what-the-suites-missed.md`](docs/what-the-suites-missed.md). The history by milestone is in [`docs/milestones/`](docs/milestones/) (M0 to M22).
+- **How it got here.** Fourteen bugs were found on the way: eight by the suites and the first CI runs, and six after every suite had passed. Each has a note in [`docs/bugs.md`](docs/bugs.md), and the six are told as a story in [`docs/what-the-suites-missed.md`](docs/what-the-suites-missed.md). The history by milestone is in [`docs/milestones/`](docs/milestones/) (M0 to M26).
 - Licensed under MIT or Apache-2.0, at your option (see [License](#license)).
 
 ## The demo
@@ -345,6 +345,26 @@ require = ["exec:npm publish", "fs.delete", "fs.write:.github/**", "ext.call:git
 - Such a call, if the policy allows it, is not run. The agent is told it is waiting, with the command for you. See what waits, with a diff for each write: `norn approve <execution>`. Approve one: `norn approve <execution> <approval>` (good for one run, for 60 minutes; `--minutes` to change). Refuse: `norn deny <execution> <approval>`.
 - The approval belongs to that exact call: other arguments or other content need their own. The agent cannot approve anything itself: the answer is kept outside the workspace.
 - Approval adds to the policy; it never allows what the policy refuses.
+
+### Reading a run afterwards (TraceWeaver)
+
+Everything a run did is in its folder: the event log, each call's whole output, and a copy of the workspace after every call that could change files. These commands only read it, so they can also look at a run that is still going.
+
+```sh
+norn trace <id>                        # the calls, with the agent's time before each and each call's own time
+norn trace <id> --failed --path 'src/**'
+norn trace <id> --call 6               # everything about call 6: what asked for it, the rule, the plan, the full output
+norn trace <id> --diff 6               # the files call 6 changed
+norn trace <id> --graph                # what asked for each call, approvals, stops and resumes (--graph=dot for Graphviz)
+norn trace <id> --security             # what the rules stopped: denials, undone changes, refused connections, approvals
+norn replay <id>                       # the agent again, answered from the recording; nothing runs; stops where it differs
+norn diff <id-a> <id-b>                # two runs side by side
+norn search --outcome denied           # across all runs
+norn trace <id> --otel > run.json      # OpenTelemetry spans; norn sends nothing, you do:
+curl -H 'Content-Type: application/json' --data-binary @run.json http://127.0.0.1:4318/v1/traces
+```
+
+A call records what asked for it (the model's message, the script's step, or the MCP client's request number), and a model's reply its token counts; runs made before 1.3.0 say "cause not recorded". A replay promises nothing about how far it gets: a model may answer differently to the same input. An MCP client's run cannot be replayed, because its reasoning never reaches norn. What each event means: `docs/event-schema.md`.
 
 ### From an MCP client (Claude Code and others)
 

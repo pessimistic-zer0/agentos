@@ -39,16 +39,41 @@ pub fn execution_state(dir: &ExecDir, events: &[Event]) -> String {
 mod diff;
 mod graph;
 mod inspect;
+mod otel;
 mod rundiff;
+mod search;
 mod security;
 mod timing;
 
 pub use diff::render_diff;
 pub use graph::{render_dot, render_tree};
 pub use inspect::render_call;
+pub use otel::render_otel;
+pub use search::{search, Outcome, Query};
 pub use rundiff::{render_run_diff, Side};
 pub use security::render_security;
 pub use timing::{fmt_ms, Timing};
+
+/// Text from the log made safe to print on a terminal. The log holds what
+/// the model wrote and what commands printed; a control character such as
+/// ESC there would be read by the person's terminal as a command (to move
+/// the cursor, retitle the window, or worse). Every control character but a
+/// line break and a tab is shown as `\u{..}` instead (D-175). JSON and OTLP
+/// output need none of this: `serde_json` escapes them.
+pub fn for_terminal(text: &str) -> String {
+    if !text.chars().any(|c| c.is_control() && c != '\n' && c != '\t') {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if c.is_control() && c != '\n' && c != '\t' {
+            out.push_str(&format!("\\u{{{:x}}}", c as u32));
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
 
 /// Which calls the call list shows (T2). The kinds (`denied`, `failed`,
 /// `uncertain`) widen each other: a call is shown if it is any of the kinds
@@ -269,4 +294,16 @@ pub fn render_json(events: &[Event]) -> Result<String> {
 /// The execution's events, read without changing the log (D-170).
 pub fn load(dir: &ExecDir) -> Result<Vec<Event>> {
     log::read_events(&dir.log())
+}
+
+#[cfg(test)]
+mod terminal_tests {
+    use super::for_terminal;
+
+    #[test]
+    fn control_characters_are_shown_not_sent() {
+        assert_eq!(for_terminal("plain\ttext\nnext"), "plain\ttext\nnext");
+        assert_eq!(for_terminal("\u{1b}]0;owned\u{7}x"), "\\u{1b}]0;owned\\u{7}x");
+        assert_eq!(for_terminal("a\rb\u{9b}c"), "a\\u{d}b\\u{9b}c");
+    }
 }
