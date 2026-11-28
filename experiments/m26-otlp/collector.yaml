@@ -1,0 +1,18 @@
+# A collector that accepts OTLP over HTTP on 127.0.0.1:4318 and prints every
+# span it receives, with its parent, to its own output.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 127.0.0.1:4318
+exporters:
+  debug:
+    verbosity: detailed
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [debug]
+  telemetry:
+    metrics:
+      level: none

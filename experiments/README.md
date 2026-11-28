@@ -19,3 +19,8 @@ showed. None of this code is used by the runtime.
 | `m19-landlock-net/` | M19 | E3: Landlock's TCP port rules (ABI 4+) as a second wall; not used |
 | `m21-https/` | M21 | E5: `ureq`'s certificate checks, and trusting one test CA |
 | `m20-approval-wait/` | M20 | E4: how long Claude Code waits for one tool call, and what a model does with "waiting for approval" |
+| `m23-readonly-log/` | M23 | E1 (v4): reading the SQLite event log read-only while a run writes it |
+| `m24-trial-logs/` | M24 | E2 (v4): what the kept trial logs can answer today; what links a call to its cause |
+| `m24-call-diff/` | M24 | E5 (v4): the time of one call's diff between two checkpoints |
+| `m25-determinism/` | M25 | E3 (v4): the same request to a local model at temperature 0, sent again |
+| `m26-otlp/` | M26 | E4 (v4): OTLP JSON written by hand, sent to a real OpenTelemetry collector |

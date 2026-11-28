@@ -4235,6 +4235,58 @@ Earlier runs on the way: 45723220958 on `2312511` (failed: MCP test client, TOCT
 
 **Concepts to learn.** None new.
 
+### D-170 — After E1 and E2: a read-only reader for `trace`; a resume is recorded; what `cause` holds through MCP
+- **Date:** 2026-11-28
+- **Status:** Taken (adds to D-169)
+- **Area:** event log / tooling
+- **ADR:** none
+
+**In plain words.** Three changes to the v4 plan, from the first two experiments. (1) `norn trace` and the other new readers open the log with a separate read-only function. `EventLog::open` is not a reader: it sets the journal mode, may create tables and may write the schema version. (2) A resumed run gets a new event, `execution.resumed`, saying how it was resumed (`norn run --resume`, or `norn mcp` continuing an open execution) and after how many calls. In a kept trial a run stopped, waited 10.7 hours and was resumed, and nothing in the log said so: the pause looked like a slow model. (3) Through MCP, `cause` holds the client's JSON-RPC request id, which names the request but gives no reason. The trace says that the client's reasoning is not in the log.
+
+**The problem.** E1: can a reader run beside a writer? E2: what is missing from real logs to answer "why", "how long" and "what changed"?
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| A read-only open (`SQLITE_OPEN_READ_ONLY`) that checks the schema version and writes nothing | Taken | E1: 24,264 reads beside 10,000 appends, 0 errors, 0 half events; the writer was not slower; works after `kill -9` and in a read-only folder |
+| Read through `EventLog::open` as today | Discarded | It writes (pragma, `CREATE TABLE`, the schema row), and makes a file when there is none |
+| A new event `execution.resumed` | Taken | A new event kind is allowed by the compatibility promise (D-126). The scope (D-168) said only two optional fields; this is a third, small change, made because E2 found a real gap |
+| Show long gaps as pauses, without a new event | Discarded | It guesses from time; a slow model and a stop look the same |
+| `cause` from the model's own `tool_calls[].id` | Discarded | The id is chosen by the model server (the relay used `call_1`, `call_2`; other servers use random strings) and is not unique across a resumed run. The `seq` of the message is norn's own and unique |
+| Infer the cause in old logs from the order of events | Discarded | Spec §9.13; D-168. Old logs say "cause not recorded" |
+
+**What this means for the code.** `log::EventLog::open_read_only`; `EventBody::ExecutionResumed { by, after_calls }`, written by `runtime::resume` and by `norn mcp` when it continues an execution; `tool.requested` gets `cause` (M24).
+
+**Evidence.** `experiments/m23-readonly-log/NOTES.md`; `experiments/m24-trial-logs/NOTES.md` (four kept runs: 0 calls linked by an id; no token counts; every named checkpoint on disk; a gap of 38,640 s between `agent.message` 93 and 94 of the INV-104 relay run with no event between).
+
+**Concepts to learn.** SQLite WAL snapshots; read-only connections.
+
+### D-171 — After E3 to E5: the model's name with the token counts; OTLP ids in hex; per-call diffs on demand
+- **Date:** 2026-11-28
+- **Status:** Taken (adds to D-169)
+- **Area:** event log / tooling
+- **ADR:** none
+
+**In plain words.** (1) The token counts (R1) are stored with the model's name, because the log does not say which model a run used, and a replay may use another one. Replay promises nothing about how far it will get: one short request gave the same call six times out of six on the local model, but a whole run could not be tried (E3). (2) The OpenTelemetry file uses lower-case hex ids and times as strings. Ids are taken from a hash of the execution id and the call id, so the same run always gives the same file. norn's own test checks that every parent named in the file exists, because the collector does not (E4). (3) Per-call diffs are made on demand with the patch code as it is, at tens of milliseconds on the largest kept workspace. A call that changed nothing says "no change to the files" (E5).
+
+**The problem.** Three questions from the scope: is replay worth it, does a real collector take norn's OTLP JSON, and are per-call diffs fast enough without a cache?
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| `usage` on `agent.message`, with `model`, `prompt_tokens`, `completion_tokens` | Taken | The counts belong to the reply they came with; the model's name is not anywhere else in the log |
+| The model's name in `execution.created` | Discarded | The model can change at a resume (the settings come from the environment each time) |
+| OTLP ids in base64 | Discarded | E4: the collector refuses them (`ID.UnmarshalJSONIter: length mismatch`) |
+| Random span ids | Discarded | The same run should give the same file, so that two exports can be compared |
+| A cache of per-call diffs | Discarded | E5: 3 to 7 ms on a normal workspace, 53 to 58 ms on a 2,779-file one |
+| A whole replay of a recorded run on the local model, for E3 | Not possible on this machine | The only model now kept is 19.8 GB on 15 GB of RAM: 1.25 tokens per second |
+
+**What this means for the code.** `agent.message` gets an optional `usage` (M25); `trace::otel` (M26); `trace --diff N` uses `checkpoint::write_patch` between two checkpoints (M24).
+
+**Evidence.** `experiments/m25-determinism/NOTES.md`; `experiments/m26-otlp/NOTES.md` (OpenTelemetry Collector 0.151.0: four variants 200, base64 400, a missing parent accepted); `experiments/m24-call-diff/NOTES.md`.
+
+**Concepts to learn.** Greedy decoding at temperature 0; OTLP/JSON vs protobuf's JSON mapping.
+
 ---
 
 ## Still open
@@ -4349,6 +4401,10 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-26 | CI run 45818853651 failed the TOCTOU test on Debian; the console showed only `No such file or directory (os error 2)`, because the test kept the first and the last line of the reason and the VM script filters lines. The job's artifact had the full text: the run had failed in setup (B-016) | Before reasoning about a failure, find the full log. The artifact was there; four hypotheses were formed before it was opened |
 | 2026-11-26 | The v3 trial: Claude Code, through `norn mcp` with its own tools off, installed `python-dateutil` from PyPI through the allow-list, made 7 tests pass and filed the tracker update after an approval, in 13 turns, 36 s, 0.12 USD (`docs/results/v3-trial-nix.md`). It noted that pip chose dateutil 4.0.0, newer than it knew, and asked the person to check it | A model reading package contents before trusting them is the behaviour a network allow-list cannot give; the log of what was downloaded lets the person check |
 | 2026-11-26 | Commit `beaf41a` (the v3 security cases) has a clippy warning (`format!` with nothing to format), and so does `c32e42b` after it; CI's lint step denies warnings, so both fail lint. The second commit was made in the same command as the clippy run whose output said so. Fixed in the next commit | The same lesson as 2026-11-16, again: a check run in the same command as the commit cannot stop it. Run the lint, read it, then commit |
+| 2026-11-28 | A run stopped, then resumed 10.7 hours later with `norn run --resume`, left no event for either (E2) | A gap in time was the only sign; a log that records effects should also record the runtime's own stops and starts (D-170) |
+| 2026-11-28 | `EventLog::open` writes even when it only reads: journal mode, `CREATE TABLE`, the schema row (E1) | Readers need their own open; "open" in a library often means "open or create" |
+| 2026-11-28 | The OpenTelemetry Collector refuses base64 span ids (protobuf's JSON mapping) and wants hex, but accepts a span whose parent is not in the file (E4) | OTLP/JSON is its own format, not protobuf's mapping; and a receiver accepting data does not mean the data is right |
+| 2026-11-28 | A 35B model whose file is larger than the machine's memory loaded in 30 s but answered at 1.25 tokens per second (E3) | Loading is not running: the file is mapped, and every token reads weights from disk |
 
 ---
 

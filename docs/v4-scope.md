@@ -33,22 +33,22 @@ Every execution already leaves a complete record: an append-only event log, the 
 | T3 | Durations: each call's time from `tool.requested` to its ending, and the time the agent took before it | From `ts`, which is wall time for people. Order still comes from `seq` |
 | T4 | `norn trace <id> --call N`: the inspector | Arguments, policy rule, intent, output (from the blob store), approval, network connections, the reconciliation if any |
 | T5 | `norn trace <id> --security`: denials, attempts outside the policy that the runtime undid (`policy.violation`), refused connections, approvals asked and given | Spec §9.13 "security view" |
-| T6 | `norn trace` opens the log read-only, so it can read a run that is still going | Spec §9.13 form factor: "a separate read-only consumer of the log". Experiment E1 |
+| T6 | `norn trace` opens the log read-only, so it can read a run that is still going | Spec §9.13 form factor: "a separate read-only consumer of the log". E1: safe beside the writer; a new read-only open, because `EventLog::open` writes (D-170) |
 
 ### M24 — Causal links and the file-change view
 
 | # | Item | Notes |
 |---|---|---|
-| C1 | `tool.requested` gets an optional `cause`: the `seq` of the `agent.message` that asked for the call. Through MCP, where norn never sees the model's messages, the cause is the client's request id | An optional field is allowed by the compatibility promise. Old logs have no `cause`. The trace then says "cause not recorded", and never guesses by order |
-| C2 | The other links that ids already give, shown together: approval asked → approval used (approval id), uncertain call → its reconciliation (`call_id`), crash → recovery → resume | No new fields |
+| C1 | `tool.requested` gets an optional `cause`: the `seq` of the `agent.message` that asked for the call. Through MCP, where norn never sees the model's messages, the cause is the client's JSON-RPC request id, and the trace says the client's reasoning is not in the log (D-170) | An optional field is allowed by the compatibility promise. Old logs have no `cause`. The trace then says "cause not recorded", and never guesses by order |
+| C2 | The other links that ids already give, shown together: approval asked → approval used (approval id), uncertain call → its reconciliation (`call_id`), crash → recovery → resume | One new event, `execution.resumed` (D-170, after E2: a resume 10.7 hours later left no trace) |
 | C3 | `norn trace <id> --graph`: the causal graph as an indented tree; `--graph=dot` writes DOT for Graphviz | No new dependency. norn writes text; the person runs `dot` if they want a picture |
-| C4 | `norn trace <id> --diff N`: the files that call N changed, as a diff between the checkpoint before it and the one after it. `--diff` alone gives the whole run, the same as `result.patch` | Checkpoints are kept until `norn rm`, so this works for every past run. It reuses the patch code (`checkpoint::write_patch`) |
+| C4 | `norn trace <id> --diff N`: the files that call N changed, as a diff between the checkpoint before it and the one after it, made on demand (E5: milliseconds; D-171). `--diff` alone gives the whole run, the same as `result.patch` | Checkpoints are kept until `norn rm`, so this works for every past run. It reuses the patch code (`checkpoint::write_patch`) |
 
 ### M25 — Replay and run diff
 
 | # | Item | Notes |
 |---|---|---|
-| R1 | Token counts: the LLM agent stores each reply's `usage` (prompt and answer tokens) in the log | A new optional field. MCP clients do not tell norn their tokens, so MCP runs have none, and the trace says so |
+| R1 | Token counts: the LLM agent stores each reply's `usage` (prompt and answer tokens) in the log, with the model's name (D-171) | A new optional field. MCP clients do not tell norn their tokens, so MCP runs have none, and the trace says so |
 | R2 | `norn replay <id> [--model M] [--base-url U]`: the LLM agent is run again on the same task. Every call it asks for is answered from the recording, not run. Replay stops at the first divergence and reports it: call number, recorded call, new call | Nothing is run, written or sent. The result is a report, not a new execution. A scripted run replays exactly, which tests the replay itself |
 | R3 | `norn diff <id-a> <id-b>`: two runs lined up call by call: calls added or removed, changed arguments, different policy decisions and outcomes, time and token differences, and whether the two patches are the same | Works on any two runs of the same repository and task, including a replay against its original |
 | R4 | The limits are printed with every replay: the model may answer differently with the same input; the environment may have changed; a replay of an MCP run is not possible, because the client's reasoning is not in the log | Spec §9.13: "replay limitations are shown explicitly" |
@@ -57,7 +57,7 @@ Every execution already leaves a complete record: an append-only event log, the 
 
 | # | Item | Notes |
 |---|---|---|
-| X1 | `norn trace <id> --otel > run.json`: the run as OpenTelemetry spans in the OTLP JSON format. One span for the execution, one for each call, with the parent taken from the causal links | Written to a file with `serde_json`. Nothing is sent anywhere. Experiment E4 checks that a real collector accepts it |
+| X1 | `norn trace <id> --otel > run.json`: the run as OpenTelemetry spans in the OTLP JSON format. One span for the execution, one for each call, with the parent taken from the causal links | Written to a file with `serde_json`. Nothing is sent anywhere. E4: a real collector accepts it; ids in lower-case hex, taken from a hash, so the same run gives the same file (D-171) |
 | X2 | `norn search --tool T --path P --outcome O [--since D]` across all executions in the state folder | Reads each log read-only. No index: the number of runs on one machine is small |
 | X3 | Trial: use TraceWeaver on the recorded trials of v1 to v3 to answer three questions written down before looking ("why did the agent read X before it changed Y", "where did run A and run B go different ways", "what did this run send over the network"). Record what it could and could not answer | `docs/results/v4-trial-nix.md`. This is a test of whether the views help, not a benchmark |
 | X4 | Documents (README, the event schema, threat model: the record now holds token counts), CHANGELOG, release | Version: question 5 |
@@ -83,7 +83,7 @@ Every execution already leaves a complete record: an append-only event log, the 
 
 ## 6. What changes, and what does not
 
-- **Changes:** two optional fields in the log (`cause` on `tool.requested`, `usage` on `agent.message`), allowed by the compatibility promise. Three commands (`replay`, `diff`, `search`) and new options of `trace`.
+- **Changes:** two optional fields in the log (`cause` on `tool.requested`, `usage` on `agent.message`) and one new event (`execution.resumed`, D-170), allowed by the compatibility promise. Three commands (`replay`, `diff`, `search`) and new options of `trace`.
 - **Unchanged:** the five parts and the ten design rules. Replay runs no tool, so rules 1, 3, 4 and 5 are not touched: there is no gateway effect to guard. One crate, synchronous Rust. Every log from 1.0 onwards stays readable, and the frozen v0.1 files stay frozen.
 - **Dependencies:** none expected. SQLite, JSON and diffs are already there; DOT and OTLP are text the program writes.
 
