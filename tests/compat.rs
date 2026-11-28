@@ -8,6 +8,12 @@
 //! P4), packed as a tar file so that the trees are exact. The two policy
 //! files are the presets as v0.1 shipped them.
 //!
+//! `v1.2-executions.tar` was written by norn 1.2.0 (the tag `v1.2`) with
+//! `make-v1.2.sh` (D-172): a run with network, an `ext.call` and a denial, a
+//! run killed at P4 then recovered and resumed, and an MCP session with an
+//! approval. The views of v4 (TraceWeaver) are tested on it, so they keep
+//! reading logs written before they existed.
+//!
 //! Needs a delegated cgroup for the resume: systemd-run --user --scope -p Delegate=yes cargo test --test compat
 
 mod common;
@@ -21,8 +27,12 @@ fn fixture(name: &str) -> std::path::PathBuf {
 
 /// A state folder holding the two executions that v0.1 wrote.
 fn unpack(t: &TestEnv) {
+    unpack_tar(t, "v0.1-executions.tar");
+}
+
+fn unpack_tar(t: &TestEnv, name: &str) {
     std::fs::create_dir_all(&t.state).unwrap();
-    let ok = std::process::Command::new("tar").arg("-xf").arg(fixture("v0.1-executions.tar")).arg("-C").arg(&t.state).status().unwrap();
+    let ok = std::process::Command::new("tar").arg("-xf").arg(fixture(name)).arg("-C").arg(&t.state).status().unwrap();
     assert!(ok.success());
 }
 
@@ -113,4 +123,74 @@ fn a_log_or_policy_of_a_later_format_is_refused_with_its_version_named() {
     // misspelt `deny` must not silently protect nothing.
     let text = std::fs::read_to_string(fixture("policy-v0.1-nix.toml")).unwrap().replace("[limits]", "[limits]\nfuture_limit = 1");
     assert!(Policy::parse(&text).is_err());
+}
+
+#[test]
+fn the_views_of_v4_read_executions_that_1_2_wrote() {
+    let t = TestEnv::new("compat-v12");
+    unpack_tar(&t, "v1.2-executions.tar");
+    let log = t.exec_dir("v12-network").join("log.db");
+    let before = std::fs::read(&log).unwrap();
+
+    // The call list, with times, and each kind of line 1.2 could record.
+    let net = t.norn(&["trace", "v12-network"]);
+    for line in ["call   agent    took", "fs.read  .env", "DENY", "network: GET 127.0.0.1:18432 REFUSED (no matching rule)", "ext.call ledger (7 bytes)", "finished: completed"] {
+        assert!(net.contains(line), "`{line}` is missing from:\n{net}");
+    }
+    let rec = t.norn(&["trace", "v12-recovered"]);
+    assert!(rec.contains("RECOVERED, APPLIED") && rec.contains("-- recovery after a stop: 1 call(s) without an ending"), "{rec}");
+    let mcp = t.norn(&["trace", "v12-approval"]);
+    assert!(mcp.contains("WAIT") && mcp.contains("deleted (8 bytes)"), "{mcp}");
+
+    // Filters.
+    let only = |args: &[&str]| -> Vec<String> {
+        t.norn(args).lines().filter(|l| l.starts_with('#')).map(|l| l.split_whitespace().next().unwrap().to_string()).collect()
+    };
+    assert_eq!(only(&["trace", "v12-network", "--denied"]), ["#1"]);
+    assert_eq!(only(&["trace", "v12-network", "--path", "src/**"]), ["#4"]);
+    assert_eq!(only(&["trace", "v12-network", "--tool", "ext.call"]), ["#3"]);
+    assert_eq!(only(&["trace", "v12-recovered", "--uncertain"]), ["#6"]);
+    assert_eq!(only(&["trace", "v12-recovered", "--failed"]), ["#2"], "pytest exited 1 before the fix");
+    assert_eq!(only(&["trace", "v12-recovered", "--denied", "--failed"]), ["#2", "#5"], "kinds widen each other");
+    assert_eq!(only(&["trace", "v12-recovered", "--failed", "--path", "src/**"]), Vec::<String>::new(), "path narrows");
+    assert!(t.norn(&["trace", "v12-recovered", "--failed"]).contains("showing 1 of 7 calls: failed"));
+
+    // The inspector: the plan, the output from the blob store, the network.
+    let call = t.norn(&["trace", "v12-network", "--call", "2"]);
+    for line in ["call #2  exec  python3 client.py", "policy     allowed by exec.allow[0]", "(written and fsynced before the effect)", "network    GET 127.0.0.1:18431 allowed by network.allow[0]", ".stdout", "| http://127.0.0.1:18431/README.md # demo-repo"] {
+        assert!(call.contains(line), "`{line}` is missing from:\n{call}");
+    }
+    let write = t.norn(&["trace", "v12-network", "--call", "4"]);
+    assert!(write.contains("content  (1 line(s))") && write.contains("| NOTE = 'written by the v1.2 fixture'"), "{write}");
+    let payload = t.norn(&["trace", "v12-network", "--call", "3"]);
+    assert!(payload.contains("| order-1"), "{payload}");
+    let settled = t.norn(&["trace", "v12-recovered", "--call", "6"]);
+    assert!(settled.contains("recovery   cut off by a stop; settled at") && settled.contains("APPLIED"), "{settled}");
+    let missing = t.output(&["trace", "v12-network", "--call", "9"]);
+    assert!(!missing.status.success() && String::from_utf8_lossy(&missing.stderr).contains("there is no call #9; this execution has 4 call(s)"));
+
+    // The security view.
+    let sec = t.norn(&["trace", "v12-network", "--security"]);
+    for line in ["denied by the policy (1)", "#1 fs.read .env: filesystem.deny[0]", "network connections refused (1)", "GET 127.0.0.1:18432 in #2", "network hosts reached (1)", "127.0.0.1:18431: 1 connection(s), 128 B up, 514 B down", "approvals (0)"] {
+        assert!(sec.contains(line), "`{line}` is missing from:\n{sec}");
+    }
+    let sec = t.norn(&["trace", "v12-approval", "--security"]);
+    assert!(sec.contains("approvals (1)") && sec.contains("asked by #3 fs.delete src/old.py") && sec.contains("used by #4"), "{sec}");
+    assert!(t.norn(&["trace", "v12-recovered", "--security"]).contains("calls cut off by a stop (1)\n  #6 fs.write"));
+
+    // Reading changed no event.
+    assert_eq!(std::fs::read(&log).unwrap(), before, "the views only read");
+}
+
+#[test]
+fn the_event_schema_document_describes_every_event_type() {
+    let doc = std::fs::read_to_string(repo_root().join("docs/event-schema.md")).unwrap();
+    let mut at = 0;
+    for ty in norn::log::TYPES {
+        let heading = format!("### `{ty}`");
+        let Some(pos) = doc.find(&heading) else { panic!("docs/event-schema.md has no section `{heading}`") };
+        assert!(pos > at, "`{ty}` is out of order in docs/event-schema.md");
+        at = pos;
+    }
+    assert_eq!(doc.matches("\n### `").count(), norn::log::TYPES.len(), "a section for an event type that does not exist");
 }

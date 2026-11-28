@@ -127,11 +127,35 @@ enum Cmd {
     Trace {
         id: Option<String>,
         /// Print every event instead of one line per call
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["json", "call", "security"])]
         events: bool,
         /// Print every event as one JSON object per line
-        #[arg(long, conflicts_with = "events")]
+        #[arg(long, conflicts_with_all = ["call", "security"])]
         json: bool,
+        /// Everything recorded about one call: arguments, policy, plan, output
+        #[arg(long, value_name = "N", conflicts_with = "security")]
+        call: Option<u64>,
+        /// With --call: print stored texts whole instead of their first lines
+        #[arg(long, requires = "call")]
+        full: bool,
+        /// Denials, undone changes, network, approvals, calls cut off by a stop
+        #[arg(long)]
+        security: bool,
+        /// Only calls the policy or a person refused
+        #[arg(long, conflicts_with_all = ["events", "json", "call", "security"])]
+        denied: bool,
+        /// Only calls that failed, and commands that exited with an error
+        #[arg(long, conflicts_with_all = ["events", "json", "call", "security"])]
+        failed: bool,
+        /// Only calls a stop cut off (uncertain, or settled by recovery)
+        #[arg(long, conflicts_with_all = ["events", "json", "call", "security"])]
+        uncertain: bool,
+        /// Only calls of this tool (fs.read, exec, ...)
+        #[arg(long, value_name = "TOOL", conflicts_with_all = ["events", "json", "call", "security"])]
+        tool: Option<String>,
+        /// Only calls whose path matches this glob ('src/**')
+        #[arg(long, value_name = "GLOB", conflicts_with_all = ["events", "json", "call", "security"])]
+        path: Option<String>,
     },
 }
 
@@ -292,7 +316,7 @@ fn main() -> Result<()> {
                 }
             }
         },
-        Cmd::Trace { id, events, json } => {
+        Cmd::Trace { id, events, json, call, full, security, denied, failed, uncertain, tool, path } => {
             let id = match id {
                 Some(id) => id,
                 None => match workspace::list_executions(&state_dir)?.pop() {
@@ -302,12 +326,18 @@ fn main() -> Result<()> {
             };
             let dir = ExecDir::new(&state_dir, &id);
             let evs = trace::load(&dir)?;
+            let blobs = norn::blob::BlobStore::new(&dir.blobs());
             let text = if json {
                 trace::render_json(&evs)?
             } else if events {
                 trace::render_events(&evs)?
+            } else if let Some(n) = call {
+                trace::render_call(&evs, n, &blobs, full, trace::is_live(&dir))?
+            } else if security {
+                trace::render_security(&evs)?
             } else {
-                trace::render_calls(&evs)?
+                let filter = trace::Filter { denied, failed, uncertain, tool, path };
+                trace::render_calls(&evs, &filter, Some(&blobs), trace::is_live(&dir))?
             };
             print!("{text}");
         }

@@ -2,6 +2,18 @@
 
 What changed for someone who uses Norn, newest first. The reasons are in `docs/decision-log.md` (the `D-` numbers); the bugs in `docs/bugs.md` (the `B-` numbers).
 
+## Unreleased (the plan "v4": `docs/v4-scope.md`)
+
+### Added
+
+- **`norn trace` views** (M23, D-172): each call's time and the agent's time before it; filters `--denied`, `--failed` (also commands that exited with an error), `--uncertain`, `--tool`, `--path`; `--call N` for everything recorded about one call, including its full output (`--full`); `--security` for denials, undone changes, network connections, approvals and calls cut off by a stop.
+- **`execution.resumed`**, a new event written when `norn run --resume` or a new `norn mcp` session goes on with a stopped execution (D-170). Before, a resume left no trace and a pause looked like a slow agent.
+- **`docs/event-schema.md`**: what every event in the log means, and the version that added it.
+
+### Changed
+
+- `norn trace`, `norn status` and `norn approve` open the log read-only, so they never change it and can read a running execution (D-170, D-172). A running call shows as RUNNING, not UNCERTAIN.
+
 ## 1.2.0 (2026-11-26; the plan "v3": `docs/v3-scope.md`)
 
 Tagged `v1.2` on the commit CI run 45920326159 passed on Ubuntu 24.04, Ubuntu with AppArmor, and Debian 12 (D-167). Everything new is off unless a policy turns it on; policy files and execution folders of 1.1 work unchanged (`docs/compatibility.md`).

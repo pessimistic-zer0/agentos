@@ -27,7 +27,7 @@ use serde_json::{json, Value};
 
 use crate::agent::{Action, Agent};
 use crate::gateway::Gateway;
-use crate::log::{EventBody, EventLog};
+use crate::log::EventBody;
 use crate::policy::Policy;
 use crate::runtime::{self, RunOptions};
 use crate::tools::{ToolCall, ToolOutcome, ToolResult};
@@ -361,9 +361,12 @@ impl Server {
     fn continue_or_create(&self) -> Result<Open> {
         for id in runtime::unfinished_mcp_executions(&self.cfg.state_dir, &self.cfg.repo)? {
             match runtime::reopen(&self.cfg.state_dir, &id) {
-                Ok((gw, lock, report)) => {
+                Ok((mut gw, lock, report)) => {
                     crate::interrupt::serving(&id);
                     let calls = calls_so_far(&gw.dir)?;
+                    // A new session goes on with it: say so in the log, so a
+                    // pause between sessions is not read as a slow client (D-170).
+                    gw.log.append(crate::log::EventBody::ExecutionResumed { by: "norn mcp".into(), after_calls: calls })?;
                     eprintln!("norn mcp: continuing execution {id} ({calls} calls so far). `norn finish {id}` ends it.");
                     if !report.clean {
                         for v in &report.verdicts {
@@ -391,7 +394,7 @@ impl Server {
 }
 
 fn calls_so_far(dir: &ExecDir) -> Result<u64> {
-    Ok(crate::log::calls(&EventLog::open(&dir.log())?.events()?)?.len() as u64)
+    Ok(crate::log::calls(&crate::log::read_events(&dir.log())?)?.len() as u64)
 }
 
 fn server_info() -> Value {

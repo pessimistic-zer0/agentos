@@ -26,7 +26,8 @@ not a record):
 | Writer with a reader looping, 10,000 appends | p50 1.57 ms, p99 3.27 ms. The reader made 24,264 full reads: 0 errors, 0 gaps or half bodies, the count never went back. The WAL file grew past 1,000 pages, so SQLite's automatic checkpoints ran during the reads |
 | After a clean close (no `-wal`, `-shm` left) | Read-only open works |
 | Writer killed with `kill -9` (`-wal`, `-shm` left) | Read-only open works and sees the 784 committed rows |
-| The folder made read-only, with or without `-wal`/`-shm` | Read-only open works |
+| The folder made read-only, `-wal`/`-shm` present | Read-only open works |
+| The folder made read-only, a log closed cleanly (no `-wal`, `-shm`) | **Refused**: `attempt to write a readonly database` (`SQLITE_READONLY_DIRECTORY`). Found later, while building M23: the first run of this table said "works", because the read of the row above it had left `-wal` and `-shm` files behind. Repeated alone, it fails |
 | No file | "unable to open database file"; nothing is created |
 
 **What it taught.**
@@ -37,3 +38,10 @@ not a record):
   runs `CREATE TABLE IF NOT EXISTS` and may insert the schema version. So
   `norn trace` needs its own read-only open (T6), which checks the schema
   version and writes nothing. A missing log then fails without making a file.
+- A read-only connection still needs the `-shm` file to read a WAL
+  database, and creates it if it is missing. In a folder it cannot write,
+  that fails. When there is no `-wal` file either, every committed event is
+  in the main file and no writer is active, so the reader retries with
+  `immutable=1`, which skips the shared memory (D-172).
+- A case that passes once may pass for a reason left behind by the case
+  before it. Repeat each case alone in a fresh folder.

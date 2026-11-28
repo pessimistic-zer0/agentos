@@ -4287,6 +4287,39 @@ Earlier runs on the way: 45723220958 on `2312511` (failed: MCP test client, TOCT
 
 **Concepts to learn.** Greedy decoding at temperature 0; OTLP/JSON vs protobuf's JSON mapping.
 
+### D-172 — M23 as built: a read-only reader with one narrow fallback, `execution.resumed`, filters that widen and narrow, times shown per call, a frozen 1.2 log
+- **Date:** 2026-11-28
+- **Status:** Taken (carries out D-169, D-170)
+- **Area:** event log / tooling / tests
+- **ADR:** none
+
+**In plain words.** M23 gives `norn trace` new ways to read a run. A call list with two times per call (how long the agent took before it, how long the call took), filters (`--denied`, `--failed`, `--uncertain`, `--tool`, `--path`), an inspector for one call (`--call N`), and a security view (`--security`). The log is read through a new read-only function. A resume writes `execution.resumed`. The event kinds are described in `docs/event-schema.md`, and logs written by norn 1.2.0 are kept as a frozen test fixture.
+
+**The problem.** How each piece of T1 to T6 should behave in the cases the experiments did not settle.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Read-only open; if SQLite refuses because the folder is read-only and there is no `-wal` file, open again as `immutable=1` | Taken | While building M23 a test showed that a cleanly closed log in a read-only folder cannot be opened read-only: SQLite must create `-shm` (`SQLITE_READONLY_DIRECTORY`). E1 had reported "works", but only because an earlier case had left the side files behind (Findings). With no `-wal`, every committed event is in the main file and no writer is active, so `immutable` is safe |
+| Always open as `immutable=1` when there is no `-wal` | Discarded | A writer could start and checkpoint into the main file during the read; `immutable` tells SQLite nothing changes, so the read could be torn |
+| Leave SQLite's `-wal` and `-shm` files that a read-only open creates beside a log | Accepted | They hold no events, and SQLite removes or reuses them; avoiding them needs the unsafe `immutable` open above |
+| The filter kinds (`--denied`, `--failed`, `--uncertain`) widen each other; `--tool` and `--path` narrow | Taken | "Show me what went wrong" is several kinds at once; tool and path are where to look |
+| `--failed` includes commands that exited with an error, read from the call's output in the blob store | Taken | A failing test run is `tool.completed` with `exit 1`: the tool worked and the command failed. That is what a person looking for failures means |
+| `--failed` from the line's summary text (`exit 1, …`) | Discarded | The summary is text for people and may change (`docs/compatibility.md`) |
+| `--path` matched with the policy's own glob function, after removing `./` and a final `/` | Taken | The same globs a person already writes in the policy |
+| Times on every call line, as two columns after the call number, with a header line | Taken | The tests and people look for `#N` at the start and `fs.write src/…` together; columns after the number keep both |
+| The agent's time starts at the last ending, the workspace, or a resume | Taken | A ten-hour stop with a resume after it is not the agent's time (E2). Before 1.3.0 there is no resume event, so old logs still show such a gap as the agent's |
+| A call without an ending in a running execution is shown as RUNNING, not UNCERTAIN | Taken | Found while writing the test that reads a running execution: "uncertain" is the word for a call cut off by a stop, and the run holds its lock |
+| `execution.resumed` written by `norn run --resume` after recovery, and by `norn mcp` when a session continues an open execution | Taken | D-170. Both are a stop and a start |
+| A frozen log written by norn 1.2.0 (`tests/fixtures/compat/v1.2-executions.tar`, made by `make-v1.2.sh` from the tag) | Taken | The v0.1 fixture has none of the v3 events; the new views must read logs that 1.2 wrote: network, approvals, recovery, `ext.call` |
+| The inspector prints stored texts (a command's output, a written file, a payload) as text, the first 40 lines unless `--full` | Taken | JSON with `\n` in strings is hard to read; 40 lines fit a screen |
+
+**What this means for the code.** `log::read_events`, `log::parse_ts_ms`, `log::days_from_civil`, `log::TYPES`, `EventBody::ExecutionResumed`; `src/trace/` (was `src/trace.rs`): `mod.rs` (`Filter`, `render_calls` with times, `is_live`), `timing.rs`, `inspect.rs`, `security.rs`; `norn trace` options `--call`, `--full`, `--security`, `--denied`, `--failed`, `--uncertain`, `--tool`, `--path`; readers in `runtime.rs`, `mcp.rs`, `approval.rs` use `read_events`.
+
+**Evidence.** `cargo test --lib log::` (6 passed, including the read-only folder); `cargo test --test compat` (6 passed; `the_views_of_v4_read_executions_that_1_2_wrote`, `the_event_schema_document_describes_every_event_type`); `cargo test --test trace` (4 passed). The fixture was made by `tests/fixtures/compat/make-v1.2.sh` with norn built from `v1.2` (`01edb37`), and `norn trace` of 1.2.0 printed the three executions as expected before they were packed.
+
+**Concepts to learn.** SQLite `immutable` URI parameter; `SQLITE_READONLY_DIRECTORY`; widening and narrowing filters.
+
 ---
 
 ## Still open
@@ -4405,6 +4438,8 @@ Bugs, failed experiments and surprises, newest last. Each one: date, what was ex
 | 2026-11-28 | `EventLog::open` writes even when it only reads: journal mode, `CREATE TABLE`, the schema row (E1) | Readers need their own open; "open" in a library often means "open or create" |
 | 2026-11-28 | The OpenTelemetry Collector refuses base64 span ids (protobuf's JSON mapping) and wants hex, but accepts a span whose parent is not in the file (E4) | OTLP/JSON is its own format, not protobuf's mapping; and a receiver accepting data does not mean the data is right |
 | 2026-11-28 | A 35B model whose file is larger than the machine's memory loaded in 30 s but answered at 1.25 tokens per second (E3) | Loading is not running: the file is mapped, and every token reads weights from disk |
+| 2026-11-28 | E1's case "a read-only folder, a clean log: works" was wrong. It passed only because the case before it had left `-wal` and `-shm` behind; alone, the read is refused (`SQLITE_READONLY_DIRECTORY`). Found by a unit test while building M23 (D-172) | A case that depends on what an earlier case left is not a test of itself. Run each case in a fresh folder |
+| 2026-11-28 | A call without an ending was shown as UNCERTAIN while its run was still going (found by the test that reads a running execution, D-172) | The same state in the log means different things depending on whether a process holds the execution: ask the lock |
 
 ---
 
@@ -4523,3 +4558,6 @@ Plain meanings for terms used above. Add to it as new terms appear.
 | Divergence | The first point where a replayed agent asks for a different call from the recorded one (D-168) |
 | OpenTelemetry / span / OTLP | A common format for traces; a span is one timed step with a parent; OTLP is how spans are written or sent (D-168) |
 | DOT (Graphviz) | A text format for graphs; the `dot` program turns it into a picture (D-168) |
+| `immutable` (SQLite) | An option that tells SQLite a database file will not change while it is open, so it skips locks and shared memory; wrong if anyone does change it (D-172) |
+| `-wal` / `-shm` files | The two side files of an SQLite database in WAL mode: new commits are appended to `-wal`, and `-shm` is the shared index readers and writers use to find them (D-170, D-172) |
+| Timeline / inspector / security view | Three ways `norn trace` reads a run: calls in order with their times; everything about one call; what the rules stopped (D-168, D-172) |

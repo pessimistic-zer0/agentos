@@ -109,8 +109,8 @@ pub fn answer(state_dir: &Path, exec_id: &str, id: &str, approve: bool, minutes:
     if !dir.log().exists() {
         bail!("no execution {exec_id} in {}", state_dir.display());
     }
-    let log = crate::log::EventLog::open(&dir.log())?;
-    let events = log.events()?;
+    // Read only: the running execution owns the log (D-170).
+    let events = crate::log::read_events(&dir.log())?;
     if !pending(&events)?.iter().any(|p| p.approval == id) {
         bail!("execution {exec_id} has no pending approval `{id}`; `norn approve {exec_id}` lists them");
     }

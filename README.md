@@ -194,12 +194,17 @@ norn check --policy policies/nix.toml --repo <repo>     # the machine, the polic
 norn run --repo <repo> --policy policies/nix.toml --agent scripted --script <steps.toml>
 norn run --repo <repo> --policy policies/nix.toml --agent llm --task "Make the failing test pass"
 norn status                 # all executions; "interrupted" means it was stopped or killed
-norn trace [<id>]           # one line per call; --events for every record; --json for scripts
+norn trace [<id>]           # one line per call, with times; --events for every record; --json for scripts
+norn trace <id> --failed    # only some calls: --denied, --failed, --uncertain, --tool exec, --path 'src/**'
+norn trace <id> --call 6    # everything recorded about call 6: rule, plan, output, network; --full for long texts
+norn trace <id> --security  # denials, undone changes, network, approvals, calls cut off by a stop
 norn recover <id>           # settle the call that was cut off, repair the workspace
 norn run --resume <id>      # recover, then let the agent continue
 norn apply <id>             # copy the result into the repo (after reading the patch); --dry-run, --to <folder>
 norn rm <id>...             # delete executions; also --older-than <days>, --all, --dry-run
 ```
+
+`norn trace` only reads, so it can look at a run while it is still going. What each event in the log means is in `docs/event-schema.md`.
 
 State lives in `--state-dir`, else `$NORN_STATE_DIR`, else `~/.local/share/norn`. Each execution has a folder with its log, policy copy, workspace, checkpoints, blobs and `result.patch`. Apply a patch with `patch -p1 < result.patch` in the original repo, after reading it.
 

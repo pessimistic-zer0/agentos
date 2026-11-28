@@ -8,7 +8,7 @@
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -114,6 +114,11 @@ pub enum EventBody {
     },
     #[serde(rename = "recovery.completed")]
     RecoveryCompleted { reconciled: u64, duration_ms: u64 },
+    /// The agent goes on with a stopped execution (D-170): `by` is
+    /// `"norn run --resume"` or `"norn mcp"`, `after_calls` the number of
+    /// calls made before. Before 1.3.0 a resume left no event.
+    #[serde(rename = "execution.resumed")]
+    ExecutionResumed { by: String, after_calls: u64 },
     #[serde(rename = "execution.finished")]
     ExecutionFinished { status: String, summary: String, patch: Option<String> },
     /// `norn apply` copied the result into a repository (D-108). Written
@@ -121,6 +126,31 @@ pub enum EventBody {
     #[serde(rename = "result.applied")]
     ResultApplied { target: String, changes: Vec<String> },
 }
+
+/// Every event type, in the order of `docs/event-schema.md`. A test checks
+/// that the document describes each one; `type_name` (an exhaustive match)
+/// and the test `types_lists_every_variant` keep this list complete.
+pub const TYPES: &[&str] = &[
+    "execution.created",
+    "workspace.created",
+    "agent.message",
+    "tool.requested",
+    "tool.denied",
+    "tool.intent",
+    "tool.completed",
+    "tool.failed",
+    "policy.violation",
+    "exec.network",
+    "approval.requested",
+    "approval.used",
+    "approval.refused",
+    "recovery.started",
+    "tool.reconciled",
+    "recovery.completed",
+    "execution.resumed",
+    "execution.finished",
+    "result.applied",
+];
 
 impl EventBody {
     pub fn type_name(&self) -> &'static str {
@@ -141,6 +171,7 @@ impl EventBody {
             EventBody::RecoveryStarted { .. } => "recovery.started",
             EventBody::ToolReconciled { .. } => "tool.reconciled",
             EventBody::RecoveryCompleted { .. } => "recovery.completed",
+            EventBody::ExecutionResumed { .. } => "execution.resumed",
             EventBody::ExecutionFinished { .. } => "execution.finished",
             EventBody::ResultApplied { .. } => "result.applied",
         }
@@ -240,19 +271,81 @@ impl EventLog {
 
     /// All events, in order.
     pub fn events(&self) -> Result<Vec<Event>> {
-        let mut stmt = self.conn.prepare("SELECT seq, ts, body FROM events ORDER BY seq")?;
-        let rows = stmt.query_map([], |r| {
-            Ok((r.get::<_, i64>(0)? as u64, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
-        })?;
-        let mut out = Vec::new();
-        for row in rows {
-            let (seq, ts, body) = row?;
-            let body: EventBody = serde_json::from_str(&body)
-                .with_context(|| format!("event {seq} cannot be decoded"))?;
-            out.push(Event { seq, ts, body });
-        }
-        Ok(out)
+        read_rows(&self.conn)
     }
+}
+
+/// Every event of the log at `path`, read without changing anything: for
+/// `norn trace` and the other readers, which may run while the execution is
+/// still writing (spec §9.13). The file is opened read-only, so nothing is
+/// created, no journal mode is set and no row is written; WAL gives the read
+/// one fixed snapshot, so it never sees half an event (E1, D-170).
+pub fn read_events(path: &Path) -> Result<Vec<Event>> {
+    if !path.exists() {
+        bail!("no event log at {}", path.display());
+    }
+    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX | OpenFlags::SQLITE_OPEN_URI;
+    let conn = Connection::open_with_flags(path, flags).with_context(|| format!("opening event log {} to read it", path.display()))?;
+    match read_checked(&conn) {
+        // A log closed cleanly has no `-wal` and `-shm` files beside it, and a
+        // read-only connection must create `-shm` to read a WAL database. In a
+        // folder it cannot write, SQLite refuses (E1, Findings). With no
+        // `-wal` file every committed event is in the main file and no writer
+        // is active (it would need the `-wal`), so the file can be read as
+        // immutable: SQLite then skips the shared memory altogether.
+        Err(e) if is_readonly_directory(&e) && !wal_of(path).exists() => {
+            let uri = format!("file:{}?immutable=1", uri_path(path));
+            let conn = Connection::open_with_flags(&uri, flags).with_context(|| format!("opening event log {} to read it", path.display()))?;
+            read_checked(&conn)
+        }
+        other => other,
+    }
+}
+
+fn wal_of(path: &Path) -> std::path::PathBuf {
+    let mut p = path.as_os_str().to_owned();
+    p.push("-wal");
+    p.into()
+}
+
+fn is_readonly_directory(e: &anyhow::Error) -> bool {
+    matches!(e.downcast_ref::<rusqlite::Error>(), Some(rusqlite::Error::SqliteFailure(f, _)) if f.extended_code == rusqlite::ffi::SQLITE_READONLY_DIRECTORY)
+}
+
+/// A path as the path part of an SQLite `file:` URI: the three characters
+/// that would end it or start an escape are written as `%xx`.
+fn uri_path(path: &Path) -> String {
+    path.to_string_lossy().replace('%', "%25").replace('?', "%3f").replace('#', "%23")
+}
+
+/// The schema check and the rows, on a connection opened read-only.
+fn read_checked(conn: &Connection) -> Result<Vec<Event>> {
+    // A log that is being created has no tables yet for a moment: no events.
+    let tables: i64 =
+        conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('meta', 'events')", [], |r| r.get(0))?;
+    if tables < 2 {
+        return Ok(Vec::new());
+    }
+    let version: Option<String> =
+        conn.query_row("SELECT value FROM meta WHERE key = 'schema_version'", [], |r| r.get(0)).optional()?;
+    match version {
+        None => return Ok(Vec::new()),
+        Some(v) if v == SCHEMA_VERSION.to_string() => {}
+        Some(v) => bail!("event log schema version {v} is not supported (expected {SCHEMA_VERSION})"),
+    }
+    read_rows(conn)
+}
+
+fn read_rows(conn: &Connection) -> Result<Vec<Event>> {
+    let mut stmt = conn.prepare("SELECT seq, ts, body FROM events ORDER BY seq")?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)? as u64, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (seq, ts, body) = row?;
+        let body: EventBody = serde_json::from_str(&body).with_context(|| format!("event {seq} cannot be decoded"))?;
+        out.push(Event { seq, ts, body });
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -404,6 +497,35 @@ pub fn now_rfc3339() -> String {
     )
 }
 
+/// Milliseconds since 1970 for a time written by `now_rfc3339`
+/// (`YYYY-MM-DDTHH:MM:SS.mmmZ`); `None` for anything else. For durations
+/// shown to people only: order always comes from `seq`.
+pub fn parse_ts_ms(ts: &str) -> Option<i64> {
+    let b = ts.as_bytes();
+    if b.len() != 24 || b[4] != b'-' || b[7] != b'-' || b[10] != b'T' || b[13] != b':' || b[16] != b':' || b[19] != b'.' || b[23] != b'Z' {
+        return None;
+    }
+    let num = |r: std::ops::Range<usize>| ts.get(r)?.parse::<i64>().ok();
+    let (y, m, d) = (num(0..4)?, num(5..7)?, num(8..10)?);
+    let (h, min, s, ms) = (num(11..13)?, num(14..16)?, num(17..19)?, num(20..23)?);
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) || h > 23 || min > 59 || s > 60 {
+        return None;
+    }
+    Some((days_from_civil(y, m as u32, d as u32) * 86_400 + h * 3600 + min * 60 + s) * 1000 + ms)
+}
+
+/// (year, month, day) to days since 1970-01-01: the inverse of
+/// `civil_from_days`, from the same source.
+pub fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y.rem_euclid(400);
+    let mp = if m > 2 { m - 3 } else { m + 9 } as i64;
+    let doy = (153 * mp + 2) / 5 + d as i64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
 /// Days since 1970-01-01 to (year, month, day). Howard Hinnant's algorithm
 /// (public domain, http://howardhinnant.github.io/date_algorithms.html).
 pub fn civil_from_days(z: i64) -> (i64, u32, u32) {
@@ -436,6 +558,90 @@ mod tests {
         assert_eq!(civil_from_days(19_723), (2024, 1, 1));
         assert_eq!(civil_from_days(20_513), (2026, 3, 1));
         assert_eq!(now_rfc3339().len(), 24);
+    }
+
+    #[test]
+    fn times_parse_back() {
+        assert_eq!(parse_ts_ms("1970-01-01T00:00:00.000Z"), Some(0));
+        assert_eq!(parse_ts_ms("2026-11-16T20:42:15.487Z"), Some(1_794_861_735_487));
+        for days in [-1000, 0, 19_723, 20_513, 60_000] {
+            let (y, m, d) = civil_from_days(days);
+            assert_eq!(days_from_civil(y, m, d), days);
+        }
+        let now = now_rfc3339();
+        let back = parse_ts_ms(&now).unwrap();
+        let sys = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+        assert!((sys - back).abs() < 5_000, "{now} -> {back}, now {sys}");
+        for bad in ["", "2026-11-16 20:42:15.487Z", "2026-13-16T20:42:15.487Z", "2026-11-16T20:42:15Z", "2026-11-16T20:42:15.487+00:00"] {
+            assert_eq!(parse_ts_ms(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn types_lists_every_variant() {
+        // One body of each kind; `type_name` is an exhaustive match, so a new
+        // variant must be added here (and to TYPES) or this file fails to build.
+        let all = |b: &EventBody| match b {
+            EventBody::ExecutionCreated { .. }
+            | EventBody::WorkspaceCreated { .. }
+            | EventBody::AgentMessage { .. }
+            | EventBody::ToolRequested { .. }
+            | EventBody::ToolDenied { .. }
+            | EventBody::ToolIntent { .. }
+            | EventBody::ToolCompleted { .. }
+            | EventBody::ToolFailed { .. }
+            | EventBody::PolicyViolation { .. }
+            | EventBody::ExecNetwork { .. }
+            | EventBody::ApprovalRequested { .. }
+            | EventBody::ApprovalUsed { .. }
+            | EventBody::ApprovalRefused { .. }
+            | EventBody::RecoveryStarted { .. }
+            | EventBody::ToolReconciled { .. }
+            | EventBody::RecoveryCompleted { .. }
+            | EventBody::ExecutionResumed { .. }
+            | EventBody::ExecutionFinished { .. }
+            | EventBody::ResultApplied { .. } => TYPES.contains(&b.type_name()),
+        };
+        let samples = [
+            EventBody::AgentMessage { message: Value::Null },
+            EventBody::ExecutionResumed { by: "x".into(), after_calls: 0 },
+            EventBody::RecoveryCompleted { reconciled: 0, duration_ms: 0 },
+            EventBody::ResultApplied { target: "t".into(), changes: vec![] },
+        ];
+        assert!(samples.iter().all(all));
+        assert_eq!(TYPES.len(), 19, "one entry per variant, no repeats");
+        let mut sorted = TYPES.to_vec();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), TYPES.len());
+    }
+
+    #[test]
+    fn a_reader_changes_nothing_and_reads_beside_a_writer() -> Result<()> {
+        let path = tmp("reader");
+        assert!(read_events(&path).is_err());
+        assert!(!path.exists(), "reading a missing log does not create it");
+        let mut log = EventLog::create(&path)?;
+        log.append(EventBody::AgentMessage { message: Value::Null })?;
+        // The writer is still open; the reader sees what is committed.
+        assert_eq!(read_events(&path).context("beside the writer")?.len(), 1);
+        log.append(EventBody::AgentMessage { message: Value::Null })?;
+        assert_eq!(read_events(&path).context("second read")?.len(), 2);
+        drop(log);
+        // A read-only folder: reading still works (E1).
+        let dir = path.parent().unwrap();
+        let mut perm = std::fs::metadata(dir)?.permissions();
+        use std::os::unix::fs::PermissionsExt;
+        perm.set_mode(0o555);
+        std::fs::set_permissions(dir, perm.clone())?;
+        let read = read_events(&path);
+        perm.set_mode(0o755);
+        std::fs::set_permissions(dir, perm)?;
+        assert_eq!(read?.len(), 2);
+        assert!(!wal_of(&path).exists(), "reading wrote nothing beside the log");
+        // The fallback's URI keeps odd characters in a folder name.
+        assert_eq!(uri_path(Path::new("/s/a?b#c%d/log.db")), "/s/a%3fb%23c%25d/log.db");
+        Ok(())
     }
 
     #[test]

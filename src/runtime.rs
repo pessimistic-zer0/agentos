@@ -196,7 +196,7 @@ fn print_recovery(id: &str, report: &crate::recovery::RecoveryReport) {
 /// The agent kind recorded when the execution was created.
 pub fn agent_kind(state_dir: &Path, id: &str) -> Result<String> {
     let dir = ExecDir::new(state_dir, id);
-    let events = EventLog::open(&dir.log())?.events()?;
+    let events = crate::log::read_events(&dir.log())?;
     // Checked first: what a resume reads next (the saved script) is only
     // written once setup is done, and its absence gave a bare "No such file
     // or directory" instead of this (B-016).
@@ -241,6 +241,9 @@ pub fn resume(state_dir: &Path, id: &str, agent: &mut dyn Agent, verbose: bool) 
     let history = crate::recovery::history(&events, &crate::blob::BlobStore::new(&dir.blobs()))?;
     agent.restore(&history, &events)?;
     let mut gw = reopen_gateway(&dir, log, &events)?;
+    // Recorded so that the trace can tell a stop and a resume from a slow
+    // agent: before 1.3.0 nothing marked it (E2, D-170).
+    gw.log.append(EventBody::ExecutionResumed { by: "norn run --resume".into(), after_calls: history.len() as u64 })?;
     if verbose {
         println!("{id}  RESUMING after {} calls", history.len());
     }
@@ -284,7 +287,7 @@ pub fn unfinished_mcp_executions(state_dir: &Path, repo: &Path) -> Result<Vec<St
     let mut found = Vec::new();
     for id in workspace::list_executions(state_dir)? {
         let dir = ExecDir::new(state_dir, &id);
-        let Ok(events) = EventLog::open(&dir.log()).and_then(|l| l.events()) else { continue };
+        let Ok(events) = crate::log::read_events(&dir.log()) else { continue };
         let finished = events.iter().any(|e| matches!(e.body, EventBody::ExecutionFinished { .. }));
         if !finished && created(&events) == Some((&repo.display().to_string(), "mcp")) {
             found.push(id);
@@ -467,8 +470,7 @@ pub fn remove_execution(state_dir: &Path, id: &str, force: bool, dry_run: bool) 
     if is_locked(&dir) {
         return Ok(Removal::InUse);
     }
-    let finished = EventLog::open(&dir.log())
-        .and_then(|log| log.events())
+    let finished = crate::log::read_events(&dir.log())
         .map(|events| events.iter().any(|e| matches!(e.body, EventBody::ExecutionFinished { .. })))
         .unwrap_or(false);
     // A folder without a readable log cannot be resumed, so there is nothing to protect.
@@ -672,7 +674,7 @@ pub fn list_approvals(state_dir: &Path, id: &str) -> Result<String> {
     if !dir.log().exists() {
         bail!("no execution {id} in {}", state_dir.display());
     }
-    let events = EventLog::open(&dir.log())?.events()?;
+    let events = crate::log::read_events(&dir.log())?;
     let pending = crate::approval::pending(&events)?;
     let mut out = String::new();
     if pending.is_empty() {
