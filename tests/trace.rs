@@ -136,3 +136,107 @@ fn filters_and_views_refuse_what_does_not_fit_together() {
     let ids: Vec<&str> = src.lines().filter(|l| l.starts_with('#')).map(|l| l.split_whitespace().next().unwrap()).collect();
     assert_eq!(ids, ["#4", "#6"], "{src}");
 }
+
+// ---------------------------------------------------------------------------
+// M24: causes, the graph, per-call diffs.
+// ---------------------------------------------------------------------------
+
+/// Every node a DOT edge names is declared, and every label is quoted.
+fn check_dot(dot: &str) {
+    assert!(dot.starts_with("digraph norn {") && dot.trim_end().ends_with('}'), "{dot}");
+    let mut nodes = std::collections::HashSet::new();
+    for line in dot.lines().map(str::trim) {
+        if let Some((name, rest)) = line.split_once(" [") {
+            if !name.contains("->") && !name.contains(' ') {
+                nodes.insert(name.to_string());
+                assert!(rest.contains("label=\"") || rest.starts_with("shape") || name == "node", "{line}");
+            }
+        }
+    }
+    for line in dot.lines().map(str::trim).filter(|l| l.contains(" -> ")) {
+        let (a, rest) = line.split_once(" -> ").unwrap();
+        let b = rest.split([' ', ';']).next().unwrap();
+        assert!(nodes.contains(a) && nodes.contains(b), "an edge names a node that is not declared: {line}\n{dot}");
+    }
+}
+
+#[test]
+fn a_scripted_run_records_its_steps_as_causes_and_its_graph_and_diffs_show_them() {
+    let t = TestEnv::new("trace-graph");
+    let id = t.run_script("examples/scripts/fix-demo.toml");
+    let events = t.events(&id);
+    let steps: Vec<(u64, u64)> = of_type(&events, "tool.requested")
+        .iter()
+        .map(|r| {
+            assert_eq!(r["cause"]["kind"], "step", "{r}");
+            (r["call_id"].as_u64().unwrap(), r["cause"]["step"].as_u64().unwrap())
+        })
+        .collect();
+    assert_eq!(steps, (1..=7).map(|n| (n, n)).collect::<Vec<_>>());
+
+    let graph = t.norn(&["trace", &id, "--graph"]);
+    assert!(graph.contains("script step 5 -> #5 fs.read .env  DENIED") && graph.contains("script step 6 -> #6 fs.write src/stats.py"), "{graph}");
+    check_dot(&t.norn(&["trace", &id, "--graph=dot"]));
+    assert!(t.norn(&["trace", &id, "--call", "6"]).contains("cause      script step 6"));
+
+    // Per-call diffs.
+    let fix = t.norn(&["trace", &id, "--diff", "6"]);
+    assert!(fix.starts_with("# call #6 fs.write src/stats.py (548 bytes): cp-0001 -> cp-0002"), "{fix}");
+    assert!(fix.contains("-    return sum(values) / (len(values) - 1)") && fix.contains("+    return sum(values) / len(values)"), "{fix}");
+    assert!(t.norn(&["trace", &id, "--diff", "2"]).contains("no change to the files"), "pytest changed no file a patch shows");
+    assert!(t.norn(&["trace", &id, "--diff", "1"]).contains("changed no files: only calls that can change files get a checkpoint"));
+    assert!(t.norn(&["trace", &id, "--diff", "5"]).contains("was not run"));
+    // The whole run holds the same changes as result.patch.
+    let whole = t.norn(&["trace", &id, "--diff"]);
+    let patch = std::fs::read_to_string(t.exec_dir(&id).join("result.patch")).unwrap();
+    let changes = |s: &str| -> Vec<String> { s.lines().filter(|l| (l.starts_with('+') || l.starts_with('-')) && !l.starts_with("+++") && !l.starts_with("---")).map(str::to_string).collect() };
+    assert_eq!(changes(&whole), changes(&patch));
+    assert!(!changes(&patch).is_empty());
+    // Reading wrote nothing into the execution.
+    let before = tree_digest(&t.exec_dir(&id).join("checkpoints"));
+    t.norn(&["trace", &id, "--diff", "6"]);
+    assert_eq!(tree_digest(&t.exec_dir(&id).join("checkpoints")), before);
+}
+
+#[test]
+fn an_mcp_call_names_its_request_and_an_approval_links_two_calls() {
+    let policy = format!("{}\n[approvals]\nrequire = [\"fs.delete:**\"]\n", std::fs::read_to_string(preset_policy()).unwrap());
+    let t = TestEnv::new("trace-mcp-cause").with_policy_text(&policy);
+    let mut c = McpClient::start(&t, &demo());
+    let (err, _) = c.call("fs_write", json!({"path": "src/old.py", "content": "OLD = 1\n"}));
+    assert!(!err);
+    let (_, text) = c.call("fs_delete", json!({"path": "src/old.py"}));
+    let id = t.norn(&["status"]).lines().next().unwrap().split_whitespace().next().unwrap().to_string();
+    let approval = text.split_whitespace().skip_while(|w| *w != "approve").nth(2).unwrap().trim_end_matches(['`', ')', '.']).to_string();
+    t.norn(&["approve", &id, &approval]);
+    let (err, _) = c.call("fs_delete", json!({"path": "src/old.py"}));
+    assert!(!err);
+    // A string id the client chose, and one too long to keep.
+    let a = c.request_plain("tools/call", json!({"name": "fs_list", "arguments": {"path": "."}, "_meta": common::mcp_client::meta()}));
+    assert!(a["result"].is_object(), "{a}");
+    c.send_raw(&json!({"jsonrpc": "2.0", "id": "req-ä", "method": "tools/call", "params": {"name": "fs_list", "arguments": {"path": "src"}, "_meta": common::mcp_client::meta()}}).to_string());
+    assert_eq!(c.read()["id"], "req-ä");
+    let long = "x".repeat(300);
+    c.send_raw(&json!({"jsonrpc": "2.0", "id": long, "method": "tools/call", "params": {"name": "fs_list", "arguments": {"path": "tests"}, "_meta": common::mcp_client::meta()}}).to_string());
+    assert_eq!(c.read()["id"], long.as_str());
+    c.stop();
+
+    let events = t.events(&id);
+    let causes: Vec<Value> = of_type(&events, "tool.requested").iter().map(|r| r["cause"].clone()).collect();
+    assert_eq!(causes.len(), 6);
+    for (i, cause) in causes[..4].iter().enumerate() {
+        assert_eq!(cause["kind"], "mcp_request", "{cause}");
+        assert_eq!(cause["id"], (i + 1) as u64, "the client's own request ids, 1 to 4");
+    }
+    assert_eq!(causes[4], json!({"kind": "mcp_request", "id": "req-ä"}));
+    assert!(causes[5].is_null(), "a 300-byte id is not kept: {}", causes[5]);
+
+    let graph = t.norn(&["trace", &id, "--graph"]);
+    assert!(graph.contains("client request 1 (its reasons are not sent to norn) -> #1 fs.write"), "{graph}");
+    assert!(graph.contains("cause not recorded -> #6 fs.list"), "{graph}");
+    assert!(graph.contains(&format!("{approval}: #2 waited -> ")) && graph.contains("said yes, #3 ran"), "{graph}");
+    let dot = t.norn(&["trace", &id, "--graph=dot"]);
+    check_dot(&dot);
+    assert!(dot.contains(&format!("call2 -> appr_{approval} [label=\"waited\"]")), "{dot}");
+    assert!(dot.contains("req_req___"), "a string id becomes a safe node name: {dot}");
+}

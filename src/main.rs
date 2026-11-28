@@ -139,24 +139,36 @@ enum Cmd {
         #[arg(long, requires = "call")]
         full: bool,
         /// Denials, undone changes, network, approvals, calls cut off by a stop
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["graph", "diff"])]
         security: bool,
+        /// What asked for each call, approvals, stops and resumes; `--graph=dot` for Graphviz
+        #[arg(long, value_name = "FORM", num_args = 0..=1, default_missing_value = "tree", conflicts_with_all = ["events", "json", "call", "diff"])]
+        graph: Option<GraphForm>,
+        /// The files call N changed (a patch between its checkpoints); without N, the whole run
+        #[arg(long, value_name = "N", num_args = 0..=1, conflicts_with_all = ["events", "json", "call", "security"])]
+        diff: Option<Option<u64>>,
         /// Only calls the policy or a person refused
-        #[arg(long, conflicts_with_all = ["events", "json", "call", "security"])]
+        #[arg(long, conflicts_with_all = ["events", "json", "call", "security", "graph", "diff"])]
         denied: bool,
         /// Only calls that failed, and commands that exited with an error
-        #[arg(long, conflicts_with_all = ["events", "json", "call", "security"])]
+        #[arg(long, conflicts_with_all = ["events", "json", "call", "security", "graph", "diff"])]
         failed: bool,
         /// Only calls a stop cut off (uncertain, or settled by recovery)
-        #[arg(long, conflicts_with_all = ["events", "json", "call", "security"])]
+        #[arg(long, conflicts_with_all = ["events", "json", "call", "security", "graph", "diff"])]
         uncertain: bool,
         /// Only calls of this tool (fs.read, exec, ...)
-        #[arg(long, value_name = "TOOL", conflicts_with_all = ["events", "json", "call", "security"])]
+        #[arg(long, value_name = "TOOL", conflicts_with_all = ["events", "json", "call", "security", "graph", "diff"])]
         tool: Option<String>,
         /// Only calls whose path matches this glob ('src/**')
-        #[arg(long, value_name = "GLOB", conflicts_with_all = ["events", "json", "call", "security"])]
+        #[arg(long, value_name = "GLOB", conflicts_with_all = ["events", "json", "call", "security", "graph", "diff"])]
         path: Option<String>,
     },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum GraphForm {
+    Tree,
+    Dot,
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -316,7 +328,7 @@ fn main() -> Result<()> {
                 }
             }
         },
-        Cmd::Trace { id, events, json, call, full, security, denied, failed, uncertain, tool, path } => {
+        Cmd::Trace { id, events, json, call, full, security, graph, diff, denied, failed, uncertain, tool, path } => {
             let id = match id {
                 Some(id) => id,
                 None => match workspace::list_executions(&state_dir)?.pop() {
@@ -335,6 +347,13 @@ fn main() -> Result<()> {
                 trace::render_call(&evs, n, &blobs, full, trace::is_live(&dir))?
             } else if security {
                 trace::render_security(&evs)?
+            } else if let Some(form) = graph {
+                match form {
+                    GraphForm::Tree => trace::render_tree(&evs)?,
+                    GraphForm::Dot => trace::render_dot(&evs)?,
+                }
+            } else if let Some(n) = diff {
+                trace::render_diff(&dir, &evs, n)?
             } else {
                 let filter = trace::Filter { denied, failed, uncertain, tool, path };
                 trace::render_calls(&evs, &filter, Some(&blobs), trace::is_live(&dir))?

@@ -481,6 +481,15 @@ fn restore_entry(work_root: &OwnedFd, base: &Path, rel: &str, want: &Entry, now:
 /// `scratch` says which paths are caches (`filesystem.scratch`): changes
 /// there are left out of the patch and of its notes (D-099).
 pub fn write_patch(base: &Path, work: &Path, out: &Path, scratch: impl Fn(&str) -> bool) -> Result<PatchReport> {
+    let (text, report) = patch_text(base, work, scratch)?;
+    std::fs::write(out, text.as_bytes())?;
+    Ok(report)
+}
+
+/// The patch from `base` to `work` as text, without writing it anywhere:
+/// what `write_patch` writes, and what `norn trace --diff` prints between two
+/// checkpoints (C4).
+pub fn patch_text(base: &Path, work: &Path, scratch: impl Fn(&str) -> bool) -> Result<(String, PatchReport)> {
     let parent = base.parent().context("checkpoint has no parent folder")?;
     let output = Command::new("diff")
         .args(["-ruN", "--no-dereference"])
@@ -615,8 +624,7 @@ pub fn write_patch(base: &Path, work: &Path, out: &Path, scratch: impl Fn(&str) 
         patched.insert_str(0, &head);
     }
     let changed = kept_any || !left_out.is_empty();
-    std::fs::write(out, patched.as_bytes())?;
-    Ok(PatchReport { changed, left_out })
+    Ok((patched, PatchReport { changed, left_out }))
 }
 
 /// What `write_patch` found.

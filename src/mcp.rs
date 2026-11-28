@@ -27,7 +27,7 @@ use serde_json::{json, Value};
 
 use crate::agent::{Action, Agent};
 use crate::gateway::Gateway;
-use crate::log::EventBody;
+use crate::log::{Cause, EventBody};
 use crate::policy::Policy;
 use crate::runtime::{self, RunOptions};
 use crate::tools::{ToolCall, ToolOutcome, ToolResult};
@@ -213,7 +213,7 @@ impl Server {
             "server/discover" if modern => self.discover(&params),
             "ping" if !modern => json!({}),
             "tools/list" => self.tools_list(modern),
-            "tools/call" => match self.tools_call(&params)? {
+            "tools/call" => match self.tools_call(&id, &params)? {
                 Ok(r) => r,
                 Err((code, text)) => return Ok(Some(error(id, code, &text, None))),
             },
@@ -295,7 +295,7 @@ impl Server {
     /// `Ok(Err(..))`: a JSON-RPC error (an unknown tool). `Err`: the runtime
     /// failed.
     #[allow(clippy::type_complexity)]
-    fn tools_call(&mut self, params: &Value) -> Result<std::result::Result<Value, (i64, String)>> {
+    fn tools_call(&mut self, id: &Value, params: &Value) -> Result<std::result::Result<Value, (i64, String)>> {
         let name = params.get("name").and_then(Value::as_str).unwrap_or("");
         let args = params.get("arguments").cloned().unwrap_or(json!({}));
         if !tools(&self.policy).iter().any(|t| t["name"] == name) {
@@ -324,7 +324,14 @@ impl Server {
                 true,
             )));
         }
-        let result = open.gw.handle(call.clone()).context("the gateway failed")?;
+        // The request's id is the only cause norn can record for a client:
+        // its reasons never reach the server (C1, D-170). A very long string
+        // id is not kept, so a client cannot fill the log through it.
+        let cause = match id {
+            Value::String(s) if s.len() > MAX_CAUSE_ID => None,
+            other => Some(Cause::McpRequest { id: other.clone() }),
+        };
+        let result = open.gw.handle_from(call.clone(), cause).context("the gateway failed")?;
         open.calls += 1;
         let is_error = !matches!(result.outcome, ToolOutcome::Ok);
         let mut text = crate::agent::llm::render_result(&result);
@@ -392,6 +399,9 @@ impl Server {
         Ok(Open { gw, _lock: lock, calls: 0, baseline: Default::default() })
     }
 }
+
+/// Longest string id of a `tools/call` recorded as its cause, in bytes.
+const MAX_CAUSE_ID: usize = 200;
 
 fn calls_so_far(dir: &ExecDir) -> Result<u64> {
     Ok(crate::log::calls(&crate::log::read_events(&dir.log())?)?.len() as u64)

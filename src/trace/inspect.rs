@@ -32,7 +32,14 @@ pub fn render_call(events: &[Event], call_id: u64, blobs: &BlobStore, full: bool
         let before = t.agent_ms.map(|ms| format!(" (the agent took {} before it)", timing::fmt_ms(ms))).unwrap_or_default();
         writeln!(out, "  asked      {}{before}", first.ts)?;
     }
-    if let Some(EventBody::ToolRequested { call, .. }) = mine.first().map(|e| &e.body) {
+    if let Some(EventBody::ToolRequested { call, cause, .. }) = mine.first().map(|e| &e.body) {
+        let message = |seq: u64| {
+            events.iter().find(|e| e.seq == seq).and_then(|e| match &e.body {
+                EventBody::AgentMessage { message } => Some(message),
+                _ => None,
+            })
+        };
+        writeln!(out, "  cause      {}", super::graph::cause_text(cause, message))?;
         writeln!(out, "  arguments  {}", serde_json::to_string(call)?)?;
     }
     write_argument_blobs(&mut out, &c.call, blobs, full)?;

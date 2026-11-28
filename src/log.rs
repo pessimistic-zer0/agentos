@@ -30,6 +30,20 @@ pub struct Event {
     pub body: EventBody,
 }
 
+/// What asked for a tool call (C1, D-170): a recorded id, never a guess.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Cause {
+    /// The `agent.message` (an assistant message of the LLM agent) that
+    /// holds the call, by its `seq`.
+    Message { seq: u64 },
+    /// The step of the scripted agent's script (`script.toml`), from 1.
+    Step { step: u64 },
+    /// The JSON-RPC id of the client's `tools/call` request. It names the
+    /// request; the client's reasons are not sent to norn.
+    McpRequest { id: Value },
+}
+
 /// What happened. Serialized with a `"type"` field such as `"tool.requested"`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
@@ -58,7 +72,14 @@ pub enum EventBody {
     #[serde(rename = "agent.message")]
     AgentMessage { message: Value },
     #[serde(rename = "tool.requested")]
-    ToolRequested { call_id: u64, call: Value },
+    ToolRequested {
+        call_id: u64,
+        call: Value,
+        /// What asked for this call, by a recorded id (C1, D-170). Absent in
+        /// logs written before 1.3.0, and never guessed for them.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cause: Option<Cause>,
+    },
     #[serde(rename = "tool.denied")]
     ToolDenied { call_id: u64, rule: String, reason: String },
     /// Written (and fsynced) before the effect starts: design rule 3.
@@ -649,7 +670,7 @@ mod tests {
         let path = tmp("order");
         let mut log = EventLog::create(&path)?;
         let call = serde_json::to_value(ToolCall::FsRead { path: "a".into(), start_line: None, max_lines: None, encoding: None }.logged())?;
-        assert_eq!(log.append(EventBody::ToolRequested { call_id: 1, call })?, 1);
+        assert_eq!(log.append(EventBody::ToolRequested { call_id: 1, call, cause: None })?, 1);
         assert_eq!(log.append(EventBody::ToolDenied { call_id: 1, rule: "r".into(), reason: "x".into() })?, 2);
         drop(log);
         let mut log = EventLog::open(&path)?;
@@ -668,7 +689,7 @@ mod tests {
         let path = tmp("illegal");
         let mut log = EventLog::create(&path)?;
         let call = serde_json::to_value(ToolCall::FsRead { path: "a".into(), start_line: None, max_lines: None, encoding: None }.logged())?;
-        log.append(EventBody::ToolRequested { call_id: 1, call })?;
+        log.append(EventBody::ToolRequested { call_id: 1, call, cause: None })?;
         // COMPLETED straight after REQUESTED skips the intent: must be refused.
         log.append(EventBody::ToolCompleted { call_id: 1, summary: "".into(), output: "".into(), checkpoint: None })?;
         assert!(calls(&log.events()?).is_err());

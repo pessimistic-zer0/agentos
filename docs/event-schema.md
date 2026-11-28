@@ -69,6 +69,7 @@ The agent asked for a call. Since 0.1.
 |---|---|
 | `call_id` | The call's number |
 | `call` | The call as logged: `{"tool": "fs.write", "path": …, "content_hash": …, "bytes": …}`. Large arguments are replaced by a hash and a size |
+| `cause` | What asked for the call, by a recorded id (D-173). Since 1.3.0; absent before, and absent through MCP when the request's id is longer than 200 bytes. One of `{"kind": "message", "seq": 5}` (the LLM agent's assistant message that holds the call), `{"kind": "step", "step": 3}` (the scripted agent's step, from 1), `{"kind": "mcp_request", "id": 7}` (the JSON-RPC id of the client's `tools/call`; the client's reasons are not sent to norn) |
 
 ### `tool.denied`
 

@@ -4320,6 +4320,35 @@ Earlier runs on the way: 45723220958 on `2312511` (failed: MCP test client, TOCT
 
 **Concepts to learn.** SQLite `immutable` URI parameter; `SQLITE_READONLY_DIRECTORY`; widening and narrowing filters.
 
+### D-173 — M24 as built: a cause for every front door, the graph from ids only, per-call diffs from the patch code
+- **Date:** 2026-11-28
+- **Status:** Taken (carries out D-169, D-170, D-171)
+- **Area:** event log / tooling
+- **ADR:** none
+
+**In plain words.** Each `tool.requested` now names what asked for the call, in a field `cause`. For the LLM agent it is the `seq` of the assistant message that holds the call. For the scripted agent it is the script's step number. Through MCP it is the client's request id. `norn trace --graph` draws these links, with approvals, stops and resumes, as a tree or as Graphviz DOT. `norn trace --diff N` shows the files call N changed.
+
+**The problem.** C1 to C4 of the v4 scope, with the shapes D-170 and D-171 left open.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| `cause` as a small tagged object: `{"kind": "message", "seq": 5}`, `{"kind": "step", "step": 3}`, `{"kind": "mcp_request", "id": 7}` | Taken | One field, three kinds, each a recorded id; a reader sees which kind without guessing from the number |
+| A cause for the scripted agent too (its step) | Taken | The script is saved with the execution (`script.toml`); the step is as much a recorded id as a message's `seq`, and the tests use the scripted agent most |
+| The LLM's cause: the last assistant message stored before the call that holds a tool call | Taken | `drive` stores a turn's messages, then hands the call to the gateway; the assistant message with the call is among them. The check for `tool_calls` keeps a text-only message from being named |
+| An MCP request id longer than 200 bytes is not kept | Taken | A client chooses its ids; one could fill the log with them. Such a call has no cause, and the trace says "cause not recorded" |
+| The graph: each call under the part of the run (start, or after a stop or resume) whose events come before it | Taken | The part comes from the order of `seq`, which is the log's order, not a guess from time. Inside a part, every link is an id |
+| Recovery shown as its own part even when no resume follows | Taken | `norn recover` alone settles calls; the graph should show which |
+| DOT labels quoted with `\`, `"` and line breaks escaped; node names from ids made of letters, digits and `_` only | Taken | Text in a label comes from the log, which holds the model's words and the client's ids; it must not end a label or a node name early |
+| `checkpoint::patch_text` split out of `write_patch` | Taken | `--diff` must not write into the execution folder (a view only reads). The patch rules (scratch paths, symlinks, binary files) stay in one place |
+| The checkpoint before a call: the one the log names just before the call's own | Taken | `log::named_checkpoints` is the order the runtime itself trusts (D-011) |
+
+**What this means for the code.** `log::Cause`; `cause` on `EventBody::ToolRequested`; `Gateway::handle_from`; `Agent::step` (scripted); `runtime::drive` and `mcp::tools_call` pass causes; `checkpoint::patch_text`; `src/trace/graph.rs` (`render_tree`, `render_dot`, `cause_text`), `src/trace/diff.rs` (`render_diff`); the inspector shows the cause; `norn trace --graph[=dot]`, `--diff [N]`.
+
+**Evidence.** `cargo test --test trace` (6 passed, including `a_scripted_run_records_its_steps_as_causes_and_its_graph_and_diffs_show_them` and `an_mcp_call_names_its_request_and_an_approval_links_two_calls`); `cargo test --test llm_agent` (16 passed, including `each_call_names_the_assistant_message_that_asked_for_it`, across a crash and resume); `cargo test --lib trace::graph` (DOT escaping). A DOT file from a scripted run was drawn by Graphviz (`nix shell nixpkgs#graphviz -c dot -Tsvg`): 10,919 bytes of SVG, no error.
+
+**Concepts to learn.** Tagged enums in serde (`#[serde(tag = "kind")]`); Graphviz DOT.
+
 ---
 
 ## Still open

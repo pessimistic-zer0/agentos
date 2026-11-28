@@ -349,9 +349,16 @@ pub fn drive(gw: &mut Gateway, agent: &mut dyn Agent, mut last: Option<ToolResul
     let (status, summary) = loop {
         let action = agent.next_action(last.as_ref());
         // Store the conversation before acting on it, so the log always
-        // holds the message that led to a call (ADR 0005).
+        // holds the message that led to a call (ADR 0005). The assistant
+        // message that holds the call is its cause (C1).
+        let mut cause = None;
         for message in agent.take_messages() {
-            gw.log.append(EventBody::AgentMessage { message })?;
+            let holds_call = message.get("role").and_then(|r| r.as_str()) == Some("assistant")
+                && message.get("tool_calls").and_then(|c| c.as_array()).is_some_and(|c| !c.is_empty());
+            let seq = gw.log.append(EventBody::AgentMessage { message })?;
+            if holds_call {
+                cause = Some(crate::log::Cause::Message { seq });
+            }
         }
         match action? {
             Action::Finish { summary } => break ("completed".to_string(), summary),
@@ -361,7 +368,8 @@ pub fn drive(gw: &mut Gateway, agent: &mut dyn Agent, mut last: Option<ToolResul
                     break ("stopped".to_string(), format!("tool call budget of {max_calls} used up"));
                 }
                 let logged = call.logged();
-                let result = gw.handle(call)?;
+                let cause = cause.or_else(|| agent.step().map(|step| crate::log::Cause::Step { step }));
+                let result = gw.handle_from(call, cause)?;
                 calls += 1;
                 if verbose {
                     print_call_line(result.call_id, logged.name(), &logged.describe(), &result);

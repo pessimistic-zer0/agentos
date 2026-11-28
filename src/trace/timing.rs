@@ -127,11 +127,11 @@ mod tests {
         let call = json!({"tool": "fs.list", "path": "."});
         let events = vec![
             ev(1, "10:00:00.000", EventBody::WorkspaceCreated { files_copied: 1, denied: vec![], skipped: vec![], checkpoint: "cp-0000".into() }),
-            ev(2, "10:00:02.000", EventBody::ToolRequested { call_id: 1, call: call.clone() }),
+            ev(2, "10:00:02.000", EventBody::ToolRequested { call_id: 1, call: call.clone(), cause: None }),
             ev(3, "10:00:02.000", EventBody::ToolIntent { call_id: 1, rule: "r".into(), plan: json!({}) }),
             ev(4, "10:00:02.500", EventBody::ToolCompleted { call_id: 1, summary: "s".into(), output: "o".into(), checkpoint: None }),
             ev(5, "20:00:00.000", EventBody::ExecutionResumed { by: "norn run --resume".into(), after_calls: 1 }),
-            ev(6, "20:00:03.000", EventBody::ToolRequested { call_id: 2, call }),
+            ev(6, "20:00:03.000", EventBody::ToolRequested { call_id: 2, call, cause: None }),
             ev(7, "20:00:03.010", EventBody::ToolDenied { call_id: 2, rule: "r".into(), reason: "policy".into() }),
         ];
         let t = of_calls(&events);

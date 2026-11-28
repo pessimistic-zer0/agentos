@@ -142,6 +142,12 @@ impl Gateway {
     /// itself failed (for example the log could not be written); anything the
     /// tool can go wrong with is returned inside `ToolResult`.
     pub fn handle(&mut self, call: ToolCall) -> Result<ToolResult> {
+        self.handle_from(call, None)
+    }
+
+    /// `handle`, with what asked for the call (C1): recorded in
+    /// `tool.requested` so that the trace can link the two by an id.
+    pub fn handle_from(&mut self, call: ToolCall, cause: Option<crate::log::Cause>) -> Result<ToolResult> {
         let call_id = self.next_call_id;
         self.next_call_id += 1;
 
@@ -164,7 +170,7 @@ impl Gateway {
             }
             _ => {}
         }
-        self.log.append(EventBody::ToolRequested { call_id, call: serde_json::to_value(call.logged())? })?;
+        self.log.append(EventBody::ToolRequested { call_id, call: serde_json::to_value(call.logged())?, cause })?;
 
         let (decision, approved) = match self.decide(&call) {
             Decided::Allow(d, a) => (d, a),

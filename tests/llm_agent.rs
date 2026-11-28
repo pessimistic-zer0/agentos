@@ -568,3 +568,36 @@ fn a_conversation_too_large_for_the_server_ends_the_run_at_once_as_stopped() {
     assert!(t.exec_dir(&id).join("result.patch").exists(), "it ends with its patch");
 }
 
+
+#[test]
+fn each_call_names_the_assistant_message_that_asked_for_it() {
+    // C1 (v4, M24): the cause of a call is the `seq` of the assistant
+    // message that holds it, also after a crash and a resume.
+    let t = TestEnv::new("llm-cause");
+    let (url, _) = start_mock();
+    let out = run_llm(&t, &url, &[("NORN_CRASH_AT", "P4"), ("NORN_CRASH_CALL", "4")]);
+    assert!(!out.status.success());
+    let id = std::fs::read_dir(t.state.join("executions")).unwrap().next().unwrap().unwrap().file_name().to_string_lossy().into_owned();
+    let out = t.cmd(&["run", "--quiet", "--resume", &id]).env("NORN_LLM_API_KEY", "KEY-CANARY-123").output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let events = t.events(&id);
+    let requests: Vec<&Value> = events.iter().filter(|e| e["type"] == "tool.requested").collect();
+    assert!(requests.len() >= 4, "{events:#?}");
+    for r in &requests {
+        let cause = &r["cause"];
+        assert_eq!(cause["kind"], "message", "{r}");
+        let seq = cause["seq"].as_u64().unwrap();
+        let msg = events.iter().find(|e| e["seq"] == seq).unwrap();
+        assert_eq!(msg["type"], "agent.message");
+        assert_eq!(msg["message"]["role"], "assistant");
+        let asked = msg["message"]["tool_calls"][0]["function"]["name"].as_str().unwrap().replace('_', ".");
+        assert_eq!(asked, r["call"]["tool"].as_str().unwrap(), "the message asked for this tool: {msg} / {r}");
+        assert!(seq < r["seq"].as_u64().unwrap());
+    }
+    let causes: Vec<u64> = requests.iter().map(|r| r["cause"]["seq"].as_u64().unwrap()).collect();
+    let mut unique = causes.clone();
+    unique.dedup();
+    assert_eq!(unique, causes, "each call has its own message");
+    let graph = t.norn(&["trace", &id, "--graph"]);
+    assert!(graph.contains("message ") && graph.contains("-> #1 ") && graph.contains("after a stop, resumed by `norn run --resume`"), "{graph}");
+}

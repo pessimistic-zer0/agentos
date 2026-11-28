@@ -36,10 +36,14 @@ pub fn execution_state(dir: &ExecDir, events: &[Event]) -> String {
     }
 }
 
+mod diff;
+mod graph;
 mod inspect;
 mod security;
 mod timing;
 
+pub use diff::render_diff;
+pub use graph::{render_dot, render_tree};
 pub use inspect::render_call;
 pub use security::render_security;
 pub use timing::{fmt_ms, Timing};

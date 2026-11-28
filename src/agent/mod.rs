@@ -35,6 +35,11 @@ pub trait Agent {
     fn take_messages(&mut self) -> Vec<serde_json::Value> {
         Vec::new()
     }
+    /// For an agent that follows a list of steps: the step (from 1) of the
+    /// action just returned, recorded as the cause of its call (C1).
+    fn step(&self) -> Option<u64> {
+        None
+    }
     /// Save into the execution folder whatever is needed to build this agent
     /// again after a crash.
     fn persist(&self, dir: &ExecDir) -> Result<()>;

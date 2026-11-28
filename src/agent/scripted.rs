@@ -66,6 +66,10 @@ impl Agent for ScriptedAgent {
         "scripted"
     }
 
+    fn step(&self) -> Option<u64> {
+        self.pos.map(|p| p as u64 + 1)
+    }
+
     fn task(&self) -> String {
         self.script.task.clone()
     }
