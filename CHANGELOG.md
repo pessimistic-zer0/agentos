@@ -4,7 +4,7 @@ What changed for someone who uses Norn, newest first. The reasons are in `docs/d
 
 ## 1.3.0 (2026-11-28; the plan "v4": `docs/v4-scope.md`)
 
-TraceWeaver: new ways to read the record a run leaves. Nothing new changes what a run does; the log gains one event and two optional fields, and every execution folder of 1.x reads as before (`docs/compatibility.md`).
+Tagged `v1.3` on the commit CI run 46170043592 passed on Ubuntu 24.04, Ubuntu with AppArmor, and Debian 12 (D-177). TraceWeaver: new ways to read the record a run leaves. Nothing new changes what a run does; the log gains one event and two optional fields, and every execution folder of 1.x reads as before (`docs/compatibility.md`).
 
 ### Added
 

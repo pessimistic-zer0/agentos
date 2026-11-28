@@ -5,7 +5,7 @@
 | Weeks in the plan | v4 (D-169); no week plan |
 | Started / finished | 2026-11-28 / 2026-11-28 on `nix`; `fhs` waits for a CI run |
 | Commits | the M25 commit (tag `m25` after CI is green, D-113) |
-| Status | Done on `nix`; not yet verified on `fhs` |
+| Status | Done. Verified on both presets and Debian 12 by CI run 46166530040 on `d68aed0`; tagged `m25` there (D-177) |
 
 Write this document for a reader who is new to Rust and Linux internals. Plain words first, the real term next to it.
 
@@ -25,7 +25,7 @@ From `docs/v4-scope.md`, M25 (R1 to R4), with D-171.
 | R3 "including a replay against its original" | Changed | A replay is a report, not an execution; it prints that comparison itself (D-174) |
 | R4 the limits printed with every replay; an MCP run cannot be replayed | Yes, `nix` | the line "Nothing is run: …" is checked in the LLM test; `an_mcp_execution_cannot_be_replayed_and_says_why` |
 | Every existing test passes unchanged | Yes, `nix` | `nix develop -c make test`: 288 passed, 0 failed |
-| Both presets | Not yet | needs a CI run |
+| Both presets | Yes | CI run 46166530040 on `d68aed0`: all four jobs green (D-177) |
 
 ## 3. What you need to know first
 

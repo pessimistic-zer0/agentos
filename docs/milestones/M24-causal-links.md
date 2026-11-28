@@ -5,7 +5,7 @@
 | Weeks in the plan | v4 (D-169); no week plan |
 | Started / finished | 2026-11-28 / 2026-11-28 on `nix`; `fhs` waits for a CI run |
 | Commits | the M24 commit (tag `m24` after CI is green, D-113) |
-| Status | Done on `nix`; not yet verified on `fhs` |
+| Status | Done. Verified on both presets and Debian 12 by CI run 46165997230 on `c50991d`; tagged `m24` there (D-177) |
 
 Write this document for a reader who is new to Rust and Linux internals. Plain words first, the real term next to it.
 
@@ -24,7 +24,7 @@ From `docs/v4-scope.md`, M24 (C1 to C4), with D-170 and D-171.
 | C3 `--graph` as a tree; `--graph=dot` for Graphviz; no new dependency | Yes, `nix` | `check_dot` in `tests/trace.rs` (every edge's nodes are declared, labels quoted); `cargo test --lib trace::graph` (escaping); Graphviz drew a run's DOT without error (D-173) |
 | C4 `--diff N` between the checkpoints around call N; `--diff` for the whole run | Yes, `nix` | `a_scripted_run_records_…`: the fix's two lines for call 6; "no change" for `pytest`; "changed no files" for `fs.list`; "was not run" for the denied read; the whole run holds the same changed lines as `result.patch`; the checkpoints are unchanged after reading |
 | Every existing test passes unchanged | Yes, `nix` | `nix develop -c make test`: 282 passed, 0 failed |
-| Both presets | Not yet | needs a CI run |
+| Both presets | Yes | CI run 46165997230 on `c50991d`: all four jobs green (D-177) |
 
 ## 3. What you need to know first
 

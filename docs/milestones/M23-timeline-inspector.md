@@ -5,7 +5,7 @@
 | Weeks in the plan | v4 (D-169); no week plan |
 | Started / finished | 2026-11-28 / 2026-11-28 on `nix`; `fhs` waits for a CI run |
 | Commits | the experiments `1daa8e1` (E1 to E5), then the M23 commit (tag `m23` after CI is green, D-113) |
-| Status | Done on `nix`; not yet verified on `fhs` |
+| Status | Done. Verified on both presets and Debian 12 by CI run 46165426571 on `b919bd9`; tagged `m23` there (D-177) |
 
 Write this document for a reader who is new to Rust and Linux internals. Plain words first, the real term next to it.
 
@@ -27,7 +27,7 @@ From `docs/v4-scope.md`, M23 (T1 to T6), and the plan changes of D-170.
 | T6 `norn trace` reads the log read-only, also while the run writes it | Yes, `nix` | `cargo test --lib log::` (6 passed: nothing created for a missing log; a reader beside an open writer; a read-only folder); `a_running_execution_can_be_traced_and_its_call_shows_as_running`; the compat test checks that the log's bytes are unchanged after all the views |
 | D-170 a resume is recorded (`execution.resumed`) | Yes, `nix` | `a_resume_is_recorded_and_shown_between_the_calls` (`norn run --resume`, after recovery, before call 7); `a_new_mcp_session_on_an_open_execution_is_recorded_as_a_resume` |
 | Every existing test passes unchanged | Yes, `nix` | `nix develop -c make test`: 278 passed, 0 failed (all suites, the security suite through both front doors, the network kill cells) |
-| Both presets | Not yet | needs a CI run |
+| Both presets | Yes | CI run 46165426571 on `b919bd9`: all four jobs green (D-177) |
 
 ## 3. What you need to know first
 

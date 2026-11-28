@@ -4434,6 +4434,32 @@ Earlier runs on the way: 45723220958 on `2312511` (failed: MCP test client, TOCT
 
 **Concepts to learn.** None new.
 
+### D-177 — CI is green on the M23, M24, M25 and release commits; v4 is released as 1.3.0, tags `m23` to `m26` and `v1.3`
+- **Date:** 2026-11-28
+- **Status:** Taken (carries out D-176)
+- **Area:** process
+- **ADR:** none
+
+**In plain words.** Each v4 milestone's commit passed all four CI jobs (Ubuntu with and without AppArmor's restriction, Debian 12, the release archive), so v4 is verified on `fhs` and on Debian. As D-176 planned, `m23`, `m24` and `m25` are tagged on their own commits, and `m26` and `v1.3` on the release commit `8a1d22f`.
+
+**The problem.** D-113: tag only a commit whose CI run is green.
+
+**Options looked at.**
+| Option | Result | Why |
+|---|---|---|
+| Each milestone tag on its own green commit | Taken | D-176; all four runs were green |
+| Tag the later commit that records these runs | Discarded | It changes only documents and has not been through CI (as in D-136, D-167) |
+
+**What this means for the code.** None.
+
+**Evidence.** `gh run view` of each run: conclusion success, jobs `fhs`, `fhs-apparmor`, `debian`, `release` all success.
+- 46165426571 on `b919bd9` (M23): Debian `passed 278 failed 0`; MCP cells `4800 runs, 4799 killed, 0 invariant violations, 0 duplicated effects`; network cells `4800 runs, 4800 killed, 0 …, 0 …`.
+- 46165997230 on `c50991d` (M24): `passed 282 failed 0`; MCP `4800 runs, 4797 killed, 0, 0`; network `4800 runs, 4800 killed, 0, 0`.
+- 46166530040 on `d68aed0` (M25): `passed 288 failed 0`; MCP `4800 runs, 4763 killed, 0, 0`; network `4800 runs, 4797 killed, 0, 0`.
+- 46170043592 on `8a1d22f` (M26, 1.3.0): `Ubuntu 24.04.5 LTS`; `Debian GNU/Linux 12 (bookworm), kernel 6.1.0-56-cloud-amd64`; `passed 292 failed 0`; main cells `total: 4800 runs, 4796 killed, 0 invariant violations, 0 duplicated effects`; MCP `4800 runs, 4773 killed, 0, 0`; network `4800 runs, 4798 killed, 0, 0`; archive `norn-1.3.0-x86_64-linux.tar.gz (3.9M)`.
+
+**Concepts to learn.** None new.
+
 ---
 
 ## Still open

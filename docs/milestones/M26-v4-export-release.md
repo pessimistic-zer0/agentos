@@ -5,7 +5,7 @@
 | Weeks in the plan | v4 (D-169); no week plan |
 | Started / finished | 2026-11-28 / 2026-11-28 on `nix`; `fhs` waits for a CI run |
 | Commits | the M26 and release commit (tags `m26`, `v1.3` after CI is green, D-176) |
-| Status | Done on `nix`; not yet verified on `fhs` |
+| Status | Done. Verified on both presets and Debian 12 by CI run 46170043592 on `8a1d22f`; tagged `m26` and `v1.3` there (D-177) |
 
 Write this document for a reader who is new to Rust and Linux internals. Plain words first, the real term next to it.
 
@@ -26,7 +26,7 @@ From `docs/v4-scope.md`, M26 (X1 to X4) and §7.
 | X4 documents: README, the event schema, threat model, CHANGELOG, release | Yes | `README.md` "Reading a run afterwards"; `docs/event-schema.md`; `docs/threat-model.md` §12; `docs/recovery-semantics.md` §14; `docs/compatibility.md`; `CHANGELOG.md` 1.3.0 |
 | §7 every existing test passes unchanged; the frozen v0.1 trace reads as before | Yes, `nix` | `nix develop -c make test`: 292 passed, 0 failed; `tests/compat.rs` v0.1 tests unchanged; `packaging/release.sh --check`: `norn 1.3.0` ran the demo task from the archive `norn-1.3.0-x86_64-linux.tar.gz` |
 | §7 the kill cells still pass | Yes, `nix` | `make eval-recovery`, `docs/results/recovery-200-nix-v4.md`: 4,800 runs through norn's agents, 4,800 through MCP, 4,800 with the network on, 1,600 each for `fs.edit`, `fs.delete` and `ext.call`; 0 invariant violations and 0 duplicated effects in each |
-| §7 CI green on both presets and Debian | Not yet | the release commit's run |
+| §7 CI green on both presets and Debian | Yes | CI run 46170043592 on `8a1d22f`: all four jobs green (D-177) |
 
 ## 3. What you need to know first
 
