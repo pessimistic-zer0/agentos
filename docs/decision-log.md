@@ -4173,7 +4173,7 @@ Earlier runs on the way: 45723220958 on `2312511` (failed: MCP test client, TOCT
 | Tag `m21`, `m22`, `v1.2` on `01edb37` | Taken | D-164; the first commit after B-016's fix that CI ran |
 | Tag the later commit that records this run | Discarded | It changes only documents and has not been through CI (same as D-136) |
 
-**What this means for the code.** None. Tags pushed.
+**What this means for the code.** None.
 
 **Evidence.** `gh run view 45920326159`: conclusion success, head `01edb37c0db9021df86a9b691b640962996d64b1`; jobs `fhs`, `fhs-apparmor`, `release`, `debian` all success.
 - `fhs`: `Ubuntu 24.04.5 LTS`, kernel `7.0.0-1020-azure`. The step "Tests" (`make test`) 267 passed. 200-kill step: `total: 4800 runs, 4800 killed, 0 invariant violations, 0 duplicated effects, 3773/3773 cut-off calls classified correctly; norn recover wall time p50 22.3 ms, p99 59.9 ms`; `mcp total: 4800 runs, 4791 killed, 0 invariant violations, 0 duplicated effects, 3727/3727`; `network total: 4800 runs, 4800 killed, 0 invariant violations, 0 duplicated effects, 3763/3763`; `fs.edit` and `fs.delete` 1,600 runs each, 0 violations; `external total: 1600 runs, 0 invariant violations, 0 duplicated effects, 929/929`.
